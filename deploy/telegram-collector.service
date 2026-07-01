@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram Post Collector
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/telegram-admin-bot
+ExecStart=/opt/telegram-admin-bot/.venv/bin/python -m src.workers.collector
+Restart=always
+RestartSec=5
+User=telegrambot
+Group=telegrambot
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+
+[Install]
+WantedBy=multi-user.target

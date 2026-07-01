@@ -1,0 +1,71 @@
+{
+  "telegram": {
+    "bot_token": "",
+    "approval_bot_token": "",
+    "api_id": "",
+    "api_hash": "",
+    "collector_session": "data/collector",
+    "source_channels": ["@example_source_channel"],
+    "destination_channels": [
+      {
+        "chat_id": -1001234567890,
+        "title": "News Channel",
+        "kind": "news",
+        "publish_usd_price": true
+      },
+      {
+        "chat_id": -1009876543210,
+        "title": "VPN Channel",
+        "kind": "vpn",
+        "publish_usd_price": false
+      }
+    ],
+    "admin_user_ids": [123456789]
+  },
+  "ai": {
+    "primary_provider": "zai",
+    "fallback_provider": "deepseek",
+    "zai_api_key": "",
+    "deepseek_api_key": "",
+    "zai_base_url": "https://api.z.ai/api/paas/v4",
+    "deepseek_base_url": "https://api.deepseek.com/v1",
+    "deduplication_model": "",
+    "classification_model": "",
+    "request_timeout_seconds": 30,
+    "recent_posts_compare_limit": 30
+  },
+  "database": {
+    "sqlite_path": "data/app.db",
+    "mongodb_connection_string": "",
+    "mongodb_database": "telegram_admin_bot"
+  },
+  "storage": {
+    "media_directory": "data/media",
+    "retention_days": 14
+  },
+  "vpn_testing": {
+    "iran_worker_enabled": true,
+    "worker_api_url": "",
+    "worker_api_token": "",
+    "test_timeout_seconds": 30,
+    "worker_listen_host": "0.0.0.0",
+    "worker_listen_port": 8088,
+    "xray_binary_path": "/usr/local/bin/xray",
+    "test_url": "https://www.gstatic.com/generate_204"
+  },
+  "scheduler": {
+    "usd_price_publish_times": ["09:00", "21:00"],
+    "timezone": "Asia/Tehran",
+    "cleanup_time": "04:30"
+  },
+  "usd_price": {
+    "source_name": "",
+    "source_url": "",
+    "price_json_path": "",
+    "request_timeout_seconds": 20
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/app.log"
+  }
+}

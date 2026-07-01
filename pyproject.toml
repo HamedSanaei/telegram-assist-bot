@@ -1,0 +1,10 @@
+[project]
+name = "telegram-admin-bot"
+version = "0.1.0"
+description = "Telegram channel administration and publishing system with AI classification, deduplication, VPN config testing, and admin approval workflow."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
