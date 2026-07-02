@@ -14,13 +14,18 @@ price updates twice per day with the change compared to the previous record.
 ## Main Features
 
 - Post collection from source channels via Telethon (user session).
-- Exact-hash plus AI near-duplicate detection before storing anything.
+- Exact-hash plus AI near-duplicate detection when available; temporary AI
+  outages no longer drop posts before admin review.
 - AI classification into general news / breaking news / technology / VPN /
   VPN config / irrelevant, with automatic z.ai → DeepSeek fallback.
 - vmess/vless config extraction and connectivity testing on an Iran server
   through a token-protected worker API (xray-core based).
-- Admin approval bot with per-channel inline buttons, final confirmation,
-  and ✅ marks after successful publishing; duplicate publishing is blocked.
+- Main management bot for admin status/source/destination commands.
+- Admin approval bot with text/photo/video previews, readable source labels,
+  per-channel inline buttons, final confirmation, and ✅ marks after
+  successful publishing; duplicate publishing is blocked.
+- Source-channel `@...` / `t.me/...` mentions are replaced with the selected
+  destination channel `public_id` before publishing.
 - USD price publishing twice per day with change vs. the previous price.
 - 14-day retention: MongoDB TTL index plus a daily cleanup job.
 

@@ -41,10 +41,11 @@ class SqliteChannelRepository:
         """Insert or update a destination channel row."""
         await self._db.execute(
             """
-            INSERT INTO destination_channels (chat_id, title, kind, publish_usd_price, enabled)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO destination_channels (chat_id, title, public_id, kind, publish_usd_price, enabled)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 title = excluded.title,
+                public_id = excluded.public_id,
                 kind = excluded.kind,
                 publish_usd_price = excluded.publish_usd_price,
                 enabled = excluded.enabled
@@ -52,6 +53,7 @@ class SqliteChannelRepository:
             (
                 channel.chat_id,
                 channel.title,
+                channel.public_id,
                 channel.kind.value,
                 int(channel.publish_usd_price),
                 int(channel.enabled),
@@ -82,6 +84,50 @@ class SqliteChannelRepository:
             (identifier,),
         )
 
+    async def upsert_source_details(
+        self,
+        identifier: str,
+        chat_id: int,
+        title: str,
+        username: str,
+    ) -> None:
+        """Store resolved display metadata for a source channel."""
+        await self._db.execute(
+            """
+            INSERT INTO source_channels (identifier, chat_id, title, username, enabled)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(identifier) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                title = excluded.title,
+                username = excluded.username,
+                enabled = 1
+            """,
+            (identifier, chat_id, title, username),
+        )
+
+    async def get_source_label(self, chat_id: int) -> str | None:
+        """Return a readable label for a source channel chat id."""
+        row = await self._db.fetchone(
+            """
+            SELECT identifier, title, username
+            FROM source_channels
+            WHERE chat_id = ? AND enabled = 1
+            ORDER BY id
+            LIMIT 1
+            """,
+            (chat_id,),
+        )
+        if row is None:
+            return None
+        title = str(row["title"] or "").strip()
+        username = str(row["username"] or "").strip()
+        identifier = str(row["identifier"] or "").strip()
+        if username and not username.startswith("@"):
+            username = f"@{username}"
+        if title and username:
+            return f"{title} ({username})"
+        return title or username or identifier or None
+
     async def list_sources(self) -> list[str]:
         """Return all enabled source channel identifiers."""
         rows = await self._db.fetchall(
@@ -95,6 +141,7 @@ class SqliteChannelRepository:
         return DestinationChannel(
             chat_id=row["chat_id"],
             title=row["title"],
+            public_id=row["public_id"],
             kind=ChannelKind(row["kind"]),
             publish_usd_price=bool(row["publish_usd_price"]),
             enabled=bool(row["enabled"]),

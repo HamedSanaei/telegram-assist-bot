@@ -63,7 +63,7 @@ class AiogramMessagePublisher:
 
     async def publish_post(self, chat_id: int, post: Post) -> int:
         """
-        Publish a collected post, including its first photo if present.
+        Publish a collected post, including its first media file if present.
 
         Args:
             chat_id: Destination channel chat id.
@@ -76,19 +76,17 @@ class AiogramMessagePublisher:
             TelegramPublishError: When the Bot API call fails or the
                 stored media file no longer exists.
         """
-        photos = [
-            m
-            for m in post.media
-            if m.kind == MediaKind.PHOTO and m.file_path and Path(m.file_path).exists()
-        ]
+        media = self._first_existing_media(post)
         text = post.text or ""
         try:
-            if photos:
-                photo = FSInputFile(photos[0].file_path)
+            if media is not None:
+                media_kind, path = media
+                input_file = FSInputFile(str(path))
+                sender = self._media_sender(media_kind)
                 if len(text) <= _CAPTION_LIMIT:
-                    message = await self._bot.send_photo(chat_id, photo, caption=text or None)
+                    message = await sender(chat_id, input_file, caption=text or None)
                 else:
-                    message = await self._bot.send_photo(chat_id, photo)
+                    message = await sender(chat_id, input_file)
                     await self._bot.send_message(chat_id, text)
                 return message.message_id
             if not text:
@@ -101,3 +99,24 @@ class AiogramMessagePublisher:
             raise TelegramPublishError(
                 f"publish_post failed post={post.post_id} chat={chat_id}: {exc}"
             ) from exc
+
+    @staticmethod
+    def _first_existing_media(post: Post) -> tuple[MediaKind, Path] | None:
+        """Return the first existing media file in publish-preferred order."""
+        preferred_order = (MediaKind.PHOTO, MediaKind.VIDEO, MediaKind.DOCUMENT)
+        for kind in preferred_order:
+            for media in post.media:
+                if media.kind != kind or not media.file_path:
+                    continue
+                path = Path(media.file_path)
+                if path.exists():
+                    return kind, path
+        return None
+
+    def _media_sender(self, kind: MediaKind) -> object:
+        """Return the Bot API send method for a media kind."""
+        if kind == MediaKind.PHOTO:
+            return self._bot.send_photo
+        if kind == MediaKind.VIDEO:
+            return self._bot.send_video
+        return self._bot.send_document

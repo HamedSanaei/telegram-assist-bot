@@ -97,6 +97,7 @@ class TestChannelRepository:
         channel = DestinationChannel(
             chat_id=-100,
             title="کانال خبری",
+            public_id="@news_dest",
             kind=ChannelKind.NEWS,
             publish_usd_price=True,
         )
@@ -105,6 +106,7 @@ class TestChannelRepository:
         listed = await repo.list_destinations()
         assert len(listed) == 1
         assert listed[0].title == "کانال خبری"
+        assert listed[0].public_id == "@news_dest"
         assert (await repo.list_price_channels())[0].chat_id == -100
 
     async def test_sources_roundtrip(self, db: Database) -> None:
@@ -112,6 +114,18 @@ class TestChannelRepository:
         await repo.upsert_source("@source_channel")
         await repo.upsert_source("@source_channel")
         assert await repo.list_sources() == ["@source_channel"]
+
+    async def test_source_label_uses_resolved_title_and_username(
+        self, db: Database
+    ) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_source_details(
+            identifier="@source_channel",
+            chat_id=-100123,
+            title="کانال منبع",
+            username="source_channel",
+        )
+        assert await repo.get_source_label(-100123) == "کانال منبع (@source_channel)"
 
 
 class TestAdminRepository:

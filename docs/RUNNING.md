@@ -38,9 +38,10 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.approval_bot_token` | Approval assistant bot token |
 | `telegram.api_id` / `api_hash` | Telegram API credentials for the collector |
 | `telegram.collector_session` | Telethon session file path (default `data/collector`) |
-| `telegram.collector_startup_backfill_limit` | Number of recent messages scanned from each source when the collector starts (default `10`; set `0` to disable) |
+| `telegram.collector_daily_backfill_max_messages` | Maximum messages scanned from each source for the current Gregorian day when the collector starts (default `5000`; set `0` to disable) |
+| `telegram.source_refresh_seconds` | How often the running collector reloads `source_channels` from configuration (default `60`; set `0` to disable live refresh) |
 | `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from |
-| `telegram.destination_channels` | Objects: `chat_id`, `title`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`. `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. The main bot must be an admin of every destination channel. |
+| `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`. `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The main bot must be an admin of every destination channel. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
 | `ai.*` | Provider keys, optional base URL / model overrides, timeouts |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
@@ -113,7 +114,9 @@ python -m src.main
 
 This single process runs the approval bot (long polling), the SQLite queue
 worker (VPN test dispatch + approval dispatch), and the scheduler (USD price
-publishing and daily cleanup).
+publishing and daily cleanup). It also polls the main management bot
+(`telegram.bot_token`) for admin commands: `/start`, `/status`, `/sources`,
+and `/destinations`.
 
 ### Running the Approval Bot
 
@@ -129,11 +132,27 @@ On first run Telethon asks for a phone number and login code and stores the
 session at `telegram.collector_session`. Run the first login interactively
 before enabling the systemd service.
 
-At startup the collector scans the most recent
-`telegram.collector_startup_backfill_limit` messages from each source before
-waiting for live updates. The normal exact-hash deduplication prevents
-restarts from storing the same post twice. Set the value to `0` only when
-you want a strict live-only listener.
+At startup the collector scans from the first message of the current
+Gregorian day in `scheduler.timezone` (Asia/Tehran by default) for every
+source channel, then waits for live updates. Messages are processed
+oldest-first so same-day history enters the same dedup/classify/store
+pipeline as live messages. The normal exact-hash and AI deduplication
+prevents restarts, cross-channel reposts, and already processed posts from
+being stored twice. `telegram.collector_daily_backfill_max_messages` is only
+a safety cap per source; increase it for very high-volume channels or set it
+to `0` only when you want a strict live-only listener.
+
+While running, the collector reloads source channels every
+`telegram.source_refresh_seconds` seconds. If you add a new source channel
+to `configuration.json`, it is resolved and backfilled from today's first
+message without restarting the process.
+
+When the collector resolves a source channel, it stores the channel title
+and username in SQLite. Approval previews then show that readable source
+label instead of the raw `-100...` chat id. The collector downloads photos,
+videos, and documents into `storage.media_directory`; approval previews and
+destination publishing send the first available media file with the post
+caption, falling back to a text-only message when no media file exists.
 
 ### Running the Scheduler
 
@@ -293,9 +312,10 @@ the Telethon session file exists.
 
   | Log line | Meaning |
   | --- | --- |
-  | `Received live message chat=... msg=...` / `Received backfill message chat=... msg=...` | Collector got the message from Telegram |
+  | `Received live message chat=... msg=...` / `Received backfill message chat=... msg=...` | Collector got the message from Telegram; the log includes media counts such as `photos=... videos=...` |
   | `Duplicate check passed ... provider=...` | AI dedup done (skips log `Skipping ... duplicate` instead) |
   | `Classified ... category=... provider=...` | AI classification done (`irrelevant` posts stop here by design) |
+  | `Classification unavailable; storing for manual approval ...` | AI failed after fallback; post is still stored for admin review |
   | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
   | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued for the next stage |
   | `Queue item done id=... type=approval_request` | Approval message sent to admins |
@@ -305,11 +325,13 @@ the Telethon session file exists.
     `Received live/backfill message ...` lines — Telethon only synchronized
     account/channel state; the application did not receive a source-channel
     message event. Confirm `telegram.source_channels` contains the exact
-    source channels you want, and keep `collector_startup_backfill_limit`
-    above `0` so recent source posts are scanned on startup.
-  - `Collection failed ... (caused by: zai: HTTP error ...)` — both AI
-    providers failed (empty/invalid API key, or z.ai/DeepSeek unreachable
-    from your network). The post is intentionally not stored. Check the
+    source channels you want, and keep
+    `collector_daily_backfill_max_messages` above `0` so today's source
+    posts are scanned on startup.
+  - `Classification unavailable; storing for manual approval ...` — both AI
+    providers failed (for example z.ai returned 429 and DeepSeek returned
+    402/payment required). The post is kept and sent to admins with a
+    conservative default category instead of being dropped. Check the
     `Effective configuration` block logged at startup: it shows whether
     each API key is `set` or `EMPTY` (values are never logged).
   - Every post logs `Skipping irrelevant post` — the classifier judges the

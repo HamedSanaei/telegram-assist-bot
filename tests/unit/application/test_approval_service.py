@@ -30,13 +30,25 @@ def _make_service(
     publish_log = FakePublishLogRepository()
     channels = FakeChannelRepository(
         [
-            DestinationChannel(chat_id=NEWS_CHANNEL, title="News", kind=ChannelKind.NEWS),
-            DestinationChannel(chat_id=VPN_CHANNEL, title="VPN", kind=ChannelKind.VPN),
+            DestinationChannel(
+                chat_id=NEWS_CHANNEL,
+                title="News",
+                public_id="@news_dest",
+                kind=ChannelKind.NEWS,
+            ),
+            DestinationChannel(
+                chat_id=VPN_CHANNEL,
+                title="VPN",
+                public_id="@vpn_dest",
+                kind=ChannelKind.VPN,
+            ),
         ]
     )
     admins = FakeAdminRepository({ADMIN_ID})
     pub = publisher or FakePublisher()
-    service = ApprovalService(posts, publish_log, channels, admins, pub)
+    service = ApprovalService(
+        posts, publish_log, channels, admins, pub, source_identifiers=["@source"]
+    )
     return service, posts, publish_log, pub
 
 
@@ -99,3 +111,13 @@ class TestApprovalService:
         await posts.save(_post())
         with pytest.raises(ApprovalStateError):
             await service.request_approval("p1")
+
+    async def test_publish_rewrites_source_mentions_for_destination(self) -> None:
+        service, posts, _, publisher = _make_service()
+        await posts.save(_post())
+        stored = await posts.get("p1")
+        stored.text = "متن از @source و https://t.me/source/12"
+        await service.publish("p1", NEWS_CHANNEL, ADMIN_ID)
+        assert publisher.post_texts == [
+            (NEWS_CHANNEL, "متن از @news_dest و @news_dest")
+        ]

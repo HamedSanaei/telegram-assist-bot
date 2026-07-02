@@ -72,6 +72,29 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        2,
+        """
+        ALTER TABLE destination_channels
+            ADD COLUMN public_id TEXT NOT NULL DEFAULT '';
+        """,
+    ),
+    (
+        3,
+        """
+        ALTER TABLE source_channels
+            ADD COLUMN chat_id INTEGER;
+
+        ALTER TABLE source_channels
+            ADD COLUMN title TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE source_channels
+            ADD COLUMN username TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_source_channels_chat_id
+            ON source_channels (chat_id);
+        """,
+    ),
 ]
 
 

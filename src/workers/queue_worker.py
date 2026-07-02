@@ -37,6 +37,7 @@ class QueueWorker:
         poll_interval_seconds: float = 2.0,
         max_attempts: int = 5,
         retry_delay_seconds: int = 60,
+        processed_item_delay_seconds: float = 0.75,
     ) -> None:
         """
         Args:
@@ -47,12 +48,15 @@ class QueueWorker:
             max_attempts: Attempts before an item is marked failed.
             retry_delay_seconds: Base delay between retries (multiplied
                 by the attempt number).
+            processed_item_delay_seconds: Small pause after a handled item
+                to avoid flooding Telegram/AI APIs during backfill bursts.
         """
         self._queue = queue
         self._handlers = handlers
         self._poll_interval = poll_interval_seconds
         self._max_attempts = max_attempts
         self._retry_delay = retry_delay_seconds
+        self._processed_item_delay = processed_item_delay_seconds
         self._stopped = asyncio.Event()
 
     def stop(self) -> None:
@@ -78,6 +82,13 @@ class QueueWorker:
                     pass
                 continue
             await self.process_item(item)
+            if self._processed_item_delay > 0:
+                try:
+                    await asyncio.wait_for(
+                        self._stopped.wait(), timeout=self._processed_item_delay
+                    )
+                except asyncio.TimeoutError:
+                    pass
         logger.info("Queue worker stopped")
 
     async def process_item(self, item: QueueItem) -> None:

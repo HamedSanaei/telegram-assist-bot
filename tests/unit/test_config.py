@@ -28,6 +28,7 @@ def _valid_config() -> dict:
                 {
                     "chat_id": -1001,
                     "title": "کانال خبری",
+                    "public_id": "@news_dest",
                     "kind": "news",
                     "publish_usd_price": True,
                 }
@@ -62,8 +63,10 @@ class TestLoadConfiguration:
         config = load_configuration(_write(tmp_path, _valid_config()))
         assert config.telegram.bot_token == "123:abc"
         assert config.telegram.source_channels == ["@منبع_خبر"]
-        assert config.telegram.collector_startup_backfill_limit == 10
+        assert config.telegram.collector_daily_backfill_max_messages == 5000
+        assert config.telegram.source_refresh_seconds == 60
         assert config.telegram.destination_channels[0].title == "کانال خبری"
+        assert config.telegram.destination_channels[0].public_id == "@news_dest"
         assert config.telegram.destination_channels[0].publish_usd_price is True
         assert config.ai.primary_provider == "zai"
         assert config.storage.retention_days == 14
@@ -98,7 +101,8 @@ class TestLoadConfiguration:
         assert config.ai.primary_provider == "zai"
         assert config.ai.fallback_provider == "deepseek"
         assert config.usd_price.provider == "nobitex"
-        assert config.telegram.collector_startup_backfill_limit == 10
+        assert config.telegram.collector_daily_backfill_max_messages == 5000
+        assert config.telegram.source_refresh_seconds == 60
 
     def test_usd_price_provider_defaults_to_nobitex(self, tmp_path: Path) -> None:
         config = load_configuration(_write(tmp_path, _valid_config()))
@@ -130,9 +134,16 @@ class TestValidateMainAppConfig:
 class TestValidateCollectorConfig:
     """Tests for collector-specific configuration validation."""
 
-    def test_negative_backfill_limit_rejected(self, tmp_path: Path) -> None:
+    def test_negative_daily_backfill_max_messages_rejected(self, tmp_path: Path) -> None:
         data = _valid_config()
-        data["telegram"]["collector_startup_backfill_limit"] = -1
+        data["telegram"]["collector_daily_backfill_max_messages"] = -1
+        config = load_configuration(_write(tmp_path, data))
+        with pytest.raises(ConfigurationError):
+            validate_collector_config(config)
+
+    def test_negative_source_refresh_rejected(self, tmp_path: Path) -> None:
+        data = _valid_config()
+        data["telegram"]["source_refresh_seconds"] = -1
         config = load_configuration(_write(tmp_path, data))
         with pytest.raises(ConfigurationError):
             validate_collector_config(config)

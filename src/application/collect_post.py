@@ -17,6 +17,7 @@ from src.domain.enums import PostCategory, QueueItemType
 from src.domain.interfaces import PostRepository, QueueRepository
 from src.domain.services.text_normalizer import content_hash
 from src.domain.services.vpn_parser import extract_vpn_configs
+from src.shared.errors import DuplicateDetectionError, PostClassificationError
 from src.shared.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -89,9 +90,12 @@ class CollectPostUseCase:
             skipped (empty, duplicate, or irrelevant).
 
         Raises:
-            PostClassificationError: When AI classification fails on all providers.
-            DuplicateDetectionError: When AI duplicate detection fails on all providers.
             RepositoryError: When persistence fails.
+
+        Notes:
+            Temporary AI failures are logged, but they no longer drop the
+            post. The post is stored with a conservative default category
+            so an administrator can review it manually.
         """
         text = (message.text or "").strip()
         if not text and not message.media:
@@ -117,40 +121,59 @@ class CollectPostUseCase:
         if text:
             recent = await self._posts.list_recent_texts(self._recent_compare_limit)
             if recent:
-                dup = await self._ai.is_duplicate(text, recent)
-                if dup.is_duplicate:
+                try:
+                    dup = await self._ai.is_duplicate(text, recent)
+                    if dup.is_duplicate:
+                        logger.info(
+                            "Skipping AI-detected duplicate chat=%s msg=%s provider=%s",
+                            message.source_chat_id,
+                            message.message_id,
+                            dup.provider,
+                        )
+                        return None
                     logger.info(
-                        "Skipping AI-detected duplicate chat=%s msg=%s provider=%s",
+                        "Duplicate check passed chat=%s msg=%s provider=%s compared=%d",
                         message.source_chat_id,
                         message.message_id,
                         dup.provider,
+                        len(recent),
                     )
-                    return None
+                except DuplicateDetectionError as exc:
+                    logger.warning(
+                        "Duplicate check unavailable; continuing chat=%s msg=%s error=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        exc,
+                    )
+            try:
+                classification = await self._ai.classify_post(text)
+                category = classification.category
+                provider_name = classification.provider
                 logger.info(
-                    "Duplicate check passed chat=%s msg=%s provider=%s compared=%d",
+                    "Classified chat=%s msg=%s category=%s provider=%s",
                     message.source_chat_id,
                     message.message_id,
-                    dup.provider,
-                    len(recent),
-                )
-            classification = await self._ai.classify_post(text)
-            category = classification.category
-            provider_name = classification.provider
-            logger.info(
-                "Classified chat=%s msg=%s category=%s provider=%s",
-                message.source_chat_id,
-                message.message_id,
-                category.value,
-                provider_name,
-            )
-            if category == PostCategory.IRRELEVANT:
-                logger.info(
-                    "Skipping irrelevant post chat=%s msg=%s provider=%s",
-                    message.source_chat_id,
-                    message.message_id,
+                    category.value,
                     provider_name,
                 )
-                return None
+                if category == PostCategory.IRRELEVANT:
+                    logger.info(
+                        "Skipping irrelevant post chat=%s msg=%s provider=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        provider_name,
+                    )
+                    return None
+            except PostClassificationError as exc:
+                provider_name = "unavailable"
+                logger.error(
+                    "Classification unavailable; storing for manual approval "
+                    "chat=%s msg=%s default_category=%s error=%s",
+                    message.source_chat_id,
+                    message.message_id,
+                    category.value,
+                    exc,
+                )
 
         configs = extract_vpn_configs(text) if text else []
         if configs and category not in (PostCategory.VPN, PostCategory.VPN_CONFIG):

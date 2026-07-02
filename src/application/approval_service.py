@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from src.application.channel_mention_rewriter import rewrite_source_channel_mentions
 from src.domain.entities import DestinationChannel, Post
 from src.domain.interfaces import (
     AdminRepository,
@@ -38,6 +41,7 @@ class ApprovalService:
         admins: AdminRepository,
         publisher: MessagePublisher,
         notifier: ApprovalNotifier | None = None,
+        source_identifiers: list[str | int] | None = None,
     ) -> None:
         """
         Args:
@@ -48,6 +52,9 @@ class ApprovalService:
             publisher: Telegram publisher for destination channels.
             notifier: Approval bot notifier; optional so the service can
                 be unit-tested without a running bot.
+            source_identifiers: Source channel usernames/links from
+                configuration. Mentions of these sources are replaced with
+                the selected destination channel public id before publishing.
         """
         self._posts = posts
         self._publish_log = publish_log
@@ -55,6 +62,7 @@ class ApprovalService:
         self._admins = admins
         self._publisher = publisher
         self._notifier = notifier
+        self._source_identifiers = source_identifiers or []
 
     async def request_approval(self, post_id: str) -> None:
         """
@@ -127,13 +135,15 @@ class ApprovalService:
         await self.ensure_admin(admin_user_id)
         post = await self._get_post(post_id)
         channels = await self._channels.list_destinations()
-        if not any(c.chat_id == chat_id for c in channels):
+        channel = next((c for c in channels if c.chat_id == chat_id), None)
+        if channel is None:
             raise ApprovalStateError(f"Unknown destination channel {chat_id}")
         if await self._publish_log.is_published(post_id, chat_id):
             raise ApprovalStateError(
                 f"Post {post_id} already published to channel {chat_id}"
             )
-        message_id = await self._publisher.publish_post(chat_id, post)
+        publish_post = self._post_for_destination(post, channel)
+        message_id = await self._publisher.publish_post(chat_id, publish_post)
         await self._publish_log.record_published(post_id, chat_id, message_id)
         logger.info(
             "Published post=%s channel=%s message=%s admin=%s",
@@ -150,3 +160,23 @@ class ApprovalService:
         if post is None:
             raise ApprovalStateError(f"Post {post_id} not found (possibly expired)")
         return post
+
+    def _post_for_destination(self, post: Post, channel: DestinationChannel) -> Post:
+        """
+        Return a publish copy with source-channel mentions rewritten.
+
+        Args:
+            post: Stored original post.
+            channel: Destination selected by the admin.
+
+        Returns:
+            A shallow copy of the post with text adjusted for the destination.
+        """
+        rewritten_text = rewrite_source_channel_mentions(
+            post.text,
+            self._source_identifiers,
+            channel.public_id,
+        )
+        if rewritten_text == post.text:
+            return post
+        return replace(post, text=rewritten_text)

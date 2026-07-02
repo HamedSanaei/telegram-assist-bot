@@ -173,6 +173,20 @@ class ChannelRepository(Protocol):
         """Insert or update a source channel identifier."""
         ...
 
+    async def upsert_source_details(
+        self,
+        identifier: str,
+        chat_id: int,
+        title: str,
+        username: str,
+    ) -> None:
+        """Update a resolved source channel's display metadata."""
+        ...
+
+    async def get_source_label(self, chat_id: int) -> str | None:
+        """Return a readable source label by Telegram chat id, if known."""
+        ...
+
     async def list_sources(self) -> list[str]:
         """Return all enabled source channel identifiers."""
         ...

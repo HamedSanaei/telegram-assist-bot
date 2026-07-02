@@ -72,8 +72,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `ai_service.py` — `AiService`: primary provider with automatic fallback;
   raises `PostClassificationError` / `DuplicateDetectionError` when all fail.
 - `collect_post.py` — `CollectPostUseCase.handle_new_message`: hash dedup →
-  AI dedup → AI classification → VPN config extraction → store with 14-day
-  expiry → enqueue `vpn_test` or `approval_request`.
+  AI dedup/classification when available → VPN config extraction → store
+  with 14-day expiry → enqueue `vpn_test` or `approval_request`. If all AI
+  providers are temporarily unavailable, the post is still stored for manual
+  approval with a conservative default category instead of being dropped.
 - `vpn_test_service.py` — `VpnTestService`: tests each config via the
   tester port; post is eligible when at least one config works from Iran.
 - `approval_service.py` — `ApprovalService`: approval requests, admin
@@ -87,17 +89,18 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `db/sqlite/connection.py` — `Database` wrapper over aiosqlite (WAL mode).
 - `db/sqlite/migrations.py` — versioned migrations in `MIGRATIONS`,
   tracked in `schema_migrations`; applied on every startup.
-- `db/sqlite/repositories.py` — `SqliteChannelRepository`,
-  `SqliteAdminRepository`, `SqliteQueueRepository` (atomic claim via
-  conditional `UPDATE ... RETURNING`), `SqlitePublishLogRepository`,
+- `db/sqlite/repositories.py` — `SqliteChannelRepository` (destination
+  channels plus resolved source-channel labels), `SqliteAdminRepository`,
+  `SqliteQueueRepository` (atomic claim via conditional
+  `UPDATE ... RETURNING`), `SqlitePublishLogRepository`,
   `SqlitePriceHistoryRepository`.
 - `db/mongo/post_repository.py` — `MongoPostRepository` (Motor); TTL index
   on `expires_at`, lookup index on `content_hash`.
 - `ai/openai_compatible.py` — shared chat-completions client with strict
   JSON prompts; `ai/zai_provider.py` (default model glm-4.6) and
   `ai/deepseek_provider.py` (default model deepseek-chat).
-- `telegram/publisher.py` — `AiogramMessagePublisher` (text, or first photo
-  with caption; long text sent as a follow-up message).
+- `telegram/publisher.py` — `AiogramMessagePublisher` (text, or first
+  photo/video/document with caption; long text sent as a follow-up message).
 - `vpn/worker_client.py` — `IranWorkerVpnTester`: HTTP client for the Iran
   worker API (bearer token auth).
 - `vpn/xray_tester.py` — `XrayVpnTester`: spawns xray with a temp config,
@@ -115,7 +118,11 @@ build/             GENERATED PyInstaller work files (git-ignored).
   select channel → confirm keyboard → publish → keyboard refreshed with ✅.
   Every callback validates admin, post, channel, and duplicate state.
 - `approval_bot/notifier.py` — `AiogramApprovalNotifier`: sends the Persian
-  preview + keyboard to every configured admin.
+  preview with a readable source-channel label, the first downloaded
+  photo/video/document when present, and keyboard to every configured admin;
+  obeys Telegram retry-after responses.
+- `main_bot/handlers.py` — admin-only management commands for the main bot:
+  `/start`, `/status`, `/sources`, and `/destinations`.
 
 ## Workers
 
@@ -124,14 +131,18 @@ build/             GENERATED PyInstaller work files (git-ignored).
   `max_attempts`, then marks failed. Safe to restart at any time.
 - `scheduler.py` — APScheduler cron jobs: USD price at configured times
   (default 09:00 and 21:00 Asia/Tehran) and daily cleanup.
-- `collector.py` — Telethon-based listener on source channels; downloads
-  photos to `storage.media_directory` and feeds `CollectPostUseCase`. On
-  startup it also scans the latest
-  `telegram.collector_startup_backfill_limit` messages from each source so
-  restarts and missed live events still enter the normal dedup/classify/store
-  pipeline. Runs as its own process (`python -m src.workers.collector`) or
-  inside the all-in-one entrypoint. Note: albums are processed per-message;
-  only the first photo of a post is republished currently.
+- `collector.py` — Telethon-based listener on source channels; stores
+  resolved source titles/usernames, downloads photos/videos/documents to
+  `storage.media_directory`, and feeds `CollectPostUseCase`. On
+  startup it also scans messages from the first post of the current
+  Gregorian day in `scheduler.timezone` for each source so restarts and
+  missed live events still enter the normal dedup/classify/store pipeline.
+  It reloads `telegram.source_channels` every
+  `telegram.source_refresh_seconds` seconds so newly added sources are picked
+  up without a restart and backfilled from today's first message. Albums are
+  collected as one post. Runs as its own process
+  (`python -m src.workers.collector`) or inside the all-in-one entrypoint.
+  Note: only the first media file of a post is republished currently.
 - `src/run_all.py` — all-in-one entrypoint (`python -m src.run_all`): runs
   `src.main.run` and the collector concurrently in one event loop, each
   under `supervise()` which restarts a crashed component after a delay and
@@ -142,9 +153,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
 
 ## Databases
 
-- **SQLite** (`data/app.db`): `destination_channels`, `source_channels`,
-  `admins`, `queue_items`, `publish_log` (UNIQUE post/channel pair),
-  `price_history`, `settings`, `error_log`, `schema_migrations`.
+- **SQLite** (`data/app.db`): `destination_channels`, `source_channels`
+  (including resolved title/username/chat id), `admins`, `queue_items`,
+  `publish_log` (UNIQUE post/channel pair), `price_history`, `settings`,
+  `error_log`, `schema_migrations`.
 - **MongoDB** (`posts` collection): full post documents with text, media
   metadata, AI results, extracted configs, `collected_at`, `expires_at`
   (TTL index deletes after 14 days).
@@ -155,13 +167,17 @@ build/             GENERATED PyInstaller work files (git-ignored).
 `configuration.example.json`). Loaded by `src/shared/config.py` into frozen
 dataclasses. Per-entrypoint validators: `validate_main_app_config`,
 `validate_collector_config`, `validate_worker_config`. Path override via the
-`TELEGRAM_ADMIN_BOT_CONFIG` environment variable. Collector startup history
-scan depth is configured by `telegram.collector_startup_backfill_limit`.
+`TELEGRAM_ADMIN_BOT_CONFIG` environment variable. Collector same-day startup
+scan is capped by `telegram.collector_daily_backfill_max_messages`, and
+runtime source reloads by `telegram.source_refresh_seconds`. Destination
+`public_id` values are used to replace configured source-channel mentions
+before publishing to each selected destination.
 
 ## Telegram Bots
 
-- **Main bot** (`telegram.bot_token`) — publishes to destination channels;
-  must be admin in all of them.
+- **Main bot** (`telegram.bot_token`) — publishes to destination channels
+  and handles admin management commands; must be admin in all destination
+  channels.
 - **Approval bot** (`telegram.approval_bot_token`) — talks only to admins;
   long polling runs inside `src.main`.
 - **Collector user session** (`telegram.api_id`/`api_hash`) — Telethon user
@@ -242,9 +258,15 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 
 ## Last Updated
 
-2026-07-02 — Added collector startup backfill
-(`telegram.collector_startup_backfill_limit`) so recent source messages are
-processed on startup, plus pipeline observability (startup config summary,
+2026-07-02 — Added video/document media collection, approval previews, and
+publishing, plus readable source-channel labels in approval previews.
+Changed collector startup and newly added source backfill to scan from the
+current Gregorian day's first message, capped by
+`telegram.collector_daily_backfill_max_messages`. Added main bot management
+commands, destination `public_id` replacement for source-channel mentions,
+runtime source-channel refresh, album-aware collection, Telegram retry-after
+handling, and conservative storage when AI classification is unavailable.
+Earlier the same day: pipeline observability (startup config summary,
 per-stage collection logs, approval-bot `/start` handler, error-chain
 logging) and the Nobitex USD price source (`usd_price.provider`,
 `create_price_source()` factory). 2026-07-01: all-in-one entrypoint

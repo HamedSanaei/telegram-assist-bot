@@ -164,6 +164,18 @@ class FakeChannelRepository:
     async def upsert_source(self, identifier: str) -> None:
         pass
 
+    async def upsert_source_details(
+        self,
+        identifier: str,
+        chat_id: int,
+        title: str,
+        username: str,
+    ) -> None:
+        pass
+
+    async def get_source_label(self, chat_id: int) -> str | None:
+        return None
+
     async def list_sources(self) -> list[str]:
         return []
 
@@ -222,6 +234,7 @@ class FakePublisher:
     def __init__(self, fail: bool = False) -> None:
         self.texts: list[tuple[int, str]] = []
         self.posts: list[tuple[int, str]] = []
+        self.post_texts: list[tuple[int, str]] = []
         self._fail = fail
         self._next_message_id = 100
 
@@ -236,6 +249,7 @@ class FakePublisher:
         if self._fail:
             raise TelegramPublishError("send failed")
         self.posts.append((chat_id, post.post_id))
+        self.post_texts.append((chat_id, post.text))
         self._next_message_id += 1
         return self._next_message_id
 

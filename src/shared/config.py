@@ -30,6 +30,7 @@ class DestinationChannelConfig:
 
     chat_id: int
     title: str
+    public_id: str = ""
     kind: str = "news"
     publish_usd_price: bool = False
 
@@ -46,7 +47,8 @@ class TelegramConfig:
     destination_channels: list[DestinationChannelConfig] = field(default_factory=list)
     admin_user_ids: list[int] = field(default_factory=list)
     collector_session: str = "data/collector"
-    collector_startup_backfill_limit: int = 10
+    collector_daily_backfill_max_messages: int = 5000
+    source_refresh_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,7 @@ def _parse_destinations(raw: list[Any]) -> list[DestinationChannelConfig]:
             DestinationChannelConfig(
                 chat_id=int(entry["chat_id"]),
                 title=str(entry.get("title", str(entry["chat_id"]))),
+                public_id=str(entry.get("public_id", "")),
                 kind=str(entry.get("kind", "news")),
                 publish_usd_price=bool(entry.get("publish_usd_price", False)),
             )
@@ -223,9 +226,10 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 destination_channels=_parse_destinations(list(tg.get("destination_channels", []))),
                 admin_user_ids=[int(x) for x in tg.get("admin_user_ids", [])],
                 collector_session=str(tg.get("collector_session", "data/collector")),
-                collector_startup_backfill_limit=int(
-                    tg.get("collector_startup_backfill_limit", 10)
+                collector_daily_backfill_max_messages=int(
+                    tg.get("collector_daily_backfill_max_messages", 5000)
                 ),
+                source_refresh_seconds=int(tg.get("source_refresh_seconds", 60)),
             ),
             ai=AiConfig(
                 primary_provider=str(ai.get("primary_provider", "zai")),
@@ -313,8 +317,12 @@ def validate_collector_config(config: AppConfig) -> None:
     _require_non_empty(config.database.mongodb_connection_string, "database.mongodb_connection_string")
     if not config.telegram.source_channels:
         raise ConfigurationError("telegram.source_channels must not be empty")
-    if config.telegram.collector_startup_backfill_limit < 0:
-        raise ConfigurationError("telegram.collector_startup_backfill_limit must be >= 0")
+    if config.telegram.collector_daily_backfill_max_messages < 0:
+        raise ConfigurationError(
+            "telegram.collector_daily_backfill_max_messages must be >= 0"
+        )
+    if config.telegram.source_refresh_seconds < 0:
+        raise ConfigurationError("telegram.source_refresh_seconds must be >= 0")
 
 
 def validate_worker_config(config: AppConfig) -> None:
@@ -365,6 +373,7 @@ def log_startup_summary(config: AppConfig) -> None:
         "  ai: primary=%s (key %s) fallback=%s (key %s) "
         "classification_model=%s deduplication_model=%s\n"
         "  telegram: bot_token %s, approval_bot_token %s, api_id %s\n"
+        "  collector: daily_backfill_max_messages=%d source_refresh_seconds=%d timezone=%s\n"
         "  mongodb: host=%s db=%s | sqlite: %s\n"
         "  vpn_testing: enabled=%s worker_url %s\n"
         "  usd_price: provider=%s publish_times=%s",
@@ -380,6 +389,9 @@ def log_startup_summary(config: AppConfig) -> None:
         set_or_not(config.telegram.bot_token),
         set_or_not(config.telegram.approval_bot_token),
         set_or_not(config.telegram.api_id),
+        config.telegram.collector_daily_backfill_max_messages,
+        config.telegram.source_refresh_seconds,
+        config.scheduler.timezone,
         _mongo_host_only(config.database.mongodb_connection_string),
         config.database.mongodb_database,
         config.database.sqlite_path,

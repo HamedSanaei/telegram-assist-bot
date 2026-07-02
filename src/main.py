@@ -33,6 +33,7 @@ from src.infrastructure.telegram.publisher import AiogramMessagePublisher
 from src.infrastructure.vpn.worker_client import IranWorkerVpnTester
 from src.presentation.approval_bot.handlers import create_approval_router
 from src.presentation.approval_bot.notifier import AiogramApprovalNotifier
+from src.presentation.main_bot.handlers import create_main_router
 from src.shared.config import (
     load_configuration,
     log_startup_summary,
@@ -66,7 +67,11 @@ async def run() -> None:
     publisher_bot = Bot(config.telegram.bot_token)
     approval_bot = Bot(config.telegram.approval_bot_token)
     publisher = AiogramMessagePublisher(publisher_bot)
-    notifier = AiogramApprovalNotifier(approval_bot, repos["admins"])
+    notifier = AiogramApprovalNotifier(
+        approval_bot,
+        repos["admins"],
+        repos["channels"],
+    )
 
     approval = ApprovalService(
         posts=posts,
@@ -75,6 +80,7 @@ async def run() -> None:
         admins=repos["admins"],
         publisher=publisher,
         notifier=notifier,
+        source_identifiers=config.telegram.source_channels,
     )
     vpn_tester = IranWorkerVpnTester(
         api_url=config.vpn_testing.worker_api_url,
@@ -120,14 +126,19 @@ async def run() -> None:
         config.scheduler, price_service.publish_usd_price, cleanup_service.run
     )
 
-    dispatcher = Dispatcher()
-    dispatcher.include_router(create_approval_router(approval))
+    approval_dispatcher = Dispatcher()
+    approval_dispatcher.include_router(create_approval_router(approval))
+    main_dispatcher = Dispatcher()
+    main_dispatcher.include_router(
+        create_main_router(config, repos["admins"], repos["channels"])
+    )
 
     scheduler.start()
     logger.info("Main application started")
     try:
         await asyncio.gather(
-            dispatcher.start_polling(approval_bot),
+            approval_dispatcher.start_polling(approval_bot),
+            main_dispatcher.start_polling(publisher_bot),
             worker.run(),
         )
     finally:

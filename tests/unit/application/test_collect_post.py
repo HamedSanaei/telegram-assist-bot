@@ -137,3 +137,21 @@ class TestCollectPost:
             CollectedMessage(source_chat_id=-100, message_id=11, text=VMESS_URI)
         )
         assert queue.items[0].type == QueueItemType.APPROVAL_REQUEST
+
+    async def test_ai_classification_failure_still_stores_for_manual_approval(
+        self,
+    ) -> None:
+        posts, queue = FakePostRepository(), FakeQueueRepository()
+        ai = AiService(
+            FakeAiProvider(name="zai", fail=True),
+            FakeAiProvider(name="deepseek", fail=True),
+        )
+        use_case = CollectPostUseCase(posts, queue, ai, retention_days=14)
+        post = await use_case.handle_new_message(
+            CollectedMessage(source_chat_id=-100, message_id=12, text="متن خبر")
+        )
+        assert post is not None
+        assert post.category == PostCategory.GENERAL_NEWS
+        assert post.ai_provider == "unavailable"
+        assert posts.posts[post.post_id].text == "متن خبر"
+        assert queue.items[0].type == QueueItemType.APPROVAL_REQUEST

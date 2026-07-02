@@ -7,6 +7,7 @@ providers only supply their name, base URL, key, and default models.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
@@ -41,6 +42,7 @@ _DUPLICATE_SYSTEM_PROMPT = (
 )
 
 _MAX_COMPARE_TEXT_CHARS = 800
+_MAX_HTTP_ATTEMPTS = 3
 
 
 class OpenAiCompatibleProvider:
@@ -165,19 +167,69 @@ class OpenAiCompatibleProvider:
         url = f"{self._base_url}/chat/completions"
         payload = {"model": model, "messages": messages, "temperature": 0}
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                body = response.json()
-        except httpx.HTTPError as exc:
-            raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise AiProviderError(f"{self.name}: non-JSON response") from exc
+        last_http_error: httpx.HTTPError | None = None
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            for attempt in range(1, _MAX_HTTP_ATTEMPTS + 1):
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    body = response.json()
+                    break
+                except httpx.HTTPStatusError as exc:
+                    last_http_error = exc
+                    if exc.response.status_code not in {429, 500, 502, 503, 504}:
+                        raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
+                    if attempt == _MAX_HTTP_ATTEMPTS:
+                        raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
+                    delay = self._retry_delay_seconds(exc.response, attempt)
+                    logger.warning(
+                        "AI provider=%s status=%s retrying attempt=%d delay=%ss",
+                        self.name,
+                        exc.response.status_code,
+                        attempt,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                except httpx.HTTPError as exc:
+                    last_http_error = exc
+                    if attempt == _MAX_HTTP_ATTEMPTS:
+                        raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
+                    delay = attempt * 2
+                    logger.warning(
+                        "AI provider=%s transport error retrying attempt=%d delay=%ss",
+                        self.name,
+                        attempt,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                except json.JSONDecodeError as exc:
+                    raise AiProviderError(f"{self.name}: non-JSON response") from exc
+            else:
+                raise AiProviderError(f"{self.name}: HTTP error: {last_http_error}")
         try:
             return body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise AiProviderError(f"{self.name}: unexpected response shape") from exc
+
+    @staticmethod
+    def _retry_delay_seconds(response: httpx.Response, attempt: int) -> int:
+        """
+        Return a conservative retry delay for a retryable HTTP response.
+
+        Args:
+            response: HTTP response that failed.
+            attempt: Current attempt number, starting at 1.
+
+        Returns:
+            Delay in seconds before retrying.
+        """
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(1, int(float(retry_after)))
+            except ValueError:
+                pass
+        return attempt * 3
 
     def _extract_json(self, content: str) -> dict[str, object]:
         """

@@ -5,18 +5,21 @@
     "api_id": "",
     "api_hash": "",
     "collector_session": "data/collector",
-    "collector_startup_backfill_limit": 10,
+    "collector_daily_backfill_max_messages": 5000,
+    "source_refresh_seconds": 60,
     "source_channels": ["@example_source_channel"],
     "destination_channels": [
       {
         "chat_id": -1001234567890,
         "title": "News Channel",
+        "public_id": "@your_news_channel",
         "kind": "news",
         "publish_usd_price": true
       },
       {
         "chat_id": -1009876543210,
         "title": "VPN Channel",
+        "public_id": "@your_vpn_channel",
         "kind": "vpn",
         "publish_usd_price": false
       }

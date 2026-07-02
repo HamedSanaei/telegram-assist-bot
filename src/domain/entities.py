@@ -116,6 +116,8 @@ class DestinationChannel:
     Attributes:
         chat_id: Telegram chat id of the channel.
         title: Display title used on approval buttons.
+        public_id: Public channel username/link used when replacing
+            source-channel mentions inside republished text.
         kind: Channel kind used for routing (news, vpn, ...).
         publish_usd_price: Whether scheduled USD price posts go here.
         enabled: Whether the channel is currently active.
@@ -123,6 +125,7 @@ class DestinationChannel:
 
     chat_id: int
     title: str
+    public_id: str = ""
     kind: ChannelKind = ChannelKind.NEWS
     publish_usd_price: bool = False
     enabled: bool = True

@@ -171,6 +171,7 @@ async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:
             DestinationChannel(
                 chat_id=entry.chat_id,
                 title=entry.title,
+                public_id=entry.public_id,
                 kind=ChannelKind(entry.kind),
                 publish_usd_price=entry.publish_usd_price,
             )
