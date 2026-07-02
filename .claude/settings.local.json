@@ -4,7 +4,8 @@
       "Bash(mkdir -p src/domain/services src/application src/infrastructure/ai src/infrastructure/db/sqlite src/infrastructure/db/mongo src/infrastructure/telegram src/infrastructure/vpn src/infrastructure/price src/presentation/approval_bot src/workers src/shared tests/unit/domain tests/unit/application tests/unit/infrastructure tests/integration docs config deploy data logs)",
       "Bash(touch src/__init__.py src/domain/__init__.py src/domain/services/__init__.py src/application/__init__.py src/infrastructure/__init__.py src/infrastructure/ai/__init__.py src/infrastructure/db/__init__.py src/infrastructure/db/sqlite/__init__.py src/infrastructure/db/mongo/__init__.py src/infrastructure/telegram/__init__.py src/infrastructure/vpn/__init__.py src/infrastructure/price/__init__.py src/presentation/__init__.py src/presentation/approval_bot/__init__.py src/workers/__init__.py src/shared/__init__.py)",
       "Bash(python -)",
-      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from src.domain.services.text_normalizer import _ZERO_WIDTH_CHARS as z; print\\([hex\\(ord\\(c\\)\\) for c in z]\\)\")"
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from src.domain.services.text_normalizer import _ZERO_WIDTH_CHARS as z; print\\([hex\\(ord\\(c\\)\\) for c in z]\\)\")",
+      "PowerShell(python -m pytest tests/unit -q)"
     ]
   }
 }

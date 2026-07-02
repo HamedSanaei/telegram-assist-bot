@@ -37,7 +37,9 @@ src/
   workers/         Queue worker, scheduler, collector, Iran VPN worker.
   shared/          Config loading, custom errors, UTF-8-safe logging.
   composition.py   Composition root (dependency wiring).
-  main.py          Main process entrypoint.
+  main.py          Main process entrypoint (approval bot + queue + scheduler).
+  run_all.py       All-in-one entrypoint: supervises main.py and the
+                   collector together in a single process.
 tests/             Unit tests (pytest, asyncio auto mode) + integration dir.
 docs/              This code map and the run guide.
 config/            configuration.example.json template.
@@ -124,8 +126,13 @@ build/             GENERATED PyInstaller work files (git-ignored).
   (default 09:00 and 21:00 Asia/Tehran) and daily cleanup.
 - `collector.py` — Telethon-based listener on source channels; downloads
   photos to `storage.media_directory` and feeds `CollectPostUseCase`.
-  Runs as its own process. Note: albums are processed per-message; only the
+  Runs as its own process (`python -m src.workers.collector`) or inside the
+  all-in-one entrypoint. Note: albums are processed per-message; only the
   first photo of a post is republished currently.
+- `src/run_all.py` — all-in-one entrypoint (`python -m src.run_all`): runs
+  `src.main.run` and the collector concurrently in one event loop, each
+  under `supervise()` which restarts a crashed component after a delay and
+  permanently stops (only) a component whose configuration is invalid.
 - `iran_vpn_worker.py` — FastAPI app on the Iran server. `POST /api/test`
   (bearer token) receives `{"raw": "<vmess|vless URI>"}` and returns
   `{"working", "latency_ms", "error"}`. `GET /api/health` is a liveness probe.
@@ -182,16 +189,19 @@ Run with `pytest`, `pytest tests/unit`, or `pytest tests/integration`.
 
 ## Deployment
 
-`deploy/telegram-admin-bot.service` (main process),
-`deploy/telegram-collector.service` (collector),
-`deploy/iran-vpn-worker.service` (Iran server). All run from
+`deploy/telegram-suite.service` (all-in-one: main app + collector via
+`src.run_all`), `deploy/telegram-admin-bot.service` (main process only),
+`deploy/telegram-collector.service` (collector only),
+`deploy/iran-vpn-worker.service` (Iran server). Enable either the suite
+service or the two separate ones, never both. All run from
 `/opt/telegram-admin-bot` with `PYTHONIOENCODING=utf-8`.
 
 **Publish outputs** — `python scripts/build_publish.py` must be re-run after
 every meaningful change (see the Publish Output Requirement in CLAUDE.md).
 It regenerates `publish/windows/` (one-file PyInstaller executables:
-`telegram-admin-bot.exe`, `telegram-collector.exe`, `iran-vpn-worker.exe`
-plus the config template), `publish/ubuntu/telegram-admin-bot-<version>.tar.gz`
+`telegram-suite.exe`, `telegram-admin-bot.exe`, `telegram-collector.exe`,
+`iran-vpn-worker.exe` plus the config template),
+`publish/ubuntu/telegram-admin-bot-<version>.tar.gz`
 (source bundle with `install.sh`), and `publish/BUILD_INFO.txt`. Executables
 can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 
@@ -212,6 +222,9 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 
 ## Last Updated
 
-2026-07-01 — Added publish build system (scripts/build_publish.py, PyInstaller
-Windows executables, Ubuntu tar.gz bundle with install.sh). Initial full
-implementation earlier the same day.
+2026-07-01 — Added the all-in-one entrypoint `src/run_all.py`
+(`telegram-suite` executable and systemd unit, `suite` install role) so the
+main app and the collector start with one command. Earlier the same day:
+publish build system (scripts/build_publish.py, PyInstaller Windows
+executables, Ubuntu tar.gz bundle with install.sh) and the initial full
+implementation.

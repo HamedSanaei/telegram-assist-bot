@@ -34,6 +34,7 @@ WORK_DIR = ROOT / "build"
 ENTRYPOINTS: dict[str, str] = {
     "telegram-admin-bot": "scripts/entry_main.py",
     "telegram-collector": "scripts/entry_collector.py",
+    "telegram-suite": "scripts/entry_run_all.py",
     "iran-vpn-worker": "scripts/entry_iran_vpn_worker.py",
 }
 
@@ -115,7 +116,10 @@ def build_windows_executables() -> None:
         "1. Copy config/configuration.example.json to config/configuration.json\n"
         "   next to the executables and fill in your secrets (keep it UTF-8).\n"
         "2. Run telegram-collector.exe once interactively (Telegram login).\n"
-        "3. Run telegram-admin-bot.exe (approval bot + queue + scheduler).\n"
+        "3. Run telegram-suite.exe - it starts everything in one process\n"
+        "   (approval bot + queue + scheduler + collector).\n"
+        "   Alternatively run telegram-admin-bot.exe and telegram-collector.exe\n"
+        "   as two separate processes.\n"
         "iran-vpn-worker.exe is normally deployed on the Iran (Ubuntu) server\n"
         "instead; the Windows build exists for local testing only.\n",
         encoding="utf-8",

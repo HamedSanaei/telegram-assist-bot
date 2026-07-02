@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Installer for the Ubuntu bundle produced by scripts/build_publish.py.
 # Run from inside the extracted bundle directory as root:
-#   sudo bash install.sh [main|collector|worker|all]
+#   sudo bash install.sh [main|collector|suite|worker|all]
+#
+# "suite" installs a single service running the main app and the
+# collector together in one process (src.run_all); use it instead of
+# "main" + "collector" when you prefer one service for everything.
 #
 # Installs the project to /opt/telegram-admin-bot, creates a virtualenv,
 # installs dependencies, and copies the requested systemd service files.
@@ -43,13 +47,14 @@ install_service() {
 case "${ROLE}" in
     main)      install_service telegram-admin-bot.service ;;
     collector) install_service telegram-collector.service ;;
+    suite)     install_service telegram-suite.service ;;
     worker)    install_service iran-vpn-worker.service ;;
     all)
         install_service telegram-admin-bot.service
         install_service telegram-collector.service
         install_service iran-vpn-worker.service
         ;;
-    *) echo "Unknown role '${ROLE}' (use main|collector|worker|all)"; exit 1 ;;
+    *) echo "Unknown role '${ROLE}' (use main|collector|suite|worker|all)"; exit 1 ;;
 esac
 
 systemctl daemon-reload

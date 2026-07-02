@@ -39,7 +39,7 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.api_id` / `api_hash` | Telegram API credentials for the collector |
 | `telegram.collector_session` | Telethon session file path (default `data/collector`) |
 | `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from |
-| `telegram.destination_channels` | Objects: `chat_id`, `title`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price` |
+| `telegram.destination_channels` | Objects: `chat_id`, `title`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`. `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. The main bot must be an admin of every destination channel. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
 | `ai.*` | Provider keys, optional base URL / model overrides, timeouts |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
@@ -83,6 +83,25 @@ asyncio.run(create_sqlite(load_configuration()))
 ```
 
 ## Running the Application
+
+### Running Everything with One Command (recommended)
+
+```bash
+python -m src.run_all
+```
+
+This starts the main application (approval bot + queue worker + scheduler)
+and the collector together in a single process. Each component runs under a
+supervisor: if one crashes it is restarted after a short delay without
+taking the other down. A component with broken configuration is stopped
+permanently (and logged) while the rest keep running.
+
+Do the first collector login separately (`python -m src.workers.collector`)
+before using this entrypoint, because the interactive Telethon prompt would
+otherwise stall the approval bot during login.
+
+The Iran VPN worker is not part of this command; it runs on the Iran server
+(see below).
 
 ### Running the Main Bot (approval bot + queue worker + scheduler)
 
@@ -188,14 +207,17 @@ python scripts/build_publish.py
 
 This produces:
 
-- `publish/windows/` — standalone executables (`telegram-admin-bot.exe`,
-  `telegram-collector.exe`, `iran-vpn-worker.exe`) plus the configuration
-  template and a `README.txt`. Put `config/configuration.json` next to the
-  executables before running them. Windows-only build step.
+- `publish/windows/` — standalone executables (`telegram-suite.exe` for the
+  all-in-one process, plus `telegram-admin-bot.exe`, `telegram-collector.exe`,
+  and `iran-vpn-worker.exe`) with the configuration template and a
+  `README.txt`. Put `config/configuration.json` next to the executables
+  before running them. Windows-only build step.
 - `publish/ubuntu/telegram-admin-bot-<version>.tar.gz` — source bundle for
-  Ubuntu servers. Extract it and run `sudo bash install.sh [main|collector|worker|all]`
+  Ubuntu servers. Extract it and run
+  `sudo bash install.sh [main|collector|suite|worker|all]`
   to install to `/opt/telegram-admin-bot`, create the virtualenv, and copy
-  the systemd units.
+  the systemd units. The `suite` role installs the single all-in-one service
+  instead of `main` + `collector`.
 - `publish/BUILD_INFO.txt` — version, build timestamp, and platform.
 
 Use `python scripts/build_publish.py --skip-exe` for a quick Ubuntu-only
@@ -220,11 +242,19 @@ and install the templates from `deploy/`:
 sudo useradd --system --home /opt/telegram-admin-bot telegrambot
 sudo chown -R telegrambot:telegrambot /opt/telegram-admin-bot
 
-# Main server
+# Main server - option A: one service for everything (src.run_all)
+sudo cp deploy/telegram-suite.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now telegram-suite
+
+# Main server - option B: main app and collector as separate services
 sudo cp deploy/telegram-admin-bot.service /etc/systemd/system/
 sudo cp deploy/telegram-collector.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now telegram-admin-bot telegram-collector
+
+# Never enable option A and option B at the same time - posts would be
+# collected and published twice.
 
 # Iran server
 sudo cp deploy/iran-vpn-worker.service /etc/systemd/system/
@@ -235,6 +265,7 @@ sudo systemctl enable --now iran-vpn-worker
 Check logs:
 
 ```bash
+journalctl -u telegram-suite -f
 journalctl -u telegram-admin-bot -f
 journalctl -u telegram-collector -f
 journalctl -u iran-vpn-worker -f
