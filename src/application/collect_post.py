@@ -126,9 +126,23 @@ class CollectPostUseCase:
                         dup.provider,
                     )
                     return None
+                logger.info(
+                    "Duplicate check passed chat=%s msg=%s provider=%s compared=%d",
+                    message.source_chat_id,
+                    message.message_id,
+                    dup.provider,
+                    len(recent),
+                )
             classification = await self._ai.classify_post(text)
             category = classification.category
             provider_name = classification.provider
+            logger.info(
+                "Classified chat=%s msg=%s category=%s provider=%s",
+                message.source_chat_id,
+                message.message_id,
+                category.value,
+                provider_name,
+            )
             if category == PostCategory.IRRELEVANT:
                 logger.info(
                     "Skipping irrelevant post chat=%s msg=%s provider=%s",
@@ -157,13 +171,14 @@ class CollectPostUseCase:
             expires_at=now + timedelta(days=self._retention_days),
         )
         await self._posts.save(post)
+        logger.info("Saved post to MongoDB id=%s", post.post_id)
 
         if configs and self._vpn_testing_enabled:
-            await self._queue.enqueue(QueueItemType.VPN_TEST, {"post_id": post.post_id})
+            next_step = QueueItemType.VPN_TEST
         else:
-            await self._queue.enqueue(
-                QueueItemType.APPROVAL_REQUEST, {"post_id": post.post_id}
-            )
+            next_step = QueueItemType.APPROVAL_REQUEST
+        await self._queue.enqueue(next_step, {"post_id": post.post_id})
+        logger.info("Enqueued %s post=%s", next_step.value, post.post_id)
         logger.info(
             "Stored post id=%s chat=%s msg=%s category=%s configs=%d",
             post.post_id,

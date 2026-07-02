@@ -106,8 +106,16 @@ class SchedulerConfig:
 
 @dataclass(frozen=True)
 class UsdPriceConfig:
-    """USD price source settings. The source is a JSON HTTP endpoint."""
+    """
+    USD price source settings.
 
+    ``provider`` selects the implementation: ``"nobitex"`` (default; the
+    public Nobitex market-stats API, no key needed) or ``"http_json"``
+    (a generic JSON endpoint described by ``source_url`` and
+    ``price_json_path``).
+    """
+
+    provider: str = "nobitex"
     source_name: str = ""
     source_url: str = ""
     price_json_path: str = ""
@@ -252,6 +260,7 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 cleanup_time=str(sched.get("cleanup_time", "04:30")),
             ),
             usd_price=UsdPriceConfig(
+                provider=str(usd.get("provider", "nobitex")),
                 source_name=str(usd.get("source_name", "")),
                 source_url=str(usd.get("source_url", "")),
                 price_json_path=str(usd.get("price_json_path", "")),
@@ -311,3 +320,65 @@ def validate_worker_config(config: AppConfig) -> None:
     """
     _require_non_empty(config.vpn_testing.worker_api_token, "vpn_testing.worker_api_token")
     _require_non_empty(config.vpn_testing.xray_binary_path, "vpn_testing.xray_binary_path")
+
+
+def _mongo_host_only(connection_string: str) -> str:
+    """Return the host part of a MongoDB URI, stripping any credentials."""
+    if not connection_string:
+        return "(not set)"
+    without_scheme = connection_string.split("://", 1)[-1]
+    host_part = without_scheme.rsplit("@", 1)[-1]
+    return host_part.split("/", 1)[0]
+
+
+def log_startup_summary(config: AppConfig) -> None:
+    """
+    Log a non-secret summary of the effective configuration.
+
+    Logged once at process startup so misconfiguration (empty API keys,
+    no source channels, wrong database) is visible immediately in the
+    logs. Never logs tokens, keys, or connection credentials.
+
+    Args:
+        config: Loaded application configuration.
+
+    Side effects:
+        Writes one multi-line INFO log record.
+    """
+    from src.shared.logging_setup import get_logger
+
+    def set_or_not(value: str) -> str:
+        """Describe a secret as present or missing without revealing it."""
+        return "set" if value else "EMPTY"
+
+    ai = config.ai
+    logger = get_logger(__name__)
+    logger.info(
+        "Effective configuration:\n"
+        "  sources=%d destinations=%d admins=%d\n"
+        "  ai: primary=%s (key %s) fallback=%s (key %s) "
+        "classification_model=%s deduplication_model=%s\n"
+        "  telegram: bot_token %s, approval_bot_token %s, api_id %s\n"
+        "  mongodb: host=%s db=%s | sqlite: %s\n"
+        "  vpn_testing: enabled=%s worker_url %s\n"
+        "  usd_price: provider=%s publish_times=%s",
+        len(config.telegram.source_channels),
+        len(config.telegram.destination_channels),
+        len(config.telegram.admin_user_ids),
+        ai.primary_provider,
+        set_or_not(ai.zai_api_key if ai.primary_provider == "zai" else ai.deepseek_api_key),
+        ai.fallback_provider or "(none)",
+        set_or_not(ai.deepseek_api_key if ai.fallback_provider == "deepseek" else ai.zai_api_key),
+        ai.classification_model or "(provider default)",
+        ai.deduplication_model or "(provider default)",
+        set_or_not(config.telegram.bot_token),
+        set_or_not(config.telegram.approval_bot_token),
+        set_or_not(config.telegram.api_id),
+        _mongo_host_only(config.database.mongodb_connection_string),
+        config.database.mongodb_database,
+        config.database.sqlite_path,
+        config.vpn_testing.iran_worker_enabled,
+        set_or_not(config.vpn_testing.worker_api_url),
+        config.usd_price.provider,
+        config.scheduler.usd_price_publish_times,
+    )

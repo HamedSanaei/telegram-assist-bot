@@ -175,6 +175,22 @@ are marked `skipped`.
 
 Configured in `scheduler` section: `usd_price_publish_times` (twice daily),
 `cleanup_time` (daily), all in `scheduler.timezone` (default Asia/Tehran).
+The USD price source is selected by `usd_price.provider` via
+`create_price_source()` in `src/composition.py`: `"nobitex"` (default,
+`src/infrastructure/price/nobitex_price_source.py`, public USDT/RLS
+market-stats endpoint converted to Toman) or `"http_json"` (generic
+`src/infrastructure/price/http_price_source.py`).
+
+## Observability
+
+Every entrypoint logs a non-secret `Effective configuration` summary at
+startup (`log_startup_summary()` in `src/shared/config.py`): counts of
+channels/admins, provider names, whether each secret is set/EMPTY, database
+targets. Each collected message then logs a per-stage chain (received →
+duplicate check → classified → saved to MongoDB → enqueued → queue item
+done) so a stalled pipeline can be bisected from the logs; the exact lines
+are documented in the Troubleshooting section of `docs/RUNNING.md`. The
+approval bot answers `/start` with the caller's admin status.
 
 ## Tests
 
@@ -222,9 +238,9 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 
 ## Last Updated
 
-2026-07-01 — Added the all-in-one entrypoint `src/run_all.py`
-(`telegram-suite` executable and systemd unit, `suite` install role) so the
-main app and the collector start with one command. Earlier the same day:
-publish build system (scripts/build_publish.py, PyInstaller Windows
-executables, Ubuntu tar.gz bundle with install.sh) and the initial full
-implementation.
+2026-07-02 — Added pipeline observability (startup config summary,
+per-stage collection logs, approval-bot `/start` handler, error-chain
+logging) and the Nobitex USD price source (`usd_price.provider`,
+`create_price_source()` factory). 2026-07-01: all-in-one entrypoint
+`src/run_all.py` (`telegram-suite` executable and systemd unit, `suite`
+install role), publish build system, and the initial full implementation.

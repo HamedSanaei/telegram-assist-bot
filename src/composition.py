@@ -17,6 +17,9 @@ from src.infrastructure.ai.zai_provider import ZaiProvider
 from src.infrastructure.db.mongo.post_repository import MongoPostRepository
 from src.infrastructure.db.sqlite.connection import Database
 from src.infrastructure.db.sqlite.migrations import apply_migrations
+from src.infrastructure.price.http_price_source import HttpJsonPriceSource
+from src.infrastructure.price.nobitex_price_source import NobitexPriceSource
+from src.domain.interfaces import PriceSource
 from src.infrastructure.db.sqlite.repositories import (
     SqliteAdminRepository,
     SqliteChannelRepository,
@@ -115,6 +118,39 @@ def create_ai_service(config: AppConfig) -> AiService:
         else None
     )
     return AiService(primary=primary, fallback=fallback)
+
+
+def create_price_source(config: AppConfig) -> PriceSource:
+    """
+    Build the USD price source selected by ``usd_price.provider``.
+
+    Args:
+        config: Loaded application configuration.
+
+    Returns:
+        The configured :class:`PriceSource` implementation.
+
+    Raises:
+        ConfigurationError: When the provider name is unknown, or when
+            the ``http_json`` provider is selected without ``source_url``
+            and ``price_json_path``.
+    """
+    usd = config.usd_price
+    if usd.provider == "nobitex":
+        return NobitexPriceSource(timeout_seconds=usd.request_timeout_seconds)
+    if usd.provider == "http_json":
+        if not usd.source_url or not usd.price_json_path:
+            raise ConfigurationError(
+                "usd_price.provider 'http_json' requires usd_price.source_url "
+                "and usd_price.price_json_path"
+            )
+        return HttpJsonPriceSource(
+            name=usd.source_name or "usd",
+            url=usd.source_url,
+            price_json_path=usd.price_json_path,
+            timeout_seconds=usd.request_timeout_seconds,
+        )
+    raise ConfigurationError(f"Unknown USD price provider: '{usd.provider}'")
 
 
 async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:

@@ -22,7 +22,12 @@ from src.composition import (
 )
 from src.domain.entities import MediaItem
 from src.domain.enums import MediaKind
-from src.shared.config import AppConfig, load_configuration, validate_collector_config
+from src.shared.config import (
+    AppConfig,
+    load_configuration,
+    log_startup_summary,
+    validate_collector_config,
+)
 from src.shared.errors import AppError
 from src.shared.logging_setup import get_logger, setup_logging
 
@@ -85,6 +90,13 @@ class Collector:
     async def _on_new_message(self, event: events.NewMessage.Event) -> None:
         """Handle one incoming message; errors are logged, never raised."""
         message = event.message
+        logger.info(
+            "Received message chat=%s msg=%s text_len=%d has_photo=%s",
+            event.chat_id,
+            message.id,
+            len(message.message or ""),
+            message.photo is not None,
+        )
         try:
             media: list[MediaItem] = []
             if message.photo is not None:
@@ -99,11 +111,13 @@ class Collector:
             )
             await self._use_case.handle_new_message(collected)
         except AppError as exc:
+            cause = exc.__cause__
             logger.error(
-                "Collection failed chat=%s msg=%s error=%s",
+                "Collection failed chat=%s msg=%s error=%s%s",
                 event.chat_id,
                 message.id,
                 exc,
+                f" (caused by: {cause})" if cause is not None else "",
             )
         except Exception:
             logger.exception(
@@ -123,6 +137,7 @@ async def run(config: AppConfig | None = None) -> None:
     """
     config = config or load_configuration()
     setup_logging(config.logging.level, config.logging.file)
+    log_startup_summary(config)
     validate_collector_config(config)
 
     db = await create_sqlite(config)

@@ -59,6 +59,7 @@
     "cleanup_time": "04:30"
   },
   "usd_price": {
+    "provider": "nobitex",
     "source_name": "",
     "source_url": "",
     "price_json_path": "",

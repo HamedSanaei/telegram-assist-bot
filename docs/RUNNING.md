@@ -50,7 +50,8 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `vpn_testing.worker_api_token` | Shared secret for the worker API |
 | `vpn_testing.xray_binary_path` | xray path on the Iran server |
 | `scheduler.usd_price_publish_times` | e.g. `["09:00", "21:00"]` (in `scheduler.timezone`) |
-| `usd_price.source_url` / `price_json_path` | JSON endpoint and dotted path of the USD price value |
+| `usd_price.provider` | `"nobitex"` (default; free-market USDT rate from the public Nobitex API, no key needed, published in Toman) or `"http_json"` for a custom endpoint |
+| `usd_price.source_url` / `price_json_path` | Only for `provider: "http_json"`: JSON endpoint and dotted path of the USD price value |
 
 A custom config path can be set with the `TELEGRAM_ADMIN_BOT_CONFIG`
 environment variable.
@@ -130,7 +131,9 @@ before enabling the systemd service.
 ### Running the Scheduler
 
 The scheduler runs inside `src.main`. Times are configured in the
-`scheduler` section (`Asia/Tehran` by default).
+`scheduler` section (`Asia/Tehran` by default). The USD price job uses
+the source selected by `usd_price.provider` — with the default
+`"nobitex"` no further price configuration is required.
 
 ## Running Tests
 
@@ -276,6 +279,32 @@ the Telethon session file exists.
 
 ## Troubleshooting
 
+- **Posts are collected but never reach MongoDB or the approval bot** —
+  follow one message through the per-stage log lines (console and
+  `logs/app.log`). Each collected message produces this sequence; the last
+  line you see tells you which stage failed:
+
+  | Log line | Meaning |
+  | --- | --- |
+  | `Received message chat=... msg=...` | Collector got the message from Telegram |
+  | `Duplicate check passed ... provider=...` | AI dedup done (skips log `Skipping ... duplicate` instead) |
+  | `Classified ... category=... provider=...` | AI classification done (`irrelevant` posts stop here by design) |
+  | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
+  | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued for the next stage |
+  | `Queue item done id=... type=approval_request` | Approval message sent to admins |
+
+  Common causes when the chain stops early:
+  - `Collection failed ... (caused by: zai: HTTP error ...)` — both AI
+    providers failed (empty/invalid API key, or z.ai/DeepSeek unreachable
+    from your network). The post is intentionally not stored. Check the
+    `Effective configuration` block logged at startup: it shows whether
+    each API key is `set` or `EMPTY` (values are never logged).
+  - Every post logs `Skipping irrelevant post` — the classifier judges the
+    source content as ads/spam; check the source channel content.
+  - `Approval message failed admin=...` — the admin has never opened the
+    approval bot and pressed Start. Each admin must send `/start` to the
+    approval bot once; the bot replies whether that user id is a
+    configured admin.
 - **`ConfigurationError: Configuration file not found`** — copy the example
   file to `config/configuration.json` or set `TELEGRAM_ADMIN_BOT_CONFIG`.
 - **Persian text looks like `Ø³ÙØ§Ù` (Mojibake)** — a file was written
@@ -297,5 +326,9 @@ the Telethon session file exists.
   system falls back to DeepSeek automatically, so both failing means both
   keys/endpoints are broken. Timeouts are configurable via
   `ai.request_timeout_seconds`.
+- **USD price job fails with `PriceFetchError: Nobitex request failed`** —
+  `apiv2.nobitex.ir` is unreachable from the server (DNS/filtering). Either
+  fix connectivity or switch to `usd_price.provider: "http_json"` with a
+  custom `source_url` / `price_json_path`.
 - **Posts never expire** — MongoDB TTL runs about once a minute; also
   confirm the `expires_at` index exists (`db.posts.getIndexes()`).

@@ -22,18 +22,22 @@ from src.application.price_service import UsdPriceService
 from src.application.vpn_test_service import VpnTestService
 from src.composition import (
     create_mongo,
+    create_price_source,
     create_repositories,
     create_sqlite,
     sync_config_to_sqlite,
 )
 from src.domain.entities import QueueItem
 from src.domain.enums import QueueItemType, QueueStatus
-from src.infrastructure.price.http_price_source import HttpJsonPriceSource
 from src.infrastructure.telegram.publisher import AiogramMessagePublisher
 from src.infrastructure.vpn.worker_client import IranWorkerVpnTester
 from src.presentation.approval_bot.handlers import create_approval_router
 from src.presentation.approval_bot.notifier import AiogramApprovalNotifier
-from src.shared.config import load_configuration, validate_main_app_config
+from src.shared.config import (
+    load_configuration,
+    log_startup_summary,
+    validate_main_app_config,
+)
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers.queue_worker import QueueWorker
 from src.workers.scheduler import create_scheduler
@@ -50,6 +54,7 @@ async def run() -> None:
     """
     config = load_configuration()
     setup_logging(config.logging.level, config.logging.file)
+    log_startup_summary(config)
     validate_main_app_config(config)
 
     db = await create_sqlite(config)
@@ -101,12 +106,7 @@ async def run() -> None:
         },
     )
 
-    price_source = HttpJsonPriceSource(
-        name=config.usd_price.source_name or "usd",
-        url=config.usd_price.source_url,
-        price_json_path=config.usd_price.price_json_path,
-        timeout_seconds=config.usd_price.request_timeout_seconds,
-    )
+    price_source = create_price_source(config)
     price_service = UsdPriceService(
         source=price_source,
         history=repos["price_history"],

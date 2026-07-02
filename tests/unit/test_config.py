@@ -92,6 +92,11 @@ class TestLoadConfiguration:
         config = load_configuration(example)
         assert config.ai.primary_provider == "zai"
         assert config.ai.fallback_provider == "deepseek"
+        assert config.usd_price.provider == "nobitex"
+
+    def test_usd_price_provider_defaults_to_nobitex(self, tmp_path: Path) -> None:
+        config = load_configuration(_write(tmp_path, _valid_config()))
+        assert config.usd_price.provider == "nobitex"
 
 
 class TestValidateMainAppConfig:

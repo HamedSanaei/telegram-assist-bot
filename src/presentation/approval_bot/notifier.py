@@ -90,7 +90,9 @@ class AiogramApprovalNotifier:
                 await self._bot.send_message(admin_id, text, reply_markup=keyboard)
             except Exception as exc:
                 logger.error(
-                    "Approval message failed admin=%s post=%s error=%s",
+                    "Approval message failed admin=%s post=%s error=%s "
+                    "(hint: the admin must open the approval bot and press "
+                    "Start once before the bot can message them)",
                     admin_id,
                     post.post_id,
                     exc,

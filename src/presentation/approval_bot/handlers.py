@@ -8,7 +8,8 @@ permission, and duplicate publishing state through the
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.filters import CommandStart
+from aiogram.types import CallbackQuery, Message
 
 from src.application.approval_service import ApprovalService
 from src.presentation.approval_bot.keyboards import (
@@ -37,6 +38,28 @@ def create_approval_router(approval: ApprovalService) -> Router:
         dispatcher.include_router(create_approval_router(service))
     """
     router = Router(name="approval")
+
+    @router.message(CommandStart())
+    async def on_start(message: Message) -> None:
+        """Confirm the bot is alive and whether this user is an admin."""
+        user_id = message.from_user.id if message.from_user else 0
+        try:
+            await approval.ensure_admin(user_id)
+        except ApprovalStateError:
+            logger.warning("Non-admin user started the approval bot user=%s", user_id)
+            await message.answer(
+                "🤖 ربات تایید فعال است.\n"
+                f"⛔️ شناسه شما ({user_id}) در فهرست ادمین‌ها نیست؛ "
+                "برای دریافت پست‌ها باید این شناسه در "
+                "telegram.admin_user_ids تنظیمات ثبت شود."
+            )
+            return
+        logger.info("Admin started the approval bot user=%s", user_id)
+        await message.answer(
+            "🤖 ربات تایید فعال است.\n"
+            "✅ شناسه شما به عنوان ادمین شناخته شد؛ "
+            "پست‌های جدید برای تایید به همین گفتگو ارسال می‌شوند."
+        )
 
     async def _refresh_channel_keyboard(callback: CallbackQuery, post_id: str) -> None:
         """Re-render the channel keyboard from current publish state."""
