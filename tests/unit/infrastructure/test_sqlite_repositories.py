@@ -88,6 +88,50 @@ class TestQueueRepository:
         item = await repo.get(item_id)
         assert item.status == QueueStatus.EXPIRED
 
+    async def test_latest_scheduled_publish_for_channel(self, db: Database) -> None:
+        repo = SqliteQueueRepository(db)
+        assert await repo.latest_scheduled_publish_for_channel(-100) is None
+        early = datetime.now(timezone.utc) + timedelta(minutes=10)
+        late = datetime.now(timezone.utc) + timedelta(minutes=40)
+        await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p1", "chat_id": -100},
+            scheduled_at=late,
+        )
+        await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p2", "chat_id": -100},
+            scheduled_at=early,
+        )
+        await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p3", "chat_id": -200},
+            scheduled_at=late + timedelta(hours=1),
+        )
+        assert await repo.latest_scheduled_publish_for_channel(-100) == late
+
+    async def test_scheduled_publish_channels_for_post(self, db: Database) -> None:
+        repo = SqliteQueueRepository(db)
+        due = datetime.now(timezone.utc) + timedelta(minutes=5)
+        first = await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p1", "chat_id": -100},
+            scheduled_at=due,
+        )
+        await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p1", "chat_id": -200},
+            scheduled_at=due,
+        )
+        await repo.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": "p2", "chat_id": -300},
+            scheduled_at=due,
+        )
+        assert await repo.scheduled_publish_channels("p1") == {-100, -200}
+        await repo.mark_status(first, QueueStatus.PUBLISHED)
+        assert await repo.scheduled_publish_channels("p1") == {-200}
+
 
 class TestChannelRepository:
     """Tests for :class:`SqliteChannelRepository`."""
@@ -114,6 +158,48 @@ class TestChannelRepository:
         await repo.upsert_source("@source_channel")
         await repo.upsert_source("@source_channel")
         assert await repo.list_sources() == ["@source_channel"]
+
+    async def test_interval_roundtrip_and_get_destination(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_destination(
+            DestinationChannel(chat_id=-100, title="خبر", post_interval_minutes=45)
+        )
+        channel = await repo.get_destination(-100)
+        assert channel is not None
+        assert channel.post_interval_minutes == 45
+        assert await repo.get_destination(-999) is None
+
+    async def test_seed_destination_never_overwrites(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_destination(
+            DestinationChannel(chat_id=-100, title="عنوان ربات", post_interval_minutes=10)
+        )
+        await repo.seed_destination(
+            DestinationChannel(chat_id=-100, title="عنوان کانفیگ", post_interval_minutes=99)
+        )
+        channel = await repo.get_destination(-100)
+        assert channel.title == "عنوان ربات"
+        assert channel.post_interval_minutes == 10
+
+    async def test_seed_source_keeps_disabled_rows_disabled(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_source("@source_channel")
+        assert await repo.disable_source("@source_channel") is True
+        await repo.seed_source("@source_channel")
+        assert await repo.list_sources() == []
+        await repo.upsert_source("@source_channel")
+        assert await repo.list_sources() == ["@source_channel"]
+
+    async def test_disable_source_by_username_or_number(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_source_details(
+            identifier="@source_channel",
+            chat_id=-100123,
+            title="منبع",
+            username="source_channel",
+        )
+        assert await repo.disable_source("-100123") is True
+        assert await repo.disable_source("@missing") is False
 
     async def test_source_label_uses_resolved_title_and_username(
         self, db: Database

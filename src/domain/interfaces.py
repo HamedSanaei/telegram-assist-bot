@@ -153,6 +153,20 @@ class QueueRepository(Protocol):
         """Mark stale unfinished items as expired; return affected count."""
         ...
 
+    async def latest_scheduled_publish_for_channel(
+        self, channel_chat_id: int
+    ) -> datetime | None:
+        """
+        Return the latest ``scheduled_at`` of a pending scheduled-publish
+        item targeting the channel, or ``None`` when the channel queue
+        is empty. Used to pace posts per channel.
+        """
+        ...
+
+    async def scheduled_publish_channels(self, post_id: str) -> set[int]:
+        """Return chat ids with a pending scheduled publish of this post."""
+        ...
+
 
 class ChannelRepository(Protocol):
     """Persistence port for source and destination channels."""
@@ -163,6 +177,10 @@ class ChannelRepository(Protocol):
 
     async def list_destinations(self) -> list[DestinationChannel]:
         """Return all enabled destination channels."""
+        ...
+
+    async def get_destination(self, chat_id: int) -> DestinationChannel | None:
+        """Return one destination channel (enabled or not), or ``None``."""
         ...
 
     async def list_price_channels(self) -> list[DestinationChannel]:
@@ -189,6 +207,10 @@ class ChannelRepository(Protocol):
 
     async def list_sources(self) -> list[str]:
         """Return all enabled source channel identifiers."""
+        ...
+
+    async def disable_source(self, identifier: str) -> bool:
+        """Disable a source channel; return whether a row was affected."""
         ...
 
 
@@ -223,6 +245,10 @@ class PublishLogRepository(Protocol):
 
     async def published_channels(self, post_id: str) -> set[int]:
         """Return chat ids of channels the post was already published to."""
+        ...
+
+    async def last_published_at(self, channel_chat_id: int) -> datetime | None:
+        """Return the most recent publish time on the channel, or ``None``."""
         ...
 
 

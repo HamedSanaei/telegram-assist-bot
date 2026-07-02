@@ -39,9 +39,9 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.api_id` / `api_hash` | Telegram API credentials for the collector |
 | `telegram.collector_session` | Telethon session file path (default `data/collector`) |
 | `telegram.collector_daily_backfill_max_messages` | Maximum messages scanned from each source for the current Gregorian day when the collector starts (default `5000`; set `0` to disable) |
-| `telegram.source_refresh_seconds` | How often the running collector reloads `source_channels` from configuration (default `60`; set `0` to disable live refresh) |
-| `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from |
-| `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`. `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The main bot must be an admin of every destination channel. |
+| `telegram.source_refresh_seconds` | How often the running collector reloads the source channel list from SQLite (default `60`; set `0` to disable live refresh) |
+| `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from (initial seed; manage at runtime with the management bot) |
+| `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`, `post_interval_minutes` (minimum minutes between scheduled posts on that channel, default `30`). `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The main bot must be an admin of every destination channel. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
 | `ai.*` | Provider keys, optional base URL / model overrides, timeouts |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
@@ -113,14 +113,44 @@ python -m src.main
 ```
 
 This single process runs the approval bot (long polling), the SQLite queue
-worker (VPN test dispatch + approval dispatch), and the scheduler (USD price
-publishing and daily cleanup). It also polls the main management bot
-(`telegram.bot_token`) for admin commands: `/start`, `/status`, `/sources`,
-and `/destinations`.
+worker (VPN test dispatch + approval dispatch + scheduled channel publishing),
+and the scheduler (USD price publishing and daily cleanup). It also polls the
+main management bot (`telegram.bot_token`) for admin commands.
+
+### Managing Channels with the Management Bot
+
+The main bot (`telegram.bot_token`) doubles as the management bot for
+admins listed in `telegram.admin_user_ids`:
+
+| Command | Effect |
+| --- | --- |
+| `/start`, `/help` | Show the command list |
+| `/status` | System summary (sources, destinations, admins, AI, backfill) |
+| `/sources` | List source channels |
+| `/addsource <@user or id>` | Add a source channel; the collector starts watching it within `source_refresh_seconds` |
+| `/delsource <@user or id>` | Stop collecting from a source channel |
+| `/destinations` | List destination channels with kind, interval, and USD flag |
+| `/adddest <chat_id> <title>` | Add a destination channel with defaults (kind `news`, interval 30 min) |
+| `/deldest <chat_id>` | Disable a destination channel |
+| `/setdest <chat_id> <field> <value>` | Change `title`, `public_id`, `kind`, `usd` (on/off), `enabled` (on/off), or `interval` (minutes) |
+| `/setinterval <chat_id> <minutes>` | Shortcut for the scheduling interval |
+
+`configuration.json` only **seeds** the channel lists on first start; after
+that, SQLite (edited through these commands) is the source of truth and
+bot-made changes survive restarts. Admin ids remain config-only.
 
 ### Running the Approval Bot
 
 The approval bot runs inside `src.main`; it has no separate entrypoint.
+
+Every approval message starts in **scheduled mode** (first keyboard row
+shows the current delivery mode). In scheduled mode, confirming a channel
+puts the post into that channel's paced queue: posts are published in
+order with at least `post_interval_minutes` between them (counting from
+the channel's last published or last queued post). Tapping the toggle
+switches the message to **immediate mode**, where confirmation publishes
+right away. Channels with a queued post show ⏱ on the keyboard, published
+ones show ✅; neither can be selected twice.
 
 ### Running the Collector
 
@@ -142,10 +172,12 @@ being stored twice. `telegram.collector_daily_backfill_max_messages` is only
 a safety cap per source; increase it for very high-volume channels or set it
 to `0` only when you want a strict live-only listener.
 
-While running, the collector reloads source channels every
-`telegram.source_refresh_seconds` seconds. If you add a new source channel
-to `configuration.json`, it is resolved and backfilled from today's first
-message without restarting the process.
+While running, the collector reloads the source channel list from SQLite
+every `telegram.source_refresh_seconds` seconds. Sources added with the
+management bot's `/addsource` (or seeded from `configuration.json` at
+startup) are resolved and backfilled from today's first message without
+restarting the process; sources removed with `/delsource` stop being
+collected on the next refresh.
 
 When the collector resolves a source channel, it stores the channel title
 and username in SQLite. Approval previews then show that readable source

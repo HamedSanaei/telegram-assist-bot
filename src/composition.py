@@ -155,10 +155,13 @@ def create_price_source(config: AppConfig) -> PriceSource:
 
 async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:
     """
-    Mirror channels and admins from ``configuration.json`` into SQLite.
+    Seed channels and admins from ``configuration.json`` into SQLite.
 
-    Runs on every startup so the configuration file stays the single
-    source of truth while runtime reads hit SQLite.
+    Channels are seed-only (inserted when missing, never overwritten):
+    after the first start, sources and destinations are managed through
+    the main management bot and SQLite is the source of truth, so
+    bot-made changes survive restarts. Admins remain config-authoritative
+    for security and are upserted on every startup.
 
     Args:
         config: Loaded application configuration.
@@ -167,21 +170,23 @@ async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:
     channels = SqliteChannelRepository(db)
     admins = SqliteAdminRepository(db)
     for entry in config.telegram.destination_channels:
-        await channels.upsert_destination(
+        await channels.seed_destination(
             DestinationChannel(
                 chat_id=entry.chat_id,
                 title=entry.title,
                 public_id=entry.public_id,
                 kind=ChannelKind(entry.kind),
                 publish_usd_price=entry.publish_usd_price,
+                post_interval_minutes=entry.post_interval_minutes,
             )
         )
     for identifier in config.telegram.source_channels:
-        await channels.upsert_source(str(identifier))
+        await channels.seed_source(str(identifier))
     for user_id in config.telegram.admin_user_ids:
         await admins.upsert(AdminUser(telegram_user_id=user_id))
     logger.info(
-        "Synced config to SQLite destinations=%d sources=%d admins=%d",
+        "Seeded config into SQLite destinations=%d sources=%d admins=%d "
+        "(channels are bot-managed after seeding)",
         len(config.telegram.destination_channels),
         len(config.telegram.source_channels),
         len(config.telegram.admin_user_ids),

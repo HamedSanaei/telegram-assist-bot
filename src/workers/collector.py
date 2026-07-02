@@ -72,6 +72,7 @@ class Collector:
         self._channels = channels
         self._seen_album_keys: set[tuple[int, int]] = set()
         self._source_chat_ids: set[int] = set()
+        self._timezone_name = "Asia/Tehran"
 
     async def run(
         self,
@@ -79,6 +80,7 @@ class Collector:
         startup_backfill_since: datetime | None = None,
         startup_backfill_max_messages: int = 5000,
         source_refresh_seconds: int = 60,
+        timezone_name: str = "Asia/Tehran",
     ) -> None:
         """
         Start listening until the client disconnects.
@@ -89,13 +91,16 @@ class Collector:
                 during startup. When omitted, only live messages are handled.
             startup_backfill_max_messages: Safety cap for scanned messages
                 per source. Set to 0 to disable the startup scan.
-            source_refresh_seconds: How often configuration is reloaded to
-                discover newly added source channels while the collector is
-                already running.
+            source_refresh_seconds: How often the source channel list is
+                reloaded (from SQLite, where the management bot writes) to
+                discover newly added source channels while running.
+            timezone_name: Timezone whose day boundary limits the backfill
+                of newly discovered sources.
 
         Side effects:
             Downloads media files and writes posts/queue items.
         """
+        self._timezone_name = timezone_name
         self._media_dir.mkdir(parents=True, exist_ok=True)
         resolved = await self._resolve_sources(sources)
         if not resolved:
@@ -165,21 +170,33 @@ class Collector:
             or ""
         )
 
+    async def _current_source_identifiers(self) -> list[str | int]:
+        """
+        Return the up-to-date source channel list.
+
+        SQLite (written by the management bot's ``/addsource`` and
+        ``/delsource``) is the runtime source of truth; the configuration
+        file is only re-read when no repository is wired (tests).
+        """
+        if self._channels is not None:
+            return list(await self._channels.list_sources())
+        return list(load_configuration().telegram.source_channels)
+
     async def _refresh_sources(
         self,
         source_refresh_seconds: int,
         startup_backfill_since: datetime | None,
         startup_backfill_max_messages: int,
     ) -> None:
-        """Reload source channel configuration periodically while running."""
+        """Reload the source channel list periodically while running."""
         if source_refresh_seconds <= 0:
             return
         while True:
             await asyncio.sleep(source_refresh_seconds)
             try:
-                config = load_configuration()
+                identifiers = await self._current_source_identifiers()
                 before = set(self._source_chat_ids)
-                resolved = await self._resolve_sources(config.telegram.source_channels)
+                resolved = await self._resolve_sources(identifiers)
                 resolved_ids = {get_peer_id(entity) for entity in resolved}
                 self._source_chat_ids = resolved_ids
                 new_entities = [
@@ -193,7 +210,7 @@ class Collector:
                         len(new_entities),
                     )
                     refresh_backfill_since = (
-                        _current_day_start_utc(config.scheduler.timezone)
+                        _current_day_start_utc(self._timezone_name)
                         if startup_backfill_since is not None
                         else None
                     )
@@ -486,15 +503,19 @@ async def run(config: AppConfig | None = None) -> None:
         channels=repos["channels"],
     )
     startup_backfill_since = _current_day_start_utc(config.scheduler.timezone)
+    initial_sources: list[str | int] = list(await repos["channels"].list_sources())
+    if not initial_sources:
+        initial_sources = list(config.telegram.source_channels)
     try:
         await client.start()
         await collector.run(
-            config.telegram.source_channels,
+            initial_sources,
             startup_backfill_since=startup_backfill_since,
             startup_backfill_max_messages=(
                 config.telegram.collector_daily_backfill_max_messages
             ),
             source_refresh_seconds=config.telegram.source_refresh_seconds,
+            timezone_name=config.scheduler.timezone,
         )
     finally:
         await client.disconnect()

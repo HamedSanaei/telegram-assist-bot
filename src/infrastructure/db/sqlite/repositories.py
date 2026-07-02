@@ -30,6 +30,14 @@ def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+def _as_int_or_none(value: str) -> int | None:
+    """Return the value as ``int`` when it is numeric, else ``None``."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class SqliteChannelRepository:
     """SQLite-backed implementation of :class:`ChannelRepository`."""
 
@@ -41,14 +49,16 @@ class SqliteChannelRepository:
         """Insert or update a destination channel row."""
         await self._db.execute(
             """
-            INSERT INTO destination_channels (chat_id, title, public_id, kind, publish_usd_price, enabled)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO destination_channels
+                (chat_id, title, public_id, kind, publish_usd_price, enabled, post_interval_minutes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 title = excluded.title,
                 public_id = excluded.public_id,
                 kind = excluded.kind,
                 publish_usd_price = excluded.publish_usd_price,
-                enabled = excluded.enabled
+                enabled = excluded.enabled,
+                post_interval_minutes = excluded.post_interval_minutes
             """,
             (
                 channel.chat_id,
@@ -57,8 +67,42 @@ class SqliteChannelRepository:
                 channel.kind.value,
                 int(channel.publish_usd_price),
                 int(channel.enabled),
+                channel.post_interval_minutes,
             ),
         )
+
+    async def seed_destination(self, channel: DestinationChannel) -> None:
+        """
+        Insert a destination channel only when it does not exist yet.
+
+        Used by the configuration sync at startup so channel settings
+        changed through the management bot are never overwritten by
+        ``configuration.json`` values.
+        """
+        await self._db.execute(
+            """
+            INSERT INTO destination_channels
+                (chat_id, title, public_id, kind, publish_usd_price, enabled, post_interval_minutes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO NOTHING
+            """,
+            (
+                channel.chat_id,
+                channel.title,
+                channel.public_id,
+                channel.kind.value,
+                int(channel.publish_usd_price),
+                int(channel.enabled),
+                channel.post_interval_minutes,
+            ),
+        )
+
+    async def get_destination(self, chat_id: int) -> DestinationChannel | None:
+        """Return one destination channel regardless of enabled state."""
+        row = await self._db.fetchone(
+            "SELECT * FROM destination_channels WHERE chat_id = ?", (chat_id,)
+        )
+        return self._row_to_destination(row) if row is not None else None
 
     async def list_destinations(self) -> list[DestinationChannel]:
         """Return all enabled destination channels ordered by title."""
@@ -75,7 +119,7 @@ class SqliteChannelRepository:
         return [self._row_to_destination(row) for row in rows]
 
     async def upsert_source(self, identifier: str) -> None:
-        """Insert a source channel identifier if missing."""
+        """Insert a source channel identifier or re-enable an existing one."""
         await self._db.execute(
             """
             INSERT INTO source_channels (identifier, enabled) VALUES (?, 1)
@@ -83,6 +127,32 @@ class SqliteChannelRepository:
             """,
             (identifier,),
         )
+
+    async def seed_source(self, identifier: str) -> None:
+        """
+        Insert a source channel only when it does not exist yet.
+
+        Unlike :meth:`upsert_source`, an existing disabled row stays
+        disabled, so sources removed through the management bot are not
+        resurrected by the configuration sync at startup.
+        """
+        await self._db.execute(
+            "INSERT OR IGNORE INTO source_channels (identifier, enabled) VALUES (?, 1)",
+            (identifier,),
+        )
+
+    async def disable_source(self, identifier: str) -> bool:
+        """Disable a source channel; return whether a row was affected."""
+        rows = await self._db.fetchall(
+            """
+            UPDATE source_channels
+            SET enabled = 0
+            WHERE (identifier = ? OR username = ? OR chat_id = ?) AND enabled = 1
+            RETURNING id
+            """,
+            (identifier, identifier.lstrip("@"), _as_int_or_none(identifier)),
+        )
+        return len(rows) > 0
 
     async def upsert_source_details(
         self,
@@ -145,6 +215,7 @@ class SqliteChannelRepository:
             kind=ChannelKind(row["kind"]),
             publish_usd_price=bool(row["publish_usd_price"]),
             enabled=bool(row["enabled"]),
+            post_interval_minutes=row["post_interval_minutes"],
         )
 
 
@@ -265,6 +336,34 @@ class SqliteQueueRepository:
         row = await self._db.fetchone("SELECT * FROM queue_items WHERE id = ?", (item_id,))
         return self._row_to_item(row) if row is not None else None
 
+    async def latest_scheduled_publish_for_channel(
+        self, channel_chat_id: int
+    ) -> datetime | None:
+        """Return the latest pending scheduled-publish time for a channel."""
+        row = await self._db.fetchone(
+            """
+            SELECT MAX(scheduled_at) AS latest FROM queue_items
+            WHERE type = 'scheduled_publish'
+              AND status IN ('pending', 'processing')
+              AND json_extract(payload, '$.chat_id') = ?
+            """,
+            (channel_chat_id,),
+        )
+        return _parse_dt(row["latest"]) if row is not None else None
+
+    async def scheduled_publish_channels(self, post_id: str) -> set[int]:
+        """Return chat ids with a pending scheduled publish of this post."""
+        rows = await self._db.fetchall(
+            """
+            SELECT json_extract(payload, '$.chat_id') AS chat_id FROM queue_items
+            WHERE type = 'scheduled_publish'
+              AND status IN ('pending', 'processing')
+              AND json_extract(payload, '$.post_id') = ?
+            """,
+            (post_id,),
+        )
+        return {int(row["chat_id"]) for row in rows if row["chat_id"] is not None}
+
     @staticmethod
     def _row_to_item(row: object) -> QueueItem:
         """Map a database row to a :class:`QueueItem`."""
@@ -314,6 +413,14 @@ class SqlitePublishLogRepository:
             "SELECT channel_chat_id FROM publish_log WHERE post_id = ?", (post_id,)
         )
         return {row["channel_chat_id"] for row in rows}
+
+    async def last_published_at(self, channel_chat_id: int) -> datetime | None:
+        """Return the most recent publish time on the channel, or ``None``."""
+        row = await self._db.fetchone(
+            "SELECT MAX(published_at) AS latest FROM publish_log WHERE channel_chat_id = ?",
+            (channel_chat_id,),
+        )
+        return _parse_dt(row["latest"]) if row is not None else None
 
 
 class SqlitePriceHistoryRepository:

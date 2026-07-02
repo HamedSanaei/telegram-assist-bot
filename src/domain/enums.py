@@ -45,6 +45,7 @@ class QueueItemType(str, Enum):
 
     VPN_TEST = "vpn_test"
     APPROVAL_REQUEST = "approval_request"
+    SCHEDULED_PUBLISH = "scheduled_publish"
 
 
 class QueueStatus(str, Enum):

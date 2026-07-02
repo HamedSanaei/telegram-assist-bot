@@ -145,6 +145,31 @@ class FakeQueueRepository:
                 count += 1
         return count
 
+    def _pending_scheduled(self) -> list[QueueItem]:
+        return [
+            item
+            for item in self.items
+            if item.type == QueueItemType.SCHEDULED_PUBLISH
+            and item.status in (QueueStatus.PENDING, QueueStatus.PROCESSING)
+        ]
+
+    async def latest_scheduled_publish_for_channel(
+        self, channel_chat_id: int
+    ) -> datetime | None:
+        times = [
+            item.scheduled_at
+            for item in self._pending_scheduled()
+            if item.payload.get("chat_id") == channel_chat_id and item.scheduled_at
+        ]
+        return max(times) if times else None
+
+    async def scheduled_publish_channels(self, post_id: str) -> set[int]:
+        return {
+            int(item.payload["chat_id"])
+            for item in self._pending_scheduled()
+            if item.payload.get("post_id") == post_id
+        }
+
 
 class FakeChannelRepository:
     """Static channel repository."""
@@ -153,10 +178,16 @@ class FakeChannelRepository:
         self.destinations = destinations or []
 
     async def upsert_destination(self, channel: DestinationChannel) -> None:
+        self.destinations = [
+            c for c in self.destinations if c.chat_id != channel.chat_id
+        ]
         self.destinations.append(channel)
 
     async def list_destinations(self) -> list[DestinationChannel]:
         return [c for c in self.destinations if c.enabled]
+
+    async def get_destination(self, chat_id: int) -> DestinationChannel | None:
+        return next((c for c in self.destinations if c.chat_id == chat_id), None)
 
     async def list_price_channels(self) -> list[DestinationChannel]:
         return [c for c in self.destinations if c.enabled and c.publish_usd_price]
@@ -178,6 +209,9 @@ class FakeChannelRepository:
 
     async def list_sources(self) -> list[str]:
         return []
+
+    async def disable_source(self, identifier: str) -> bool:
+        return False
 
 
 class FakeAdminRepository:
@@ -201,6 +235,7 @@ class FakePublishLogRepository:
 
     def __init__(self) -> None:
         self.records: dict[tuple[str, int], int] = {}
+        self.published_times: dict[int, datetime] = {}
 
     async def is_published(self, post_id: str, channel_chat_id: int) -> bool:
         return (post_id, channel_chat_id) in self.records
@@ -209,9 +244,13 @@ class FakePublishLogRepository:
         self, post_id: str, channel_chat_id: int, message_id: int
     ) -> None:
         self.records[(post_id, channel_chat_id)] = message_id
+        self.published_times[channel_chat_id] = datetime.now(timezone.utc)
 
     async def published_channels(self, post_id: str) -> set[int]:
         return {chat for (pid, chat) in self.records if pid == post_id}
+
+    async def last_published_at(self, channel_chat_id: int) -> datetime | None:
+        return self.published_times.get(channel_chat_id)
 
 
 class FakePriceHistoryRepository:

@@ -95,6 +95,13 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON source_channels (chat_id);
         """,
     ),
+    (
+        4,
+        """
+        ALTER TABLE destination_channels
+            ADD COLUMN post_interval_minutes INTEGER NOT NULL DEFAULT 30;
+        """,
+    ),
 ]
 
 

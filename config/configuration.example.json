@@ -14,14 +14,16 @@
         "title": "News Channel",
         "public_id": "@your_news_channel",
         "kind": "news",
-        "publish_usd_price": true
+        "publish_usd_price": true,
+        "post_interval_minutes": 30
       },
       {
         "chat_id": -1009876543210,
         "title": "VPN Channel",
         "public_id": "@your_vpn_channel",
         "kind": "vpn",
-        "publish_usd_price": false
+        "publish_usd_price": false,
+        "post_interval_minutes": 30
       }
     ],
     "admin_user_ids": [123456789]

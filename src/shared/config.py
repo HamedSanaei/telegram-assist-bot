@@ -33,6 +33,7 @@ class DestinationChannelConfig:
     public_id: str = ""
     kind: str = "news"
     publish_usd_price: bool = False
+    post_interval_minutes: int = 30
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ def _parse_destinations(raw: list[Any]) -> list[DestinationChannelConfig]:
                 public_id=str(entry.get("public_id", "")),
                 kind=str(entry.get("kind", "news")),
                 publish_usd_price=bool(entry.get("publish_usd_price", False)),
+                post_interval_minutes=int(entry.get("post_interval_minutes", 30)),
             )
         )
     return channels

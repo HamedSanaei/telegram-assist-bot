@@ -121,6 +121,8 @@ class DestinationChannel:
         kind: Channel kind used for routing (news, vpn, ...).
         publish_usd_price: Whether scheduled USD price posts go here.
         enabled: Whether the channel is currently active.
+        post_interval_minutes: Minimum minutes between scheduled posts
+            published to this channel (pacing policy for the send queue).
     """
 
     chat_id: int
@@ -129,6 +131,7 @@ class DestinationChannel:
     kind: ChannelKind = ChannelKind.NEWS
     publish_usd_price: bool = False
     enabled: bool = True
+    post_interval_minutes: int = 30
 
 
 @dataclass

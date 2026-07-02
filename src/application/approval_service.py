@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from src.application.channel_mention_rewriter import rewrite_source_channel_mentions
 from src.domain.entities import DestinationChannel, Post
+from src.domain.enums import QueueItemType
 from src.domain.interfaces import (
     AdminRepository,
     ApprovalNotifier,
@@ -13,6 +15,7 @@ from src.domain.interfaces import (
     MessagePublisher,
     PostRepository,
     PublishLogRepository,
+    QueueRepository,
 )
 from src.shared.errors import ApprovalStateError
 from src.shared.logging_setup import get_logger
@@ -42,6 +45,7 @@ class ApprovalService:
         publisher: MessagePublisher,
         notifier: ApprovalNotifier | None = None,
         source_identifiers: list[str | int] | None = None,
+        queue: QueueRepository | None = None,
     ) -> None:
         """
         Args:
@@ -55,6 +59,8 @@ class ApprovalService:
             source_identifiers: Source channel usernames/links from
                 configuration. Mentions of these sources are replaced with
                 the selected destination channel public id before publishing.
+            queue: Background job queue; required for scheduled publishing
+                (:meth:`schedule_publish`), optional otherwise.
         """
         self._posts = posts
         self._publish_log = publish_log
@@ -63,6 +69,7 @@ class ApprovalService:
         self._publisher = publisher
         self._notifier = notifier
         self._source_identifiers = source_identifiers or []
+        self._queue = queue
 
     async def request_approval(self, post_id: str) -> None:
         """
@@ -153,6 +160,86 @@ class ApprovalService:
             admin_user_id,
         )
         return message_id
+
+    async def scheduled_channels(self, post_id: str) -> set[int]:
+        """Return chat ids with a pending scheduled publish of this post."""
+        if self._queue is None:
+            return set()
+        return await self._queue.scheduled_publish_channels(post_id)
+
+    async def schedule_publish(
+        self, post_id: str, chat_id: int, admin_user_id: int
+    ) -> datetime:
+        """
+        Queue an approved post for paced publishing to one channel.
+
+        Runs the same validations as :meth:`publish`, then enqueues a
+        ``scheduled_publish`` job whose due time keeps at least
+        ``post_interval_minutes`` (per destination channel) between the
+        channel's last publish, its last queued slot, and this post.
+
+        Args:
+            post_id: Internal id of the approved post.
+            chat_id: Destination channel chat id chosen by the admin.
+            admin_user_id: Telegram user id of the approving admin.
+
+        Returns:
+            The UTC time the post is scheduled to be published at.
+
+        Raises:
+            ApprovalStateError: When validation fails (not an admin, post
+                missing, unknown channel, already published, already
+                queued for this channel, or no queue configured).
+        """
+        if self._queue is None:
+            raise ApprovalStateError("No queue configured for scheduled publishing")
+        await self.ensure_admin(admin_user_id)
+        await self._get_post(post_id)
+        channel = await self._channels.get_destination(chat_id)
+        if channel is None or not channel.enabled:
+            raise ApprovalStateError(f"Unknown destination channel {chat_id}")
+        if await self._publish_log.is_published(post_id, chat_id):
+            raise ApprovalStateError(
+                f"Post {post_id} already published to channel {chat_id}"
+            )
+        if chat_id in await self._queue.scheduled_publish_channels(post_id):
+            raise ApprovalStateError(
+                f"Post {post_id} already scheduled for channel {chat_id}"
+            )
+        scheduled_at = await self._next_publish_slot(channel)
+        await self._queue.enqueue(
+            QueueItemType.SCHEDULED_PUBLISH,
+            {"post_id": post_id, "chat_id": chat_id, "admin_user_id": admin_user_id},
+            scheduled_at=scheduled_at,
+        )
+        logger.info(
+            "Scheduled publish post=%s channel=%s at=%s interval_min=%d admin=%s",
+            post_id,
+            chat_id,
+            scheduled_at.isoformat(),
+            channel.post_interval_minutes,
+            admin_user_id,
+        )
+        return scheduled_at
+
+    async def _next_publish_slot(self, channel: DestinationChannel) -> datetime:
+        """
+        Compute the next allowed publish time for a channel.
+
+        The slot is ``interval`` minutes after the later of the channel's
+        last publish and its last queued slot; when that lies in the past
+        the post is due immediately.
+        """
+        now = datetime.now(timezone.utc)
+        interval = timedelta(minutes=max(channel.post_interval_minutes, 0))
+        candidates = [
+            await self._publish_log.last_published_at(channel.chat_id),
+            await self._queue.latest_scheduled_publish_for_channel(channel.chat_id),
+        ]
+        base = max((c for c in candidates if c is not None), default=None)
+        if base is None:
+            return now
+        return max(now, base + interval)
 
     async def _get_post(self, post_id: str) -> Post:
         """Load a post or raise :class:`ApprovalStateError`."""

@@ -39,6 +39,7 @@ from src.shared.config import (
     log_startup_summary,
     validate_main_app_config,
 )
+from src.shared.errors import ApprovalStateError
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers.queue_worker import QueueWorker
 from src.workers.scheduler import create_scheduler
@@ -81,6 +82,7 @@ async def run() -> None:
         publisher=publisher,
         notifier=notifier,
         source_identifiers=config.telegram.source_channels,
+        queue=repos["queue"],
     )
     vpn_tester = IranWorkerVpnTester(
         api_url=config.vpn_testing.worker_api_url,
@@ -104,11 +106,26 @@ async def run() -> None:
         await approval.request_approval(str(item.payload["post_id"]))
         return QueueStatus.WAITING_APPROVAL
 
+    async def handle_scheduled_publish(item: QueueItem) -> QueueStatus:
+        """Publish a queued post when its per-channel slot is due."""
+        post_id = str(item.payload["post_id"])
+        chat_id = int(item.payload["chat_id"])
+        admin_id = int(item.payload["admin_user_id"])
+        try:
+            await approval.publish(post_id, chat_id, admin_id)
+        except ApprovalStateError as exc:
+            logger.warning(
+                "Scheduled publish skipped post=%s chat=%s: %s", post_id, chat_id, exc
+            )
+            return QueueStatus.SKIPPED
+        return QueueStatus.PUBLISHED
+
     worker = QueueWorker(
         queue=repos["queue"],
         handlers={
             QueueItemType.VPN_TEST: handle_vpn_test,
             QueueItemType.APPROVAL_REQUEST: handle_approval_request,
+            QueueItemType.SCHEDULED_PUBLISH: handle_scheduled_publish,
         },
     )
 
@@ -127,7 +144,9 @@ async def run() -> None:
     )
 
     approval_dispatcher = Dispatcher()
-    approval_dispatcher.include_router(create_approval_router(approval))
+    approval_dispatcher.include_router(
+        create_approval_router(approval, timezone_name=config.scheduler.timezone)
+    )
     main_dispatcher = Dispatcher()
     main_dispatcher.include_router(
         create_main_router(config, repos["admins"], repos["channels"])

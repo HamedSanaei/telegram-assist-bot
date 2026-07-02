@@ -111,24 +111,36 @@ build/             GENERATED PyInstaller work files (git-ignored).
 
 ## Presentation Layer
 
-- `approval_bot/keyboards.py` — inline keyboards. Callback data:
-  `apv:send:<post_id>:<chat_id>`, `apv:cfm:...`, `apv:cxl:<post_id>`,
-  `apv:nop` (published channels render as `✅ <title>`).
-- `approval_bot/handlers.py` — `create_approval_router(approval_service)`:
-  select channel → confirm keyboard → publish → keyboard refreshed with ✅.
-  Every callback validates admin, post, channel, and duplicate state.
+- `approval_bot/keyboards.py` — inline keyboards. The first row toggles the
+  delivery mode (`s` = scheduled queue, default; `i` = immediate). Callback
+  data: `apv:mode:<post_id>:<m>`, `apv:send:<post_id>:<chat_id>:<m>`,
+  `apv:cfm:<post_id>:<chat_id>:<m>`, `apv:cxl:<post_id>:<m>`,
+  `apv:nop:pub` / `apv:nop:sch` (published channels render as `✅ <title>`,
+  queued ones as `⏱ <title>`).
+- `approval_bot/handlers.py` — `create_approval_router(approval_service,
+  timezone_name)`: toggle mode → select channel → confirm keyboard →
+  publish immediately or `schedule_publish` into the channel queue →
+  keyboard refreshed with ✅/⏱. Every callback validates admin, post,
+  channel, duplicate, and queued state.
 - `approval_bot/notifier.py` — `AiogramApprovalNotifier`: sends the Persian
   preview with a readable source-channel label, the first downloaded
   photo/video/document when present, and keyboard to every configured admin;
   obeys Telegram retry-after responses.
 - `main_bot/handlers.py` — admin-only management commands for the main bot:
-  `/start`, `/status`, `/sources`, and `/destinations`.
+  reports (`/start`, `/status`, `/sources`, `/destinations`) and channel
+  management (`/addsource`, `/delsource`, `/adddest`, `/deldest`,
+  `/setdest <chat_id> <field> <value>`, `/setinterval <chat_id> <minutes>`).
+  Channel edits are written to SQLite, which is the runtime source of truth.
 
 ## Workers
 
 - `queue_worker.py` — `QueueWorker`: polls SQLite queue, claims atomically,
-  dispatches by `QueueItemType`, retries with linear backoff up to
-  `max_attempts`, then marks failed. Safe to restart at any time.
+  dispatches by `QueueItemType` (`vpn_test`, `approval_request`,
+  `scheduled_publish`), retries with linear backoff up to `max_attempts`,
+  then marks failed. Safe to restart at any time. `scheduled_publish` items
+  become due at the per-channel paced slot computed by
+  `ApprovalService.schedule_publish` (at least `post_interval_minutes`
+  between posts of one channel).
 - `scheduler.py` — APScheduler cron jobs: USD price at configured times
   (default 09:00 and 21:00 Asia/Tehran) and daily cleanup.
 - `collector.py` — Telethon-based listener on source channels; stores
@@ -137,9 +149,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
   startup it also scans messages from the first post of the current
   Gregorian day in `scheduler.timezone` for each source so restarts and
   missed live events still enter the normal dedup/classify/store pipeline.
-  It reloads `telegram.source_channels` every
-  `telegram.source_refresh_seconds` seconds so newly added sources are picked
-  up without a restart and backfilled from today's first message. Albums are
+  It reloads the source channel list from SQLite every
+  `telegram.source_refresh_seconds` seconds so sources added or removed via
+  the management bot are picked up without a restart; new ones are
+  backfilled from today's first message. Albums are
   collected as one post. Runs as its own process
   (`python -m src.workers.collector`) or inside the all-in-one entrypoint.
   Note: only the first media file of a post is republished currently.
@@ -172,6 +185,11 @@ scan is capped by `telegram.collector_daily_backfill_max_messages`, and
 runtime source reloads by `telegram.source_refresh_seconds`. Destination
 `public_id` values are used to replace configured source-channel mentions
 before publishing to each selected destination.
+
+Channel lists in the config file are **seed-only**: `sync_config_to_sqlite`
+inserts missing rows but never overwrites existing ones, so channels and
+per-channel settings (`post_interval_minutes`, `public_id`, ...) edited via
+the management bot survive restarts. Admin ids stay config-authoritative.
 
 ## Telegram Bots
 
@@ -257,6 +275,14 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-02 (later) — Added scheduled publishing: delivery-mode toggle on
+approval messages (scheduled queue by default, immediate on demand),
+per-channel pacing via `post_interval_minutes` and the `scheduled_publish`
+queue type, and full channel management in the main bot (`/addsource`,
+`/delsource`, `/adddest`, `/deldest`, `/setdest`, `/setinterval`). Channel
+config became seed-only; SQLite is the runtime source of truth and the
+collector reloads sources from SQLite.
 
 2026-07-02 — Added video/document media collection, approval previews, and
 publishing, plus readable source-channel labels in approval previews.
