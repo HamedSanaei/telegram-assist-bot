@@ -46,6 +46,7 @@ class TelegramConfig:
     destination_channels: list[DestinationChannelConfig] = field(default_factory=list)
     admin_user_ids: list[int] = field(default_factory=list)
     collector_session: str = "data/collector"
+    collector_startup_backfill_limit: int = 10
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,9 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 destination_channels=_parse_destinations(list(tg.get("destination_channels", []))),
                 admin_user_ids=[int(x) for x in tg.get("admin_user_ids", [])],
                 collector_session=str(tg.get("collector_session", "data/collector")),
+                collector_startup_backfill_limit=int(
+                    tg.get("collector_startup_backfill_limit", 10)
+                ),
             ),
             ai=AiConfig(
                 primary_provider=str(ai.get("primary_provider", "zai")),
@@ -309,6 +313,8 @@ def validate_collector_config(config: AppConfig) -> None:
     _require_non_empty(config.database.mongodb_connection_string, "database.mongodb_connection_string")
     if not config.telegram.source_channels:
         raise ConfigurationError("telegram.source_channels must not be empty")
+    if config.telegram.collector_startup_backfill_limit < 0:
+        raise ConfigurationError("telegram.collector_startup_backfill_limit must be >= 0")
 
 
 def validate_worker_config(config: AppConfig) -> None:

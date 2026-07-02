@@ -11,6 +11,7 @@ import asyncio
 from pathlib import Path
 
 from telethon import TelegramClient, events
+from telethon.utils import get_peer_id
 
 from src.application.collect_post import CollectedMessage, CollectPostUseCase
 from src.composition import (
@@ -61,12 +62,17 @@ class Collector:
         self._use_case = use_case
         self._media_dir = media_directory
 
-    async def run(self, sources: list[str | int]) -> None:
+    async def run(
+        self, sources: list[str | int], startup_backfill_limit: int = 10
+    ) -> None:
         """
         Start listening until the client disconnects.
 
         Args:
             sources: Source channel usernames or numeric chat ids.
+            startup_backfill_limit: Number of recent messages to scan per
+                source when the collector starts. Set to 0 to disable the
+                startup scan.
 
         Side effects:
             Downloads media files and writes posts/queue items.
@@ -75,7 +81,14 @@ class Collector:
         resolved = []
         for source in sources:
             try:
-                resolved.append(await self._client.get_entity(source))
+                entity = await self._client.get_entity(source)
+                resolved.append(entity)
+                logger.info(
+                    "Resolved source channel source=%r chat_id=%s title=%s",
+                    source,
+                    get_peer_id(entity),
+                    getattr(entity, "title", None) or getattr(entity, "username", ""),
+                )
             except Exception as exc:
                 logger.error("Cannot resolve source channel %r: %s", source, exc)
         if not resolved:
@@ -85,14 +98,49 @@ class Collector:
             self._on_new_message, events.NewMessage(chats=resolved)
         )
         logger.info("Collector listening on %d source channels", len(resolved))
+        await self._backfill_recent_messages(resolved, startup_backfill_limit)
         await self._client.run_until_disconnected()
 
     async def _on_new_message(self, event: events.NewMessage.Event) -> None:
         """Handle one incoming message; errors are logged, never raised."""
-        message = event.message
+        await self._process_message(event.chat_id, event.message, origin="live")
+
+    async def _backfill_recent_messages(
+        self, entities: list[object], limit_per_source: int
+    ) -> None:
+        """
+        Process recent messages from each source at startup.
+
+        Telethon's ``Got difference`` log lines mean the client synced state,
+        but they do not guarantee that this process saw those messages as
+        live events. This startup scan makes restarts and first runs
+        deterministic; exact duplicates are skipped by ``CollectPostUseCase``.
+        """
+        if limit_per_source <= 0:
+            logger.info("Collector startup backfill disabled")
+            return
+        for entity in entities:
+            chat_id = get_peer_id(entity)
+            messages = [
+                message
+                async for message in self._client.iter_messages(
+                    entity, limit=limit_per_source
+                )
+            ]
+            logger.info(
+                "Collector startup backfill source_chat=%s messages=%d",
+                chat_id,
+                len(messages),
+            )
+            for message in reversed(messages):
+                await self._process_message(chat_id, message, origin="backfill")
+
+    async def _process_message(self, chat_id: int, message: object, origin: str) -> None:
+        """Normalize one Telethon message and feed it into the use case."""
         logger.info(
-            "Received message chat=%s msg=%s text_len=%d has_photo=%s",
-            event.chat_id,
+            "Received %s message chat=%s msg=%s text_len=%d has_photo=%s",
+            origin,
+            chat_id,
             message.id,
             len(message.message or ""),
             message.photo is not None,
@@ -104,7 +152,7 @@ class Collector:
                 if path:
                     media.append(MediaItem(kind=MediaKind.PHOTO, file_path=str(path)))
             collected = CollectedMessage(
-                source_chat_id=event.chat_id,
+                source_chat_id=chat_id,
                 message_id=message.id,
                 text=message.message or "",
                 media=media,
@@ -114,14 +162,14 @@ class Collector:
             cause = exc.__cause__
             logger.error(
                 "Collection failed chat=%s msg=%s error=%s%s",
-                event.chat_id,
+                chat_id,
                 message.id,
                 exc,
                 f" (caused by: {cause})" if cause is not None else "",
             )
         except Exception:
             logger.exception(
-                "Unexpected collection error chat=%s msg=%s", event.chat_id, message.id
+                "Unexpected collection error chat=%s msg=%s", chat_id, message.id
             )
 
 
@@ -163,7 +211,10 @@ async def run(config: AppConfig | None = None) -> None:
     collector = Collector(client, use_case, Path(config.storage.media_directory))
     try:
         await client.start()
-        await collector.run(config.telegram.source_channels)
+        await collector.run(
+            config.telegram.source_channels,
+            startup_backfill_limit=config.telegram.collector_startup_backfill_limit,
+        )
     finally:
         await client.disconnect()
         mongo_client.close()

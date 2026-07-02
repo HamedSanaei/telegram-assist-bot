@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from src.shared.config import load_configuration, validate_main_app_config
+from src.shared.config import (
+    load_configuration,
+    validate_collector_config,
+    validate_main_app_config,
+)
 from src.shared.errors import ConfigurationError
 
 
@@ -58,6 +62,7 @@ class TestLoadConfiguration:
         config = load_configuration(_write(tmp_path, _valid_config()))
         assert config.telegram.bot_token == "123:abc"
         assert config.telegram.source_channels == ["@منبع_خبر"]
+        assert config.telegram.collector_startup_backfill_limit == 10
         assert config.telegram.destination_channels[0].title == "کانال خبری"
         assert config.telegram.destination_channels[0].publish_usd_price is True
         assert config.ai.primary_provider == "zai"
@@ -93,6 +98,7 @@ class TestLoadConfiguration:
         assert config.ai.primary_provider == "zai"
         assert config.ai.fallback_provider == "deepseek"
         assert config.usd_price.provider == "nobitex"
+        assert config.telegram.collector_startup_backfill_limit == 10
 
     def test_usd_price_provider_defaults_to_nobitex(self, tmp_path: Path) -> None:
         config = load_configuration(_write(tmp_path, _valid_config()))
@@ -119,3 +125,14 @@ class TestValidateMainAppConfig:
         config = load_configuration(_write(tmp_path, data))
         with pytest.raises(ConfigurationError):
             validate_main_app_config(config)
+
+
+class TestValidateCollectorConfig:
+    """Tests for collector-specific configuration validation."""
+
+    def test_negative_backfill_limit_rejected(self, tmp_path: Path) -> None:
+        data = _valid_config()
+        data["telegram"]["collector_startup_backfill_limit"] = -1
+        config = load_configuration(_write(tmp_path, data))
+        with pytest.raises(ConfigurationError):
+            validate_collector_config(config)

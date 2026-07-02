@@ -38,6 +38,7 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.approval_bot_token` | Approval assistant bot token |
 | `telegram.api_id` / `api_hash` | Telegram API credentials for the collector |
 | `telegram.collector_session` | Telethon session file path (default `data/collector`) |
+| `telegram.collector_startup_backfill_limit` | Number of recent messages scanned from each source when the collector starts (default `10`; set `0` to disable) |
 | `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from |
 | `telegram.destination_channels` | Objects: `chat_id`, `title`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`. `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. The main bot must be an admin of every destination channel. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
@@ -127,6 +128,12 @@ python -m src.workers.collector
 On first run Telethon asks for a phone number and login code and stores the
 session at `telegram.collector_session`. Run the first login interactively
 before enabling the systemd service.
+
+At startup the collector scans the most recent
+`telegram.collector_startup_backfill_limit` messages from each source before
+waiting for live updates. The normal exact-hash deduplication prevents
+restarts from storing the same post twice. Set the value to `0` only when
+you want a strict live-only listener.
 
 ### Running the Scheduler
 
@@ -286,7 +293,7 @@ the Telethon session file exists.
 
   | Log line | Meaning |
   | --- | --- |
-  | `Received message chat=... msg=...` | Collector got the message from Telegram |
+  | `Received live message chat=... msg=...` / `Received backfill message chat=... msg=...` | Collector got the message from Telegram |
   | `Duplicate check passed ... provider=...` | AI dedup done (skips log `Skipping ... duplicate` instead) |
   | `Classified ... category=... provider=...` | AI classification done (`irrelevant` posts stop here by design) |
   | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
@@ -294,6 +301,12 @@ the Telethon session file exists.
   | `Queue item done id=... type=approval_request` | Approval message sent to admins |
 
   Common causes when the chain stops early:
+  - Only `telethon.client.updates | Got difference ...` appears, with no
+    `Received live/backfill message ...` lines — Telethon only synchronized
+    account/channel state; the application did not receive a source-channel
+    message event. Confirm `telegram.source_channels` contains the exact
+    source channels you want, and keep `collector_startup_backfill_limit`
+    above `0` so recent source posts are scanned on startup.
   - `Collection failed ... (caused by: zai: HTTP error ...)` — both AI
     providers failed (empty/invalid API key, or z.ai/DeepSeek unreachable
     from your network). The post is intentionally not stored. Check the

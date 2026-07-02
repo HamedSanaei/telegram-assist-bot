@@ -1014,6 +1014,37 @@ The README must briefly explain:
 * Configuration
 * Testing
 * Deployment documentation link
+---
+
+## Commit Message Suggestion Rule
+
+After every prompt, instruction, or task given to Codex or Claude Code that results in code edits, file changes, documentation updates, configuration changes, tests, build changes, or any other meaningful repository modification, the assistant must provide a suggested Git commit message for the completed change.
+
+The suggested commit message must be:
+
+* Written in English.
+* Short, clear, and suitable for GitHub.
+* Specific to the actual change that was made.
+* Provided after the edit summary, so the user can copy it directly.
+
+Recommended format:
+
+```text
+Suggested commit message: Add approval workflow persistence
+```
+
+For larger changes, use a conventional commit style when helpful:
+
+```text
+feat: add Telegram approval workflow
+fix: prevent Persian text mojibake
+docs: update running guide for VPN worker
+test: add unit tests for AI provider fallback
+build: regenerate publish outputs
+```
+
+The assistant must not invent a commit message before understanding the actual completed change.
+
 
 ---
 
@@ -1038,3 +1069,4 @@ A task is not complete until all of the following are true:
 15. The code remains easy to extend.
 16. The publish outputs are regenerated with `python scripts/build_publish.py`
     (Windows executables and the Ubuntu bundle in `publish/`).
+17. A suggested English Git commit message is provided after every completed Codex or Claude Code edit.

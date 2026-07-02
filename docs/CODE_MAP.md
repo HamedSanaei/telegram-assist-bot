@@ -125,10 +125,13 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `scheduler.py` — APScheduler cron jobs: USD price at configured times
   (default 09:00 and 21:00 Asia/Tehran) and daily cleanup.
 - `collector.py` — Telethon-based listener on source channels; downloads
-  photos to `storage.media_directory` and feeds `CollectPostUseCase`.
-  Runs as its own process (`python -m src.workers.collector`) or inside the
-  all-in-one entrypoint. Note: albums are processed per-message; only the
-  first photo of a post is republished currently.
+  photos to `storage.media_directory` and feeds `CollectPostUseCase`. On
+  startup it also scans the latest
+  `telegram.collector_startup_backfill_limit` messages from each source so
+  restarts and missed live events still enter the normal dedup/classify/store
+  pipeline. Runs as its own process (`python -m src.workers.collector`) or
+  inside the all-in-one entrypoint. Note: albums are processed per-message;
+  only the first photo of a post is republished currently.
 - `src/run_all.py` — all-in-one entrypoint (`python -m src.run_all`): runs
   `src.main.run` and the collector concurrently in one event loop, each
   under `supervise()` which restarts a crashed component after a delay and
@@ -152,7 +155,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
 `configuration.example.json`). Loaded by `src/shared/config.py` into frozen
 dataclasses. Per-entrypoint validators: `validate_main_app_config`,
 `validate_collector_config`, `validate_worker_config`. Path override via the
-`TELEGRAM_ADMIN_BOT_CONFIG` environment variable.
+`TELEGRAM_ADMIN_BOT_CONFIG` environment variable. Collector startup history
+scan depth is configured by `telegram.collector_startup_backfill_limit`.
 
 ## Telegram Bots
 
@@ -238,7 +242,9 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 
 ## Last Updated
 
-2026-07-02 — Added pipeline observability (startup config summary,
+2026-07-02 — Added collector startup backfill
+(`telegram.collector_startup_backfill_limit`) so recent source messages are
+processed on startup, plus pipeline observability (startup config summary,
 per-stage collection logs, approval-bot `/start` handler, error-chain
 logging) and the Nobitex USD price source (`usd_price.provider`,
 `create_price_source()` factory). 2026-07-01: all-in-one entrypoint

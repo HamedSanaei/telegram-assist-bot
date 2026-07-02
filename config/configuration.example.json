@@ -5,6 +5,7 @@
     "api_id": "",
     "api_hash": "",
     "collector_session": "data/collector",
+    "collector_startup_backfill_limit": 10,
     "source_channels": ["@example_source_channel"],
     "destination_channels": [
       {
