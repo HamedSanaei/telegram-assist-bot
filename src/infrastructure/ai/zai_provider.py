@@ -20,16 +20,16 @@ class ZaiProvider(OpenAiCompatibleProvider):
         self,
         api_key: str,
         base_url: str = DEFAULT_ZAI_BASE_URL,
-        classification_model: str = "",
-        deduplication_model: str = "",
+        model: str = "",
         timeout_seconds: int = 30,
     ) -> None:
         """
         Args:
             api_key: z.ai API key.
             base_url: API base URL (override for proxies or region endpoints).
-            classification_model: Optional model override; defaults to glm-4.6.
-            deduplication_model: Optional model override; defaults to glm-4.6.
+            model: Optional z.ai model override (``ai.zai_model``);
+                defaults to glm-4.6. Must be a model that exists on z.ai —
+                model names of other providers are not valid here.
             timeout_seconds: HTTP timeout for every request.
         """
         super().__init__(
@@ -37,7 +37,7 @@ class ZaiProvider(OpenAiCompatibleProvider):
             api_key=api_key,
             base_url=base_url,
             default_model=_DEFAULT_MODEL,
-            classification_model=classification_model,
-            deduplication_model=deduplication_model,
+            classification_model=model,
+            deduplication_model=model,
             timeout_seconds=timeout_seconds,
         )

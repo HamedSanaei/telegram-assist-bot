@@ -20,16 +20,16 @@ class DeepSeekProvider(OpenAiCompatibleProvider):
         self,
         api_key: str,
         base_url: str = DEFAULT_DEEPSEEK_BASE_URL,
-        classification_model: str = "",
-        deduplication_model: str = "",
+        model: str = "",
         timeout_seconds: int = 30,
     ) -> None:
         """
         Args:
             api_key: DeepSeek API key.
             base_url: API base URL.
-            classification_model: Optional model override; defaults to deepseek-chat.
-            deduplication_model: Optional model override; defaults to deepseek-chat.
+            model: Optional DeepSeek model override (``ai.deepseek_model``);
+                defaults to deepseek-chat. Must be a model that exists on
+                DeepSeek — model names of other providers are not valid here.
             timeout_seconds: HTTP timeout for every request.
         """
         super().__init__(
@@ -37,7 +37,7 @@ class DeepSeekProvider(OpenAiCompatibleProvider):
             api_key=api_key,
             base_url=base_url,
             default_model=_DEFAULT_MODEL,
-            classification_model=classification_model,
-            deduplication_model=deduplication_model,
+            classification_model=model,
+            deduplication_model=model,
             timeout_seconds=timeout_seconds,
         )

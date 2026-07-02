@@ -149,7 +149,7 @@ class ApprovalService:
             raise ApprovalStateError(
                 f"Post {post_id} already published to channel {chat_id}"
             )
-        publish_post = self._post_for_destination(post, channel)
+        publish_post = await self._post_for_destination(post, channel)
         message_id = await self._publisher.publish_post(chat_id, publish_post)
         await self._publish_log.record_published(post_id, chat_id, message_id)
         logger.info(
@@ -248,9 +248,15 @@ class ApprovalService:
             raise ApprovalStateError(f"Post {post_id} not found (possibly expired)")
         return post
 
-    def _post_for_destination(self, post: Post, channel: DestinationChannel) -> Post:
+    async def _post_for_destination(
+        self, post: Post, channel: DestinationChannel
+    ) -> Post:
         """
         Return a publish copy with source-channel mentions rewritten.
+
+        Mentions of both the configured source identifiers and the
+        resolved public usernames of all enabled source channels (stored
+        by the collector) are replaced with the destination's public id.
 
         Args:
             post: Stored original post.
@@ -258,12 +264,32 @@ class ApprovalService:
 
         Returns:
             A shallow copy of the post with text adjusted for the destination.
+
+        Side effects:
+            Logs a warning when the destination has no ``public_id``,
+            because mentions cannot be rewritten without one.
         """
+        if not channel.public_id.strip():
+            logger.warning(
+                "Destination channel=%s has no public_id; source mentions in "
+                "post=%s are NOT rewritten. Set it via: /setdest %s public_id @channel",
+                channel.chat_id,
+                post.post_id,
+                channel.chat_id,
+            )
+            return post
+        identifiers: list[str | int] = list(self._source_identifiers)
+        identifiers.extend(
+            f"@{username}" for username in await self._channels.list_source_usernames()
+        )
         rewritten_text = rewrite_source_channel_mentions(
             post.text,
-            self._source_identifiers,
+            identifiers,
             channel.public_id,
         )
         if rewritten_text == post.text:
             return post
+        logger.info(
+            "Rewrote source mentions post=%s channel=%s", post.post_id, channel.chat_id
+        )
         return replace(post, text=rewritten_text)

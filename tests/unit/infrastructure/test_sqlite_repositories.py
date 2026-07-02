@@ -181,6 +181,28 @@ class TestChannelRepository:
         assert channel.title == "عنوان ربات"
         assert channel.post_interval_minutes == 10
 
+    async def test_seed_destination_backfills_empty_public_id(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_destination(
+            DestinationChannel(chat_id=-100, title="خبر", public_id="")
+        )
+        await repo.seed_destination(
+            DestinationChannel(chat_id=-100, title="ignored", public_id="@dest")
+        )
+        assert (await repo.get_destination(-100)).public_id == "@dest"
+        await repo.seed_destination(
+            DestinationChannel(chat_id=-100, title="ignored", public_id="@other")
+        )
+        assert (await repo.get_destination(-100)).public_id == "@dest"
+
+    async def test_list_source_usernames(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_source_details(
+            identifier="@alonews", chat_id=-1, title="الو", username="alonews"
+        )
+        await repo.upsert_source("-100999")
+        assert await repo.list_source_usernames() == ["alonews"]
+
     async def test_seed_source_keeps_disabled_rows_disabled(self, db: Database) -> None:
         repo = SqliteChannelRepository(db)
         await repo.upsert_source("@source_channel")

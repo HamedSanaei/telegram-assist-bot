@@ -43,7 +43,7 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from (initial seed; manage at runtime with the management bot) |
 | `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`, `post_interval_minutes` (minimum minutes between scheduled posts on that channel, default `30`). `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The main bot must be an admin of every destination channel. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
-| `ai.*` | Provider keys, optional base URL / model overrides, timeouts |
+| `ai.*` | Provider keys, optional base URL overrides, timeouts. Model overrides are **per provider**: `ai.zai_model` (default `glm-4.6`) and `ai.deepseek_model` (default `deepseek-chat`). The old shared `classification_model`/`deduplication_model` keys are deprecated and ignored — a single model name cannot be valid on both APIs. |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
 | `database.mongodb_connection_string` | e.g. `mongodb://localhost:27017` |
 | `storage.media_directory` | Downloaded media location |
@@ -393,6 +393,20 @@ the Telethon session file exists.
   system falls back to DeepSeek automatically, so both failing means both
   keys/endpoints are broken. Timeouts are configurable via
   `ai.request_timeout_seconds`.
+- **AI calls fail with `HTTP 400` on both providers** — the log line now
+  includes the model name and the API's own error body (e.g.
+  `Model Not Exist`). The usual cause is a model override that belongs to
+  the other provider: model names must be set per provider via
+  `ai.zai_model` / `ai.deepseek_model`. Leave both empty to use the safe
+  defaults (`glm-4.6`, `deepseek-chat`). The deprecated shared
+  `classification_model`/`deduplication_model` keys are ignored and logged
+  with a warning.
+- **Published posts still contain the source channel's @username** — the
+  destination channel needs a `public_id`; without it mentions cannot be
+  rewritten (a warning is logged at publish time). Set it with
+  `/setdest <chat_id> public_id @your_channel` in the management bot. The
+  rewriter replaces mentions/links of all configured source identifiers
+  plus the usernames the collector resolved for the source channels.
 - **USD price job fails with `PriceFetchError: Nobitex request failed`** —
   `apiv2.nobitex.ir` is unreachable from the server (DNS/filtering). Either
   fix connectivity or switch to `usd_price.provider: "http_json"` with a

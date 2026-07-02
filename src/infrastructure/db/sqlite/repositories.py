@@ -77,7 +77,10 @@ class SqliteChannelRepository:
 
         Used by the configuration sync at startup so channel settings
         changed through the management bot are never overwritten by
-        ``configuration.json`` values.
+        ``configuration.json`` values. One exception: an existing row with
+        an EMPTY ``public_id`` is backfilled from the config value, so
+        adding ``public_id`` to the config after the first start works
+        without wiping the database.
         """
         await self._db.execute(
             """
@@ -96,6 +99,12 @@ class SqliteChannelRepository:
                 channel.post_interval_minutes,
             ),
         )
+        if channel.public_id:
+            await self._db.execute(
+                "UPDATE destination_channels SET public_id = ? "
+                "WHERE chat_id = ? AND public_id = ''",
+                (channel.public_id, channel.chat_id),
+            )
 
     async def get_destination(self, chat_id: int) -> DestinationChannel | None:
         """Return one destination channel regardless of enabled state."""
@@ -204,6 +213,13 @@ class SqliteChannelRepository:
             "SELECT identifier FROM source_channels WHERE enabled = 1 ORDER BY id"
         )
         return [row["identifier"] for row in rows]
+
+    async def list_source_usernames(self) -> list[str]:
+        """Return resolved public usernames of enabled source channels."""
+        rows = await self._db.fetchall(
+            "SELECT username FROM source_channels WHERE enabled = 1 AND username != ''"
+        )
+        return [row["username"] for row in rows]
 
     @staticmethod
     def _row_to_destination(row: object) -> DestinationChannel:

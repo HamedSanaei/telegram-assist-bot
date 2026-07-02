@@ -35,8 +35,8 @@
     "deepseek_api_key": "",
     "zai_base_url": "https://api.z.ai/api/paas/v4",
     "deepseek_base_url": "https://api.deepseek.com/v1",
-    "deduplication_model": "",
-    "classification_model": "",
+    "zai_model": "",
+    "deepseek_model": "",
     "request_timeout_seconds": 30,
     "recent_posts_compare_limit": 30
   },

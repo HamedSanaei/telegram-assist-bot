@@ -75,24 +75,32 @@ def _build_provider(name: str, config: AppConfig) -> ZaiProvider | DeepSeekProvi
     """
     Build one AI provider by configured name.
 
+    Model overrides are per provider (``ai.zai_model``, ``ai.deepseek_model``)
+    so a model name is never sent to an API that does not know it. The
+    legacy shared keys are ignored with a warning.
+
     Raises:
         ConfigurationError: When the provider name is unknown.
     """
     ai = config.ai
+    if ai.classification_model or ai.deduplication_model:
+        logger.warning(
+            "ai.classification_model/ai.deduplication_model are deprecated and "
+            "IGNORED (a shared model name breaks the other provider). Use "
+            "ai.zai_model and ai.deepseek_model instead."
+        )
     if name == "zai":
         return ZaiProvider(
             api_key=ai.zai_api_key,
             base_url=ai.zai_base_url,
-            classification_model=ai.classification_model,
-            deduplication_model=ai.deduplication_model,
+            model=ai.zai_model,
             timeout_seconds=ai.request_timeout_seconds,
         )
     if name == "deepseek":
         return DeepSeekProvider(
             api_key=ai.deepseek_api_key,
             base_url=ai.deepseek_base_url,
-            classification_model=ai.classification_model,
-            deduplication_model=ai.deduplication_model,
+            model=ai.deepseek_model,
             timeout_seconds=ai.request_timeout_seconds,
         )
     raise ConfigurationError(f"Unknown AI provider: '{name}'")

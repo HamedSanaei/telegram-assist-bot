@@ -209,6 +209,10 @@ class ChannelRepository(Protocol):
         """Return all enabled source channel identifiers."""
         ...
 
+    async def list_source_usernames(self) -> list[str]:
+        """Return resolved public usernames of enabled source channels."""
+        ...
+
     async def disable_source(self, identifier: str) -> bool:
         """Disable a source channel; return whether a row was affected."""
         ...

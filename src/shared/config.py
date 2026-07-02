@@ -54,7 +54,14 @@ class TelegramConfig:
 
 @dataclass(frozen=True)
 class AiConfig:
-    """AI provider selection, credentials, and model overrides."""
+    """
+    AI provider selection, credentials, and model overrides.
+
+    Model overrides are per provider (``zai_model``, ``deepseek_model``)
+    because each API only accepts its own model names. The legacy shared
+    keys ``deduplication_model``/``classification_model`` are deprecated
+    and ignored: a single shared name cannot be valid on both providers.
+    """
 
     primary_provider: str = "zai"
     fallback_provider: str = "deepseek"
@@ -62,6 +69,8 @@ class AiConfig:
     deepseek_api_key: str = ""
     zai_base_url: str = DEFAULT_ZAI_BASE_URL
     deepseek_base_url: str = DEFAULT_DEEPSEEK_BASE_URL
+    zai_model: str = ""
+    deepseek_model: str = ""
     deduplication_model: str = ""
     classification_model: str = ""
     request_timeout_seconds: int = 30
@@ -240,6 +249,8 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 deepseek_api_key=str(ai.get("deepseek_api_key", "")),
                 zai_base_url=str(ai.get("zai_base_url", DEFAULT_ZAI_BASE_URL)),
                 deepseek_base_url=str(ai.get("deepseek_base_url", DEFAULT_DEEPSEEK_BASE_URL)),
+                zai_model=str(ai.get("zai_model", "")),
+                deepseek_model=str(ai.get("deepseek_model", "")),
                 deduplication_model=str(ai.get("deduplication_model", "")),
                 classification_model=str(ai.get("classification_model", "")),
                 request_timeout_seconds=int(ai.get("request_timeout_seconds", 30)),
@@ -373,7 +384,7 @@ def log_startup_summary(config: AppConfig) -> None:
         "Effective configuration:\n"
         "  sources=%d destinations=%d admins=%d\n"
         "  ai: primary=%s (key %s) fallback=%s (key %s) "
-        "classification_model=%s deduplication_model=%s\n"
+        "zai_model=%s deepseek_model=%s\n"
         "  telegram: bot_token %s, approval_bot_token %s, api_id %s\n"
         "  collector: daily_backfill_max_messages=%d source_refresh_seconds=%d timezone=%s\n"
         "  mongodb: host=%s db=%s | sqlite: %s\n"
@@ -386,8 +397,8 @@ def log_startup_summary(config: AppConfig) -> None:
         set_or_not(ai.zai_api_key if ai.primary_provider == "zai" else ai.deepseek_api_key),
         ai.fallback_provider or "(none)",
         set_or_not(ai.deepseek_api_key if ai.fallback_provider == "deepseek" else ai.zai_api_key),
-        ai.classification_model or "(provider default)",
-        ai.deduplication_model or "(provider default)",
+        ai.zai_model or "(default glm-4.6)",
+        ai.deepseek_model or "(default deepseek-chat)",
         set_or_not(config.telegram.bot_token),
         set_or_not(config.telegram.approval_bot_token),
         set_or_not(config.telegram.api_id),

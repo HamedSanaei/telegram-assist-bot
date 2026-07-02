@@ -97,8 +97,11 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `db/mongo/post_repository.py` — `MongoPostRepository` (Motor); TTL index
   on `expires_at`, lookup index on `content_hash`.
 - `ai/openai_compatible.py` — shared chat-completions client with strict
-  JSON prompts; `ai/zai_provider.py` (default model glm-4.6) and
-  `ai/deepseek_provider.py` (default model deepseek-chat).
+  JSON prompts; HTTP error messages include the model name and the API's
+  error body. `ai/zai_provider.py` (default model glm-4.6, override
+  `ai.zai_model`) and `ai/deepseek_provider.py` (default model
+  deepseek-chat, override `ai.deepseek_model`). Model overrides are per
+  provider; the legacy shared model keys are ignored with a warning.
 - `telegram/publisher.py` — `AiogramMessagePublisher` (text, or first
   photo/video/document with caption; long text sent as a follow-up message).
 - `vpn/worker_client.py` — `IranWorkerVpnTester`: HTTP client for the Iran
@@ -282,7 +285,12 @@ per-channel pacing via `post_interval_minutes` and the `scheduled_publish`
 queue type, and full channel management in the main bot (`/addsource`,
 `/delsource`, `/adddest`, `/deldest`, `/setdest`, `/setinterval`). Channel
 config became seed-only; SQLite is the runtime source of truth and the
-collector reloads sources from SQLite.
+collector reloads sources from SQLite. Fixed AI 400 errors: model
+overrides are per provider (`ai.zai_model`/`ai.deepseek_model`, shared
+keys deprecated) and HTTP errors now log the API's response body. Mention
+rewriting also covers collector-resolved source usernames, warns when a
+destination lacks `public_id`, and seeding backfills an empty `public_id`
+from config.
 
 2026-07-02 — Added video/document media collection, approval previews, and
 publishing, plus readable source-channel labels in approval previews.

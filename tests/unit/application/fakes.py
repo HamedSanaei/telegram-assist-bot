@@ -174,8 +174,13 @@ class FakeQueueRepository:
 class FakeChannelRepository:
     """Static channel repository."""
 
-    def __init__(self, destinations: list[DestinationChannel] | None = None) -> None:
+    def __init__(
+        self,
+        destinations: list[DestinationChannel] | None = None,
+        source_usernames: list[str] | None = None,
+    ) -> None:
         self.destinations = destinations or []
+        self.source_usernames = source_usernames or []
 
     async def upsert_destination(self, channel: DestinationChannel) -> None:
         self.destinations = [
@@ -209,6 +214,9 @@ class FakeChannelRepository:
 
     async def list_sources(self) -> list[str]:
         return []
+
+    async def list_source_usernames(self) -> list[str]:
+        return list(self.source_usernames)
 
     async def disable_source(self, identifier: str) -> bool:
         return False

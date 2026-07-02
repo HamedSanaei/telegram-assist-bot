@@ -68,6 +68,7 @@ class OpenAiCompatibleProvider:
         classification_model: str = "",
         deduplication_model: str = "",
         timeout_seconds: int = 30,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """
         Args:
@@ -78,6 +79,8 @@ class OpenAiCompatibleProvider:
             classification_model: Optional model override for classification.
             deduplication_model: Optional model override for duplicate checks.
             timeout_seconds: HTTP timeout for every request.
+            transport: Optional httpx transport, used by unit tests to
+                mock the API without real network access.
         """
         self.name = name
         self._api_key = api_key
@@ -85,6 +88,7 @@ class OpenAiCompatibleProvider:
         self._classification_model = classification_model or default_model
         self._deduplication_model = deduplication_model or default_model
         self._timeout = timeout_seconds
+        self._transport = transport
 
     async def classify_post(self, text: str) -> AiClassificationResult:
         """
@@ -168,7 +172,9 @@ class OpenAiCompatibleProvider:
         payload = {"model": model, "messages": messages, "temperature": 0}
         headers = {"Authorization": f"Bearer {self._api_key}"}
         last_http_error: httpx.HTTPError | None = None
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout, transport=self._transport
+        ) as client:
             for attempt in range(1, _MAX_HTTP_ATTEMPTS + 1):
                 try:
                     response = await client.post(url, json=payload, headers=headers)
@@ -178,9 +184,13 @@ class OpenAiCompatibleProvider:
                 except httpx.HTTPStatusError as exc:
                     last_http_error = exc
                     if exc.response.status_code not in {429, 500, 502, 503, 504}:
-                        raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
+                        raise AiProviderError(
+                            self._status_error_message(model, exc)
+                        ) from exc
                     if attempt == _MAX_HTTP_ATTEMPTS:
-                        raise AiProviderError(f"{self.name}: HTTP error: {exc}") from exc
+                        raise AiProviderError(
+                            self._status_error_message(model, exc)
+                        ) from exc
                     delay = self._retry_delay_seconds(exc.response, attempt)
                     logger.warning(
                         "AI provider=%s status=%s retrying attempt=%d delay=%ss",
@@ -210,6 +220,26 @@ class OpenAiCompatibleProvider:
             return body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise AiProviderError(f"{self.name}: unexpected response shape") from exc
+
+    def _status_error_message(self, model: str, exc: httpx.HTTPStatusError) -> str:
+        """
+        Build a diagnostic message for an HTTP error response.
+
+        Includes the model name and the API's own error body so the root
+        cause (wrong model name, invalid key, quota) is visible in logs.
+
+        Args:
+            model: Model name sent in the failing request.
+            exc: The raised status error.
+
+        Returns:
+            A single-line error message safe for logging (no secrets).
+        """
+        detail = exc.response.text[:300].replace("\n", " ").strip()
+        return (
+            f"{self.name}: HTTP {exc.response.status_code} for model "
+            f"'{model}': {detail}"
+        )
 
     @staticmethod
     def _retry_delay_seconds(response: httpx.Response, attempt: int) -> int:

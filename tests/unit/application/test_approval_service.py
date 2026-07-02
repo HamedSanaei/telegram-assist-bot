@@ -28,6 +28,8 @@ NEWS_INTERVAL_MINUTES = 30
 
 def _make_service(
     publisher: FakePublisher | None = None,
+    source_usernames: list[str] | None = None,
+    news_public_id: str = "@news_dest",
 ) -> tuple[ApprovalService, FakePostRepository, FakePublishLogRepository, FakePublisher]:
     """Build the approval service with fakes and one stored post."""
     posts = FakePostRepository()
@@ -37,7 +39,7 @@ def _make_service(
             DestinationChannel(
                 chat_id=NEWS_CHANNEL,
                 title="News",
-                public_id="@news_dest",
+                public_id=news_public_id,
                 kind=ChannelKind.NEWS,
                 post_interval_minutes=NEWS_INTERVAL_MINUTES,
             ),
@@ -47,7 +49,8 @@ def _make_service(
                 public_id="@vpn_dest",
                 kind=ChannelKind.VPN,
             ),
-        ]
+        ],
+        source_usernames=source_usernames,
     )
     admins = FakeAdminRepository({ADMIN_ID})
     pub = publisher or FakePublisher()
@@ -132,6 +135,28 @@ class TestApprovalService:
         assert publisher.post_texts == [
             (NEWS_CHANNEL, "متن از @news_dest و @news_dest")
         ]
+
+    async def test_publish_rewrites_resolved_source_usernames(self) -> None:
+        """Usernames resolved by the collector are rewritten too."""
+        service, posts, _, publisher = _make_service(source_usernames=["alonews"])
+        await posts.save(_post())
+        stored = await posts.get("p1")
+        stored.text = "عضو شوید: @AloNews و t.me/alonews/55"
+        await service.publish("p1", NEWS_CHANNEL, ADMIN_ID)
+        assert publisher.post_texts == [
+            (NEWS_CHANNEL, "عضو شوید: @news_dest و @news_dest")
+        ]
+
+    async def test_publish_without_public_id_keeps_text(self) -> None:
+        """Without a destination public_id the text stays untouched."""
+        service, posts, _, publisher = _make_service(
+            source_usernames=["alonews"], news_public_id=""
+        )
+        await posts.save(_post())
+        stored = await posts.get("p1")
+        stored.text = "متن با @alonews"
+        await service.publish("p1", NEWS_CHANNEL, ADMIN_ID)
+        assert publisher.post_texts == [(NEWS_CHANNEL, "متن با @alonews")]
 
 
 class TestSchedulePublish:
