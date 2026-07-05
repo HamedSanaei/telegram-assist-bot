@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 from src.infrastructure.db.sqlite.connection import Database
@@ -102,6 +103,55 @@ MIGRATIONS: list[tuple[int, str]] = [
             ADD COLUMN post_interval_minutes INTEGER NOT NULL DEFAULT 30;
         """,
     ),
+    (
+        5,
+        """
+        CREATE TABLE IF NOT EXISTS approval_requests (
+            post_id TEXT PRIMARY KEY,
+            requested_at TEXT NOT NULL
+        );
+        """,
+    ),
+    (
+        6,
+        """
+        ALTER TABLE publish_log
+            ADD COLUMN status TEXT NOT NULL DEFAULT 'published';
+
+        ALTER TABLE publish_log
+            ADD COLUMN mode TEXT NOT NULL DEFAULT 'immediate';
+        """,
+    ),
+    (
+        7,
+        """
+        CREATE TABLE IF NOT EXISTS approval_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id TEXT NOT NULL,
+            admin_user_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            delivery_mode TEXT NOT NULL DEFAULT 's',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (post_id, admin_user_id, message_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_approval_messages_post_active
+            ON approval_messages (post_id, active);
+        """,
+    ),
+    (
+        8,
+        """
+        ALTER TABLE publish_log
+            ADD COLUMN scheduled_at TEXT;
+
+        ALTER TABLE publish_log
+            ADD COLUMN removed_at TEXT;
+        """,
+    ),
 ]
 
 
@@ -129,17 +179,133 @@ async def apply_migrations(db: Database) -> int:
         );
         """
     )
-    row = await db.fetchone("SELECT MAX(version) AS v FROM schema_migrations")
-    current = row["v"] if row and row["v"] is not None else 0
-
     applied = 0
-    for version, script in MIGRATIONS:
-        if version <= current:
+    for version, _script in MIGRATIONS:
+        if await _migration_applied(db, version):
             continue
-        await db.executescript(script)
-        await db.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (version, datetime.now(timezone.utc).isoformat()),
-        )
-        applied += 1
+        await _apply_migration(db, version)
+        if await _mark_migration_applied(db, version):
+            applied += 1
     return applied
+
+
+async def _migration_applied(db: Database, version: int) -> bool:
+    """Return whether a migration version is recorded as applied."""
+    row = await db.fetchone(
+        "SELECT 1 FROM schema_migrations WHERE version = ?", (version,)
+    )
+    return row is not None
+
+
+async def _mark_migration_applied(db: Database, version: int) -> bool:
+    """Record one migration version; return whether this call inserted it."""
+    cursor = await db.connection.execute(
+        """
+        INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+        VALUES (?, ?)
+        """,
+        (version, datetime.now(timezone.utc).isoformat()),
+    )
+    await db.connection.commit()
+    return cursor.rowcount == 1
+
+
+async def _apply_migration(db: Database, version: int) -> None:
+    """Apply one migration version using idempotent DDL operations."""
+    if version == 1:
+        await db.executescript(MIGRATIONS[0][1])
+        return
+    if version == 2:
+        await _ensure_column(
+            db,
+            "destination_channels",
+            "public_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        return
+    if version == 3:
+        await _ensure_column(db, "source_channels", "chat_id", "INTEGER")
+        await _ensure_column(
+            db,
+            "source_channels",
+            "title",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        await _ensure_column(
+            db,
+            "source_channels",
+            "username",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_source_channels_chat_id
+                ON source_channels (chat_id)
+            """
+        )
+        return
+    if version == 4:
+        await _ensure_column(
+            db,
+            "destination_channels",
+            "post_interval_minutes",
+            "INTEGER NOT NULL DEFAULT 30",
+        )
+        return
+    if version == 5:
+        await db.executescript(MIGRATIONS[4][1])
+        return
+    if version == 6:
+        await _ensure_column(
+            db,
+            "publish_log",
+            "status",
+            "TEXT NOT NULL DEFAULT 'published'",
+        )
+        await _ensure_column(
+            db,
+            "publish_log",
+            "mode",
+            "TEXT NOT NULL DEFAULT 'immediate'",
+        )
+        return
+    if version == 7:
+        await db.executescript(MIGRATIONS[6][1])
+        return
+    if version == 8:
+        await _ensure_column(db, "publish_log", "scheduled_at", "TEXT")
+        await _ensure_column(db, "publish_log", "removed_at", "TEXT")
+        return
+    raise ValueError(f"Unknown migration version: {version}")
+
+
+async def _ensure_column(
+    db: Database, table_name: str, column_name: str, column_definition: str
+) -> None:
+    """
+    Add a SQLite column if it does not already exist.
+
+    SQLite versions used in production do not reliably support
+    ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``. This helper makes ALTER
+    migrations restart-safe and safe enough for ``src.run_all`` where the
+    main app and collector can race while opening the same database.
+    """
+    if await _column_exists(db, table_name, column_name):
+        return
+    try:
+        await db.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+        )
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if "duplicate column name" in message and await _column_exists(
+            db, table_name, column_name
+        ):
+            return
+        raise
+
+
+async def _column_exists(db: Database, table_name: str, column_name: str) -> bool:
+    """Return whether a table contains a column."""
+    rows = await db.fetchall(f"PRAGMA table_info({table_name})")
+    return any(row["name"] == column_name for row in rows)

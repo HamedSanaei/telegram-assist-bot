@@ -6,16 +6,38 @@ MongoDB removes them automatically after the retention window.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from src.domain.entities import MediaItem, Post, VpnConfig
+from src.domain.entities import (
+    MediaItem,
+    Post,
+    PostQualityScore,
+    PostSourceMetrics,
+    TextEntity,
+    VpnConfig,
+)
 from src.domain.enums import MediaKind, PostCategory, VpnProtocol, VpnTestStatus
 from src.shared.errors import RepositoryError
 
 _COLLECTION = "posts"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """
+    Return a timezone-aware UTC datetime from MongoDB values.
+
+    Motor/PyMongo may deserialize datetimes as offset-naive UTC values. The
+    domain treats timestamps as UTC-aware, so normalize them at the repository
+    boundary.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _config_to_doc(config: VpnConfig) -> dict[str, Any]:
@@ -50,6 +72,75 @@ def _doc_to_config(doc: dict[str, Any]) -> VpnConfig:
     )
 
 
+def _metrics_to_doc(metrics: PostSourceMetrics) -> dict[str, Any]:
+    """Serialize source metrics into a MongoDB sub-document."""
+    return {
+        "views": metrics.views,
+        "forwards": metrics.forwards,
+        "replies_count": metrics.replies_count,
+        "reactions_count": metrics.reactions_count,
+        "source_published_at": metrics.source_published_at,
+    }
+
+
+def _doc_to_metrics(doc: dict[str, Any] | None) -> PostSourceMetrics:
+    """Deserialize source metrics from a MongoDB sub-document."""
+    doc = doc or {}
+    return PostSourceMetrics(
+        views=doc.get("views"),
+        forwards=doc.get("forwards"),
+        replies_count=doc.get("replies_count"),
+        reactions_count=doc.get("reactions_count"),
+        source_published_at=_as_utc(doc.get("source_published_at")),
+    )
+
+
+def _quality_score_to_doc(score: PostQualityScore | None) -> dict[str, Any] | None:
+    """Serialize quality score into a MongoDB sub-document."""
+    if score is None:
+        return None
+    return {
+        "score": score.score,
+        "reason": score.reason,
+        "provider": score.provider,
+        "scored_at": score.scored_at,
+        "metrics": score.metrics,
+    }
+
+
+def _doc_to_quality_score(doc: dict[str, Any] | None) -> PostQualityScore | None:
+    """Deserialize quality score from a MongoDB sub-document."""
+    if not doc:
+        return None
+    return PostQualityScore(
+        score=float(doc.get("score", 0)),
+        reason=str(doc.get("reason", "")),
+        provider=str(doc.get("provider", "")),
+        scored_at=_as_utc(doc.get("scored_at")),
+        metrics=dict(doc.get("metrics", {})),
+    )
+
+
+def _entity_to_doc(entity: TextEntity) -> dict[str, Any]:
+    """Serialize a framework-neutral text entity into MongoDB."""
+    return {
+        "kind": entity.kind,
+        "offset": entity.offset,
+        "length": entity.length,
+        "data": dict(entity.data),
+    }
+
+
+def _doc_to_entity(doc: dict[str, Any]) -> TextEntity:
+    """Deserialize a MongoDB text-entity sub-document."""
+    return TextEntity(
+        kind=str(doc.get("kind", "")),
+        offset=int(doc.get("offset", 0)),
+        length=int(doc.get("length", 0)),
+        data=dict(doc.get("data", {})),
+    )
+
+
 class MongoPostRepository:
     """
     Stores collected posts as MongoDB documents keyed by ``post_id``.
@@ -73,11 +164,21 @@ class MongoPostRepository:
 
         Side effects:
             Creates a TTL index on ``expires_at`` (expire at the stored
-            date) and a lookup index on ``content_hash``.
+            date), unique source identity index, and lookup indexes for
+            content hash and recent-post scans.
         """
         await self._collection.create_index("expires_at", expireAfterSeconds=0)
         await self._collection.create_index("content_hash")
         await self._collection.create_index([("collected_at", -1)])
+        await self._collection.create_index(
+            [
+                ("source_chat_id", 1),
+                ("source_message_id", 1),
+                ("grouped_id", 1),
+            ],
+            unique=True,
+            name="uniq_source_message",
+        )
 
     async def save(self, post: Post) -> None:
         """Insert or replace the post document."""
@@ -85,7 +186,9 @@ class MongoPostRepository:
             "_id": post.post_id,
             "source_chat_id": post.source_chat_id,
             "source_message_id": post.source_message_id,
+            "grouped_id": post.grouped_id,
             "text": post.text,
+            "text_entities": [_entity_to_doc(entity) for entity in post.text_entities],
             "content_hash": post.content_hash,
             "media": [
                 {
@@ -98,6 +201,12 @@ class MongoPostRepository:
             ],
             "category": post.category.value if post.category else None,
             "ai_provider": post.ai_provider,
+            "is_duplicate": post.is_duplicate,
+            "duplicate_of": post.duplicate_of,
+            "duplicate_provider": post.duplicate_provider,
+            "skipped_reason": post.skipped_reason,
+            "source_metrics": _metrics_to_doc(post.source_metrics),
+            "quality_score": _quality_score_to_doc(post.quality_score),
             "vpn_configs": [_config_to_doc(c) for c in post.vpn_configs],
             "collected_at": post.collected_at,
             "expires_at": post.expires_at,
@@ -114,13 +223,46 @@ class MongoPostRepository:
 
     async def find_by_content_hash(self, content_hash: str) -> Post | None:
         """Return one stored post with the same content hash, if any."""
-        doc = await self._collection.find_one({"content_hash": content_hash})
+        primary_query = {
+            "content_hash": content_hash,
+            "is_duplicate": {"$ne": True},
+            "$or": [
+                {"skipped_reason": None},
+                {"skipped_reason": {"$exists": False}},
+            ],
+        }
+        doc = await self._collection.find_one(primary_query)
+        if doc is None:
+            doc = await self._collection.find_one({"content_hash": content_hash})
+        return self._doc_to_post(doc) if doc else None
+
+    async def find_by_source_message(
+        self, source_chat_id: int, source_message_id: int, grouped_id: int | None = None
+    ) -> Post | None:
+        """Return one stored post by source Telegram identity, if any."""
+        doc = await self._collection.find_one(
+            {
+                "source_chat_id": source_chat_id,
+                "source_message_id": source_message_id,
+                "grouped_id": grouped_id,
+            }
+        )
         return self._doc_to_post(doc) if doc else None
 
     async def list_recent_texts(self, limit: int) -> list[str]:
-        """Return texts of the most recently collected non-empty posts."""
+        """Return texts of recent non-skipped, non-duplicate posts."""
         cursor = (
-            self._collection.find({"text": {"$ne": ""}}, {"text": 1})
+            self._collection.find(
+                {
+                    "text": {"$ne": ""},
+                    "is_duplicate": {"$ne": True},
+                    "$or": [
+                        {"skipped_reason": None},
+                        {"skipped_reason": {"$exists": False}},
+                    ],
+                },
+                {"text": 1},
+            )
             .sort("collected_at", -1)
             .limit(limit)
         )
@@ -150,6 +292,10 @@ class MongoPostRepository:
             source_message_id=doc["source_message_id"],
             text=doc.get("text", ""),
             content_hash=doc.get("content_hash", ""),
+            text_entities=[
+                _doc_to_entity(entity) for entity in doc.get("text_entities", [])
+            ],
+            grouped_id=doc.get("grouped_id"),
             media=[
                 MediaItem(
                     kind=MediaKind(m["kind"]),
@@ -161,7 +307,13 @@ class MongoPostRepository:
             ],
             category=PostCategory(doc["category"]) if doc.get("category") else None,
             ai_provider=doc.get("ai_provider"),
+            is_duplicate=bool(doc.get("is_duplicate", False)),
+            duplicate_of=doc.get("duplicate_of"),
+            duplicate_provider=doc.get("duplicate_provider"),
+            skipped_reason=doc.get("skipped_reason"),
+            source_metrics=_doc_to_metrics(doc.get("source_metrics")),
+            quality_score=_doc_to_quality_score(doc.get("quality_score")),
             vpn_configs=[_doc_to_config(c) for c in doc.get("vpn_configs", [])],
-            collected_at=doc.get("collected_at"),
-            expires_at=doc.get("expires_at"),
+            collected_at=_as_utc(doc.get("collected_at")),
+            expires_at=_as_utc(doc.get("expires_at")),
         )

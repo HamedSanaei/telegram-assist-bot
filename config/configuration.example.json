@@ -5,6 +5,8 @@
     "api_id": "",
     "api_hash": "",
     "collector_session": "data/collector",
+    "scheduler_session": "data/scheduler",
+    "scheduler_phone": "",
     "collector_daily_backfill_max_messages": 5000,
     "source_refresh_seconds": 60,
     "source_channels": ["@example_source_channel"],
@@ -29,14 +31,48 @@
     "admin_user_ids": [123456789]
   },
   "ai": {
-    "primary_provider": "zai",
-    "fallback_provider": "deepseek",
-    "zai_api_key": "",
-    "deepseek_api_key": "",
-    "zai_base_url": "https://api.z.ai/api/paas/v4",
-    "deepseek_base_url": "https://api.deepseek.com/v1",
-    "zai_model": "",
-    "deepseek_model": "",
+    "providers": [
+      {
+        "name": "google_ai_studio",
+        "enabled": true,
+        "api_key": "",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-2.0-flash",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "groq",
+        "enabled": true,
+        "api_key": "",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "openrouter",
+        "enabled": true,
+        "api_key": "",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "openai/gpt-4o-mini",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "deepseek",
+        "enabled": true,
+        "api_key": "",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "zai",
+        "enabled": false,
+        "api_key": "",
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "model": "glm-4.6",
+        "timeout_seconds": 30
+      }
+    ],
     "request_timeout_seconds": 30,
     "recent_posts_compare_limit": 30
   },
@@ -47,7 +83,8 @@
   },
   "storage": {
     "media_directory": "data/media",
-    "retention_days": 14
+    "retention_days": 14,
+    "media_download_timeout_seconds": 60
   },
   "vpn_testing": {
     "iran_worker_enabled": true,
@@ -73,6 +110,7 @@
   },
   "logging": {
     "level": "INFO",
-    "file": "logs/app.log"
+    "file": "logs/app.log",
+    "color_console": true
   }
 }

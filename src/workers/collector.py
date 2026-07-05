@@ -25,7 +25,7 @@ from src.composition import (
     create_sqlite,
     sync_config_to_sqlite,
 )
-from src.domain.entities import MediaItem
+from src.domain.entities import MediaItem, PostSourceMetrics, TextEntity
 from src.domain.enums import MediaKind
 from src.domain.interfaces import ChannelRepository
 from src.shared.config import (
@@ -36,8 +36,11 @@ from src.shared.config import (
 )
 from src.shared.errors import AppError
 from src.shared.logging_setup import get_logger, setup_logging
+from src.workers.config_sync import ConfigSyncWorker
 
 logger = get_logger(__name__)
+
+_RUNTIME_CATCH_UP_MAX_MESSAGES = 300
 
 
 class Collector:
@@ -56,6 +59,7 @@ class Collector:
         use_case: CollectPostUseCase,
         media_directory: Path,
         channels: ChannelRepository | None = None,
+        media_download_timeout_seconds: int = 60,
     ) -> None:
         """
         Args:
@@ -65,11 +69,15 @@ class Collector:
             media_directory: Directory photos are downloaded into.
             channels: Optional source channel repository used to persist
                 resolved channel display names.
+            media_download_timeout_seconds: Maximum seconds to wait for a
+                single media download before continuing with the text-only
+                post.
         """
         self._client = client
         self._use_case = use_case
         self._media_dir = media_directory
         self._channels = channels
+        self._media_download_timeout_seconds = media_download_timeout_seconds
         self._seen_album_keys: set[tuple[int, int]] = set()
         self._source_chat_ids: set[int] = set()
         self._timezone_name = "Asia/Tehran"
@@ -174,9 +182,9 @@ class Collector:
         """
         Return the up-to-date source channel list.
 
-        SQLite (written by the management bot's ``/addsource`` and
-        ``/delsource``) is the runtime source of truth; the configuration
-        file is only re-read when no repository is wired (tests).
+        SQLite is the live list read by the collector. It is updated by
+        management-bot commands and by the runtime config sync worker, where
+        ``configuration.json`` is authoritative for source-channel lists.
         """
         if self._channels is not None:
             return list(await self._channels.list_sources())
@@ -219,8 +227,52 @@ class Collector:
                         refresh_backfill_since,
                         startup_backfill_max_messages,
                     )
+                known_entities = [
+                    entity
+                    for entity in resolved
+                    if get_peer_id(entity) in before
+                ]
+                await self._runtime_catch_up(
+                    known_entities,
+                    startup_backfill_since,
+                    startup_backfill_max_messages,
+                )
             except Exception:
                 logger.exception("Collector source refresh failed")
+
+    async def _runtime_catch_up(
+        self,
+        entities: list[object],
+        startup_backfill_since: datetime | None,
+        startup_backfill_max_messages: int,
+    ) -> None:
+        """
+        Periodically rescan recent current-day source history while running.
+
+        Telethon may reconnect and log ``Got difference`` without delivering
+        every missed source-channel update to this process as a live event.
+        This lightweight catch-up pass keeps collection idempotent by relying
+        on MongoDB source-message identity checks before media download or AI
+        analysis.
+        """
+        if (
+            not entities
+            or startup_backfill_since is None
+            or startup_backfill_max_messages <= 0
+        ):
+            return
+        max_messages = min(
+            startup_backfill_max_messages,
+            _RUNTIME_CATCH_UP_MAX_MESSAGES,
+        )
+        since = _current_day_start_utc(self._timezone_name)
+        logger.info(
+            "Collector runtime catch-up source_count=%d since=%s max_messages=%d",
+            len(entities),
+            since.isoformat(),
+            max_messages,
+        )
+        await self._backfill_recent_messages(entities, since, max_messages)
 
     async def _run_backfill_safely(
         self,
@@ -294,18 +346,29 @@ class Collector:
             logger.info("Collector startup backfill disabled")
             return
         since = self._as_utc(since)
+        per_source_groups: list[tuple[int, list[list[object]]]] = []
+        total_groups = 0
         for entity in entities:
             chat_id = get_peer_id(entity)
             messages: list[object] = []
             scanned = 0
-            async for message in self._client.iter_messages(
-                entity, limit=max_messages_per_source
-            ):
-                scanned += 1
-                message_date = self._message_date(message)
-                if message_date is not None and message_date < since:
-                    break
-                messages.append(message)
+            try:
+                async for message in self._client.iter_messages(
+                    entity, limit=max_messages_per_source
+                ):
+                    scanned += 1
+                    message_date = self._message_date(message)
+                    if message_date is not None and message_date < since:
+                        break
+                    messages.append(message)
+            except Exception:
+                logger.exception(
+                    "Collector daily backfill failed for source_chat=%s after scanned=%d",
+                    chat_id,
+                    scanned,
+                )
+                per_source_groups.append((chat_id, []))
+                continue
             logger.info(
                 "Collector daily backfill source_chat=%s since=%s scanned=%d messages=%d",
                 chat_id,
@@ -313,7 +376,20 @@ class Collector:
                 scanned,
                 len(messages),
             )
-            for group in self._group_backfill_messages(reversed(messages)):
+            groups = self._group_backfill_messages(reversed(messages))
+            total_groups += len(groups)
+            per_source_groups.append((chat_id, groups))
+
+        logger.info(
+            "Collector daily backfill queued source_count=%d groups=%d strategy=round_robin",
+            len(per_source_groups),
+            total_groups,
+        )
+        while any(groups for _, groups in per_source_groups):
+            for chat_id, groups in per_source_groups:
+                if not groups:
+                    continue
+                group = groups.pop(0)
                 grouped_id = getattr(group[0], "grouped_id", None)
                 if grouped_id is not None:
                     self._seen_album_keys.add((chat_id, int(grouped_id)))
@@ -361,19 +437,44 @@ class Collector:
             or ""
         )
 
+    @staticmethod
+    def _message_text_entities(message: object) -> list[TextEntity]:
+        """
+        Return custom emoji entities from a Telethon message.
+
+        Telethon exposes premium emoji as ``MessageEntityCustomEmoji`` with a
+        ``document_id``. The domain stores a framework-neutral copy so
+        destination publishing can recreate Telethon formatting entities.
+        """
+        result: list[TextEntity] = []
+        for entity in getattr(message, "entities", None) or []:
+            document_id = getattr(entity, "document_id", None)
+            if document_id is None:
+                continue
+            offset = getattr(entity, "offset", None)
+            length = getattr(entity, "length", None)
+            if not isinstance(offset, int) or not isinstance(length, int):
+                continue
+            result.append(
+                TextEntity(
+                    kind="custom_emoji",
+                    offset=offset,
+                    length=length,
+                    data={"document_id": int(document_id)},
+                )
+            )
+        return result
+
     async def _process_messages(
         self, chat_id: int, messages: list[object], origin: str
     ) -> None:
         """Normalize one message or album and feed it into the use case."""
         first = messages[0]
-        text = next(
-            (
-                self._message_text(message)
-                for message in messages
-                if self._message_text(message).strip()
-            ),
-            "",
+        text_message = next(
+            (message for message in messages if self._message_text(message).strip()),
+            first,
         )
+        text = self._message_text(text_message)
         photo_count = sum(1 for message in messages if self._media_kind(message) == MediaKind.PHOTO)
         video_count = sum(
             1 for message in messages if self._media_kind(message) == MediaKind.VIDEO
@@ -389,25 +490,40 @@ class Collector:
             video_count,
         )
         try:
+            grouped_id = getattr(first, "grouped_id", None)
+            grouped_id_int = int(grouped_id) if grouped_id is not None else None
+            expected_media_count = sum(
+                1 for message in messages if self._media_kind(message) is not None
+            )
+            should_download_media = await self._should_download_media(
+                chat_id,
+                first.id,
+                grouped_id_int,
+                expected_media_count,
+            )
             media: list[MediaItem] = []
-            for message in messages:
-                media_kind = self._media_kind(message)
-                if media_kind is not None:
-                    path = await message.download_media(file=str(self._media_dir))
-                    if path:
-                        media.append(
-                            MediaItem(
-                                kind=media_kind,
-                                file_path=str(path),
-                                mime_type=self._media_mime_type(message),
-                                file_size=self._media_size(message),
-                            )
-                        )
+            if not should_download_media:
+                logger.info(
+                    "Skipping media download for stored source chat=%s msg=%s grouped_id=%s",
+                    chat_id,
+                    first.id,
+                    grouped_id_int,
+                )
+            else:
+                for message in messages:
+                    media_kind = self._media_kind(message)
+                    if media_kind is not None:
+                        item = await self._download_media_item(message, media_kind)
+                        if item is not None:
+                            media.append(item)
             collected = CollectedMessage(
                 source_chat_id=chat_id,
                 message_id=first.id,
+                grouped_id=grouped_id_int,
                 text=text,
+                text_entities=self._message_text_entities(text_message),
                 media=media,
+                source_metrics=self._source_metrics(first),
             )
             await self._use_case.handle_new_message(collected)
         except AppError as exc:
@@ -421,8 +537,87 @@ class Collector:
             )
         except Exception:
             logger.exception(
-                "Unexpected collection error chat=%s msg=%s", chat_id, first.id
+            "Unexpected collection error chat=%s msg=%s", chat_id, first.id
             )
+
+    async def _should_download_media(
+        self,
+        chat_id: int,
+        message_id: int,
+        grouped_id: int | None,
+        expected_media_count: int,
+    ) -> bool:
+        """
+        Return whether media should be downloaded for the source message.
+
+        Newer use cases can request media repair for stored posts that were
+        previously saved without attachments. Older fakes only implement
+        ``has_seen_source_message`` and keep the historical skip behavior.
+        """
+        decision = getattr(self._use_case, "should_download_media", None)
+        if decision is not None:
+            return bool(
+                await decision(chat_id, message_id, grouped_id, expected_media_count)
+            )
+        return not await self._use_case.has_seen_source_message(
+            chat_id,
+            message_id,
+            grouped_id,
+        )
+
+    async def _download_media_item(
+        self, message: object, media_kind: MediaKind
+    ) -> MediaItem | None:
+        """
+        Download one media item with a timeout.
+
+        Args:
+            message: Telethon message object.
+            media_kind: Detected media kind.
+
+        Returns:
+            A stored media item, or ``None`` when download failed.
+
+        Side effects:
+            Writes the media file to ``self._media_dir`` when successful.
+            Logs and skips the attachment when Telegram stalls or fails so
+            the post text can still be stored and sent to approval.
+        """
+        message_id = getattr(message, "id", "?")
+        try:
+            path = await asyncio.wait_for(
+                message.download_media(file=str(self._media_dir)),
+                timeout=max(1, self._media_download_timeout_seconds),
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Media download timed out msg=%s kind=%s timeout=%ss; continuing without media",
+                message_id,
+                media_kind.value,
+                self._media_download_timeout_seconds,
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                "Media download failed msg=%s kind=%s error=%s; continuing without media",
+                message_id,
+                media_kind.value,
+                exc,
+            )
+            return None
+        if not path:
+            logger.warning(
+                "Media download returned empty path msg=%s kind=%s; continuing without media",
+                message_id,
+                media_kind.value,
+            )
+            return None
+        return MediaItem(
+            kind=media_kind,
+            file_path=str(path),
+            mime_type=self._media_mime_type(message),
+            file_size=self._media_size(message),
+        )
 
     @staticmethod
     def _media_kind(message: object) -> MediaKind | None:
@@ -460,19 +655,61 @@ class Collector:
         size = getattr(document, "size", None)
         return size if isinstance(size, int) else None
 
+    @staticmethod
+    def _source_metrics(message: object) -> PostSourceMetrics:
+        """Extract source engagement metrics from a Telethon message."""
+        replies = getattr(message, "replies", None)
+        reactions = getattr(message, "reactions", None)
+        return PostSourceMetrics(
+            views=Collector._int_or_none(getattr(message, "views", None)),
+            forwards=Collector._int_or_none(getattr(message, "forwards", None)),
+            replies_count=Collector._int_or_none(getattr(replies, "replies", None)),
+            reactions_count=Collector._reaction_count(reactions),
+            source_published_at=Collector._message_date(message),
+        )
 
-async def run(config: AppConfig | None = None) -> None:
+    @staticmethod
+    def _int_or_none(value: object) -> int | None:
+        """Return an integer value, or ``None`` when unavailable."""
+        return value if isinstance(value, int) else None
+
+    @staticmethod
+    def _reaction_count(reactions: object) -> int | None:
+        """Return the summed Telegram reaction count when available."""
+        results = getattr(reactions, "results", None)
+        if not results:
+            return None
+        total = 0
+        found = False
+        for item in results:
+            count = getattr(item, "count", None)
+            if isinstance(count, int):
+                total += count
+                found = True
+        return total if found else None
+
+
+async def run(config: AppConfig | None = None, configure_logging: bool = True) -> None:
     """
     Build dependencies and run the collector until disconnect.
 
     Args:
         config: Optional pre-loaded configuration (mainly for tests).
+        configure_logging: Whether this entrypoint should configure root
+            logging. ``src.run_all`` sets this to ``False`` so one process-wide
+            run log captures every component.
 
     Raises:
         ConfigurationError: When collector configuration is incomplete.
     """
     config = config or load_configuration()
-    setup_logging(config.logging.level, config.logging.file)
+    if configure_logging:
+        setup_logging(
+            config.logging.level,
+            config.logging.file,
+            color_console=config.logging.color_console,
+            entrypoint_name="collector",
+        )
     log_startup_summary(config)
     validate_collector_config(config)
 
@@ -501,11 +738,15 @@ async def run(config: AppConfig | None = None) -> None:
         use_case,
         Path(config.storage.media_directory),
         channels=repos["channels"],
+        media_download_timeout_seconds=config.storage.media_download_timeout_seconds,
     )
+    config_sync = ConfigSyncWorker(db)
+    config_sync_task = asyncio.create_task(config_sync.run())
     startup_backfill_since = _current_day_start_utc(config.scheduler.timezone)
-    initial_sources: list[str | int] = list(await repos["channels"].list_sources())
-    if not initial_sources:
-        initial_sources = list(config.telegram.source_channels)
+    initial_sources = _ordered_unique_sources(
+        list(config.telegram.source_channels),
+        list(await repos["channels"].list_sources()),
+    )
     try:
         await client.start()
         await collector.run(
@@ -518,6 +759,12 @@ async def run(config: AppConfig | None = None) -> None:
             timezone_name=config.scheduler.timezone,
         )
     finally:
+        config_sync.stop()
+        config_sync_task.cancel()
+        try:
+            await config_sync_task
+        except asyncio.CancelledError:
+            pass
         await client.disconnect()
         mongo_client.close()
         await db.close()
@@ -546,6 +793,35 @@ def _current_day_start_utc(timezone_name: str) -> datetime:
         microsecond=0,
     )
     return local_midnight.astimezone(timezone.utc)
+
+
+def _ordered_unique_sources(
+    config_sources: list[str | int], sqlite_sources: list[str | int]
+) -> list[str | int]:
+    """
+    Merge configured and SQLite-managed source identifiers without duplicates.
+
+    Args:
+        config_sources: Sources listed in ``configuration.json``.
+        sqlite_sources: Enabled runtime sources stored in SQLite.
+
+    Returns:
+        Config sources first, followed by SQLite-only sources.
+
+    Notes:
+        The collector uses this at startup so a source explicitly present in
+        the config still participates in same-day backfill even if an older
+        SQLite row was disabled during development.
+    """
+    merged: list[str | int] = []
+    seen: set[str] = set()
+    for source in [*config_sources, *sqlite_sources]:
+        key = str(source).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(source)
+    return merged
 
 
 def main() -> None:

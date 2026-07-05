@@ -25,6 +25,10 @@ class PostClassificationError(AppError):
     """Raised when post classification fails on all configured AI providers."""
 
 
+class QualityScoringError(AppError):
+    """Raised when quality scoring fails on all configured AI providers."""
+
+
 class TelegramPublishError(AppError):
     """Raised when publishing a message to a Telegram channel fails."""
 

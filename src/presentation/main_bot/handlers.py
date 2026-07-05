@@ -1,9 +1,9 @@
 """Command handlers for the main management bot.
 
 Admins manage source channels, destination channels, and the per-channel
-scheduled-publishing interval here. Configuration in
-``configuration.json`` only seeds the initial channel lists; after that
-SQLite (edited through these commands) is the source of truth.
+scheduled-publishing interval here. Runtime command edits are stored in
+SQLite, but ``configuration.json`` hot reload is authoritative for channel
+and admin lists and may overwrite command-made channel changes.
 """
 
 from __future__ import annotations
@@ -89,6 +89,20 @@ def create_main_router(
     """
     router = Router(name="main-management")
 
+    def _ai_provider_status() -> str:
+        """Return a compact non-secret AI provider chain summary."""
+        active = [
+            provider.name
+            for provider in config.ai.providers
+            if provider.enabled
+            and provider.api_key
+            and provider.base_url
+            and provider.model
+        ]
+        enabled = [provider.name for provider in config.ai.providers if provider.enabled]
+        names = active or enabled
+        return " → ".join(names) if names else "none"
+
     async def _is_admin(message: Message) -> bool:
         """Return whether the sender is an allowed admin."""
         user_id = message.from_user.id if message.from_user else 0
@@ -137,7 +151,7 @@ def create_main_router(
             f"مقصدها: {len(destinations)}\n"
             f"ادمین‌ها: {len(config.telegram.admin_user_ids)}\n"
             f"MongoDB: {config.database.mongodb_database}\n"
-            f"AI: {config.ai.primary_provider} → {config.ai.fallback_provider or 'none'}\n"
+            f"AI: {_ai_provider_status()}\n"
             "Backfill: امروز میلادی "
             f"(تا {config.telegram.collector_daily_backfill_max_messages} پیام هر منبع)"
         )
@@ -166,7 +180,7 @@ def create_main_router(
             usd = "💵" if channel.publish_usd_price else ""
             lines.append(
                 f"- {channel.title}: {channel.chat_id} | {public_id} | "
-                f"{channel.kind.value} | هر {channel.post_interval_minutes} دقیقه {usd}"
+                f"{channel.kind.value} | اسکجول: هر ۵ دقیقه {usd}"
             )
         await message.answer("\n".join(lines))
 
@@ -232,10 +246,10 @@ def create_main_router(
         logger.info("Destination channel added via bot chat=%s title=%s", chat_id, title)
         await message.answer(
             f"✅ کانال مقصد «{title}» ({chat_id}) اضافه شد.\n"
-            f"نوع: {channel.kind.value} | فاصله زمان‌بندی: هر "
-            f"{channel.post_interval_minutes} دقیقه\n"
+            f"نوع: {channel.kind.value} | اسکجول تلگرام: هر ۵ دقیقه\n"
             "با /setdest می‌توانید نوع، public_id و بقیه تنظیمات را تغییر دهید.\n"
-            "یادآوری: ربات اصلی باید ادمین این کانال باشد."
+            "یادآوری: ربات اصلی برای ارسال فوری و اکانت scheduler برای اسکجول "
+            "باید ادمین این کانال باشند."
         )
 
     @router.message(Command("deldest"))
@@ -270,7 +284,8 @@ def create_main_router(
             minutes,
         )
         await message.answer(
-            f"✅ فاصله زمان‌بندی «{channel.title}» روی هر {minutes} دقیقه تنظیم شد."
+            f"✅ مقدار legacy interval برای «{channel.title}» ذخیره شد؛ "
+            "اسکجول واقعی تلگرام فعلاً طبق سیاست جدید هر ۵ دقیقه چیده می‌شود."
         )
 
     @router.message(Command("setinterval"))

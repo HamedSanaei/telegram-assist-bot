@@ -100,6 +100,24 @@ class AiogramMessagePublisher:
                 f"publish_post failed post={post.post_id} chat={chat_id}: {exc}"
             ) from exc
 
+    async def delete_message(self, chat_id: int, message_id: int) -> None:
+        """
+        Delete a message previously published by the bot.
+
+        Args:
+            chat_id: Destination channel chat id.
+            message_id: Telegram message id to delete.
+
+        Raises:
+            TelegramPublishError: When Telegram rejects deletion.
+        """
+        try:
+            await self._bot.delete_message(chat_id, message_id)
+        except Exception as exc:
+            raise TelegramPublishError(
+                f"delete_message failed chat={chat_id} message={message_id}: {exc}"
+            ) from exc
+
     @staticmethod
     def _first_existing_media(post: Post) -> tuple[MediaKind, Path] | None:
         """Return the first existing media file in publish-preferred order."""

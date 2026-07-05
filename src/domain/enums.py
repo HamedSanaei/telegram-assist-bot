@@ -11,6 +11,7 @@ class PostCategory(str, Enum):
     GENERAL_NEWS = "general_news"
     BREAKING_NEWS = "breaking_news"
     TECHNOLOGY = "technology"
+    WAR = "war"
     VPN = "vpn"
     VPN_CONFIG = "vpn_config"
     IRRELEVANT = "irrelevant"
@@ -43,6 +44,7 @@ class ChannelKind(str, Enum):
 class QueueItemType(str, Enum):
     """Type of a background queue item."""
 
+    QUALITY_SCORE = "quality_score"
     VPN_TEST = "vpn_test"
     APPROVAL_REQUEST = "approval_request"
     SCHEDULED_PUBLISH = "scheduled_publish"

@@ -1,4 +1,4 @@
-"""z.ai provider (primary AI provider)."""
+"""Compatibility wrapper for the z.ai OpenAI-compatible provider."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ class ZaiProvider(OpenAiCompatibleProvider):
         Args:
             api_key: z.ai API key.
             base_url: API base URL (override for proxies or region endpoints).
-            model: Optional z.ai model override (``ai.zai_model``);
-                defaults to glm-4.6. Must be a model that exists on z.ai —
-                model names of other providers are not valid here.
+            model: Optional z.ai model override. Defaults to glm-4.6.
+                Must be a model that exists on z.ai; model names of other
+                providers are not valid here.
             timeout_seconds: HTTP timeout for every request.
         """
         super().__init__(

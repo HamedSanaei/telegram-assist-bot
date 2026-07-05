@@ -98,7 +98,12 @@ def main() -> None:
     import uvicorn
 
     config = load_configuration()
-    setup_logging(config.logging.level, config.logging.file)
+    setup_logging(
+        config.logging.level,
+        config.logging.file,
+        color_console=config.logging.color_console,
+        entrypoint_name="iran_vpn_worker",
+    )
     validate_worker_config(config)
     tester = XrayVpnTester(
         xray_binary_path=config.vpn_testing.xray_binary_path,

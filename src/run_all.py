@@ -99,11 +99,16 @@ async def run() -> None:
         Configures logging and runs until cancelled (Ctrl+C).
     """
     config = load_configuration()
-    setup_logging(config.logging.level, config.logging.file)
+    setup_logging(
+        config.logging.level,
+        config.logging.file,
+        color_console=config.logging.color_console,
+        entrypoint_name="run_all",
+    )
     logger.info("Starting all main-server components in one process")
     await asyncio.gather(
-        supervise("main-app", main_app.run),
-        supervise("collector", collector.run),
+        supervise("main-app", lambda: main_app.run(configure_logging=False)),
+        supervise("collector", lambda: collector.run(configure_logging=False)),
     )
     logger.error("All components stopped; exiting")
 

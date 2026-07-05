@@ -1,8 +1,8 @@
 """Base implementation for OpenAI-compatible chat-completion providers.
 
-Both z.ai and DeepSeek expose OpenAI-compatible ``/chat/completions``
-endpoints, so the shared HTTP and prompt logic lives here and concrete
-providers only supply their name, base URL, key, and default models.
+Google AI Studio, Groq, OpenRouter, DeepSeek, z.ai, and several other
+providers expose an OpenAI-compatible ``/chat/completions`` endpoint, so the
+shared HTTP and prompt logic lives here.
 """
 
 from __future__ import annotations
@@ -14,7 +14,12 @@ import re
 import httpx
 
 from src.domain.enums import PostCategory
-from src.domain.interfaces import AiClassificationResult, DuplicateCheckResult
+from src.domain.interfaces import (
+    AiClassificationResult,
+    AiPostAnalysisResult,
+    DuplicateCheckResult,
+    QualityScoreResult,
+)
 from src.shared.errors import AiProviderError
 from src.shared.logging_setup import get_logger
 
@@ -28,6 +33,7 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "- general_news: general news content\n"
     "- breaking_news: urgent/breaking news\n"
     "- technology: technology news or articles\n"
+    "- war: war, conflict, military, geopolitics, or security news\n"
     "- vpn: VPN-related discussion, apps, or news without connection configs\n"
     "- vpn_config: posts containing vmess/vless connection configurations\n"
     "- irrelevant: advertising, spam, or anything else\n"
@@ -41,8 +47,33 @@ _DUPLICATE_SYSTEM_PROMPT = (
     '{"is_duplicate": true|false, "matched_index": <index of matched existing post or null>}'
 )
 
+_ANALYZE_SYSTEM_PROMPT = (
+    "You classify and deduplicate Telegram posts written in Persian or English. "
+    "Return exactly one JSON object. Categories are: general_news, breaking_news, "
+    "technology, war, vpn, vpn_config, irrelevant. Decide whether NEW POST is a "
+    "duplicate or near-duplicate of any EXISTING POSTS (same news/content, even "
+    "if reworded). Also decide whether the NEW POST is mainly advertising, "
+    "sponsorship, a channel promotion, referral, sales, or unrelated marketing. "
+    "Do NOT mark a post as advertising merely because it contains vmess/vless "
+    "VPN configs, technical links, or connection parameters; those should be "
+    "vpn_config unless the post is primarily a separate promotion. "
+    "Respond ONLY with JSON: "
+    '{"category": "<category>", "is_duplicate": true|false, '
+    '"is_advertisement": true|false, '
+    '"matched_index": <index of matched existing post or null>, '
+    '"reason": "<short Persian reason>"}'
+)
+
+_QUALITY_SCORE_SYSTEM_PROMPT = (
+    "You help a Telegram channel admin decide whether a post is worth "
+    "republishing. Score the post from 0 to 100 based on likely audience value, "
+    "newsworthiness, freshness, clarity, engagement metrics normalized by age, "
+    "and whether the content is actionable. Respond ONLY with JSON: "
+    '{"score": <number 0-100>, "reason": "<short Persian reason>"}'
+)
+
 _MAX_COMPARE_TEXT_CHARS = 800
-_MAX_HTTP_ATTEMPTS = 3
+_MAX_HTTP_ATTEMPTS = 1
 
 
 class OpenAiCompatibleProvider:
@@ -72,7 +103,7 @@ class OpenAiCompatibleProvider:
     ) -> None:
         """
         Args:
-            name: Provider name used in logs and results (e.g. ``"zai"``).
+            name: Provider name used in logs and results.
             api_key: Bearer API key. Never logged.
             base_url: API base URL without the ``/chat/completions`` suffix.
             default_model: Model used when no override is configured.
@@ -161,6 +192,112 @@ class OpenAiCompatibleProvider:
             matched_index=int(matched) if isinstance(matched, int) else None,
         )
 
+    async def analyze_post(
+        self, new_text: str, existing_texts: list[str]
+    ) -> AiPostAnalysisResult:
+        """
+        Classify and duplicate-check a post in one chat-completion request.
+
+        Args:
+            new_text: New post text.
+            existing_texts: Recent post texts to compare against.
+
+        Returns:
+            Combined classification and duplicate result.
+
+        Raises:
+            AiProviderError: On HTTP failure, timeout, or invalid response.
+        """
+        numbered = "\n".join(
+            f"[{i}] {t[:_MAX_COMPARE_TEXT_CHARS]}" for i, t in enumerate(existing_texts)
+        )
+        user_prompt = (
+            f"NEW POST:\n{new_text[:_MAX_COMPARE_TEXT_CHARS * 2]}\n\n"
+            f"EXISTING POSTS:\n{numbered or '(none)'}"
+        )
+        content = await self._chat(
+            self._classification_model,
+            [
+                {"role": "system", "content": _ANALYZE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        data = self._extract_json(content)
+        try:
+            category = PostCategory(str(data["category"]).strip().lower())
+        except (KeyError, ValueError) as exc:
+            raise AiProviderError(
+                f"{self.name}: invalid analysis response: {content[:200]}"
+            ) from exc
+        if "is_duplicate" not in data:
+            raise AiProviderError(
+                f"{self.name}: invalid analysis response: {content[:200]}"
+            )
+        matched = data.get("matched_index")
+        return AiPostAnalysisResult(
+            category=category,
+            is_duplicate=bool(data["is_duplicate"]),
+            provider=self.name,
+            matched_index=int(matched) if isinstance(matched, int) else None,
+            is_advertisement=bool(data.get("is_advertisement", False)),
+            reason=str(data.get("reason", "")).strip(),
+        )
+
+    async def score_post(
+        self,
+        text: str,
+        category: PostCategory | None,
+        metrics: dict[str, object],
+    ) -> QualityScoreResult:
+        """
+        Score a post's repost value via the chat-completions endpoint.
+
+        Args:
+            text: Raw post text.
+            category: Classification category, if available.
+            metrics: Source engagement and timing metrics.
+
+        Returns:
+            AI-generated score and short Persian reason.
+
+        Raises:
+            AiProviderError: On HTTP failure, timeout, or invalid response.
+        """
+        user_prompt = (
+            "POST TEXT:\n"
+            f"{text[:4000] or '(no text)'}\n\n"
+            f"CATEGORY: {category.value if category else 'unknown'}\n"
+            "METRICS JSON:\n"
+            f"{json.dumps(metrics, ensure_ascii=False, default=str)}"
+        )
+        content = await self._chat(
+            self._classification_model,
+            [
+                {"role": "system", "content": _QUALITY_SCORE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        data = self._extract_json(content)
+        try:
+            score = float(data["score"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AiProviderError(
+                f"{self.name}: invalid quality score response: {content[:200]}"
+            ) from exc
+        if score < 0 or score > 100:
+            raise AiProviderError(
+                f"{self.name}: quality score out of range: {score}"
+            )
+        reason = str(data.get("reason", "")).strip()
+        if not reason:
+            reason = "دلیل مشخصی ارائه نشد"
+        return QualityScoreResult(
+            score=round(score, 1),
+            reason=reason[:180],
+            provider=self.name,
+            raw_metrics=dict(metrics),
+        )
+
     async def _chat(self, model: str, messages: list[dict[str, str]]) -> str:
         """
         Call ``POST {base_url}/chat/completions`` and return the reply text.
@@ -172,6 +309,12 @@ class OpenAiCompatibleProvider:
         payload = {"model": model, "messages": messages, "temperature": 0}
         headers = {"Authorization": f"Bearer {self._api_key}"}
         last_http_error: httpx.HTTPError | None = None
+        logger.info(
+            "Using AI provider=%s model=%s",
+            self.name,
+            model,
+            extra={"event_kind": "ai_success"},
+        )
         async with httpx.AsyncClient(
             timeout=self._timeout, transport=self._transport
         ) as client:
@@ -180,10 +323,20 @@ class OpenAiCompatibleProvider:
                     response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
                     body = response.json()
+                    logger.info(
+                        "AI provider=%s model=%s request succeeded",
+                        self.name,
+                        model,
+                        extra={"event_kind": "ai_success"},
+                    )
                     break
                 except httpx.HTTPStatusError as exc:
                     last_http_error = exc
-                    if exc.response.status_code not in {429, 500, 502, 503, 504}:
+                    if exc.response.status_code in {402, 403, 429, 500, 502, 503, 504}:
+                        raise AiProviderError(
+                            self._status_error_message(model, exc)
+                        ) from exc
+                    if exc.response.status_code not in {500, 502, 503, 504}:
                         raise AiProviderError(
                             self._status_error_message(model, exc)
                         ) from exc
@@ -198,6 +351,7 @@ class OpenAiCompatibleProvider:
                         exc.response.status_code,
                         attempt,
                         delay,
+                        extra={"event_kind": "ai_error"},
                     )
                     await asyncio.sleep(delay)
                 except httpx.HTTPError as exc:
@@ -210,6 +364,7 @@ class OpenAiCompatibleProvider:
                         self.name,
                         attempt,
                         delay,
+                        extra={"event_kind": "ai_error"},
                     )
                     await asyncio.sleep(delay)
                 except json.JSONDecodeError as exc:

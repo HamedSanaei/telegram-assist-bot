@@ -6,11 +6,17 @@
 - MongoDB 5 or newer (local or remote)
 - SQLite (bundled with Python)
 - Telegram credentials:
-  - Main bot token (publishes to destination channels; must be admin there)
+  - Main bot token (management bot and USD/fallback publishing)
   - Approval bot token (talks to admins)
   - API ID and API hash from https://my.telegram.org (for the collector
-    user session that reads source channels)
-- z.ai API key (primary AI provider) and DeepSeek API key (fallback)
+    user session that reads source channels and the scheduler user session)
+  - A separate premium Telethon destination/scheduler user session that is
+    an admin in every destination channel. Approved post publishing and
+    native Telegram scheduling both use this user session so premium custom
+    emoji entities can be preserved.
+- At least one enabled AI provider key in `ai.providers`. The default chain
+  is Google AI Studio, Groq, OpenRouter, then DeepSeek. z.ai remains in the
+  template but is disabled by default.
 - For VPN testing: an Ubuntu server inside Iran with
   [xray-core](https://github.com/XTLS/Xray-core) installed
 
@@ -34,26 +40,31 @@ Edit `config/configuration.json` (UTF-8, never committed):
 
 | Key | Meaning |
 | --- | --- |
-| `telegram.bot_token` | Main publishing bot token |
+| `telegram.bot_token` | Main management bot token, plus USD/fallback text publishing |
 | `telegram.approval_bot_token` | Approval assistant bot token |
 | `telegram.api_id` / `api_hash` | Telegram API credentials for the collector |
 | `telegram.collector_session` | Telethon session file path (default `data/collector`) |
+| `telegram.scheduler_session` | Telethon user session file path used to publish approved posts and upload posts into the destination channel's native Telegram schedule (default `data/scheduler`) |
+| `telegram.scheduler_phone` | Optional phone number for the first scheduler user login. If it is empty and the session is not logged in yet, `src.main` asks for it interactively. Leave empty after the session file has been created. |
 | `telegram.collector_daily_backfill_max_messages` | Maximum messages scanned from each source for the current Gregorian day when the collector starts (default `5000`; set `0` to disable) |
-| `telegram.source_refresh_seconds` | How often the running collector reloads the source channel list from SQLite (default `60`; set `0` to disable live refresh) |
-| `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from (initial seed; manage at runtime with the management bot) |
-| `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`, `post_interval_minutes` (minimum minutes between scheduled posts on that channel, default `30`). `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The main bot must be an admin of every destination channel. |
+| `telegram.source_refresh_seconds` | How often the running collector reloads the source channel list from SQLite (default `60`; set `0` to disable collector live refresh) |
+| `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from. This list is hot-reloaded and authoritative at runtime. |
+| `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`, `post_interval_minutes` (kept for compatibility; native scheduled posts are currently paced every 5 minutes). `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The scheduler/destination user must be an admin for approved immediate publishing and native scheduled publishing. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
-| `ai.*` | Provider keys, optional base URL overrides, timeouts. Model overrides are **per provider**: `ai.zai_model` (default `glm-4.6`) and `ai.deepseek_model` (default `deepseek-chat`). The old shared `classification_model`/`deduplication_model` keys are deprecated and ignored — a single model name cannot be valid on both APIs. |
+| `ai.providers` | Priority-ordered AI provider chain. Each entry has `name`, `enabled`, `api_key`, `base_url`, `model`, and `timeout_seconds`. Disabled providers, or providers without a key/model/base URL, are skipped. The default order is `google_ai_studio`, `groq`, `openrouter`, `deepseek`, with `zai` kept as `enabled: false`. |
+| `ai.request_timeout_seconds` / `recent_posts_compare_limit` | Shared timeout fallback for provider entries and the number of recent posts used for AI duplicate checks. |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
 | `database.mongodb_connection_string` | e.g. `mongodb://localhost:27017` |
 | `storage.media_directory` | Downloaded media location |
 | `storage.retention_days` | Post retention (default 14) |
+| `storage.media_download_timeout_seconds` | Maximum seconds to wait for each Telegram media download before continuing with the text-only post (default `60`) |
 | `vpn_testing.worker_api_url` | Iran worker base URL, e.g. `http://1.2.3.4:8088` |
 | `vpn_testing.worker_api_token` | Shared secret for the worker API |
 | `vpn_testing.xray_binary_path` | xray path on the Iran server |
 | `scheduler.usd_price_publish_times` | e.g. `["09:00", "21:00"]` (in `scheduler.timezone`) |
 | `usd_price.provider` | `"nobitex"` (default; free-market USDT rate from the public Nobitex API, no key needed, published in Toman) or `"http_json"` for a custom endpoint |
 | `usd_price.source_url` / `price_json_path` | Only for `provider: "http_json"`: JSON endpoint and dotted path of the USD price value |
+| `logging.color_console` | Colorize console logs: AI provider/model usage in green, AI provider failures in orange, and application errors in red. File logs stay plain UTF-8. Each process start also creates `logs/YYYYMMDD-HHMMSS-<entrypoint>.log` beside the stable configured log file. |
 
 A custom config path can be set with the `TELEGRAM_ADMIN_BOT_CONFIG`
 environment variable.
@@ -99,9 +110,10 @@ supervisor: if one crashes it is restarted after a short delay without
 taking the other down. A component with broken configuration is stopped
 permanently (and logged) while the rest keep running.
 
-Do the first collector login separately (`python -m src.workers.collector`)
-before using this entrypoint, because the interactive Telethon prompt would
-otherwise stall the approval bot during login.
+Do the first collector and scheduler logins separately
+(`python -m src.workers.collector` and `python -m src.main`) before using
+this entrypoint as a background service, because the interactive Telethon
+prompts wait for phone/login codes on stdin.
 
 The Iran VPN worker is not part of this command; it runs on the Iran server
 (see below).
@@ -113,9 +125,11 @@ python -m src.main
 ```
 
 This single process runs the approval bot (long polling), the SQLite queue
-worker (VPN test dispatch + approval dispatch + scheduled channel publishing),
-and the scheduler (USD price publishing and daily cleanup). It also polls the
-main management bot (`telegram.bot_token`) for admin commands.
+worker (quality scoring, VPN test dispatch, and approval dispatch), the
+Telethon destination/scheduler user session for approved channel publishing
+and native channel scheduling, and the scheduler (USD price publishing and
+daily cleanup). It also polls the main management bot
+(`telegram.bot_token`) for admin commands.
 
 ### Managing Channels with the Management Bot
 
@@ -135,22 +149,59 @@ admins listed in `telegram.admin_user_ids`:
 | `/setdest <chat_id> <field> <value>` | Change `title`, `public_id`, `kind`, `usd` (on/off), `enabled` (on/off), or `interval` (minutes) |
 | `/setinterval <chat_id> <minutes>` | Shortcut for the scheduling interval |
 
-`configuration.json` only **seeds** the channel lists on first start; after
-that, SQLite (edited through these commands) is the source of truth and
-bot-made changes survive restarts. Admin ids remain config-only.
+`configuration.json` is hot-reloaded while the app is running for
+`source_channels`, `destination_channels`, and `admin_user_ids`. Those
+lists are authoritative: adding a channel/admin to the file enables it
+without a restart, and removing one disables/removes it from runtime
+SQLite state. Secrets, AI providers, database paths, Telegram sessions,
+scheduler phone, and price settings still require a restart. Runtime edits
+made with bot commands are overwritten by the next config reload unless
+the same change is also written to `configuration.json`.
 
 ### Running the Approval Bot
 
 The approval bot runs inside `src.main`; it has no separate entrypoint.
 
-Every approval message starts in **scheduled mode** (first keyboard row
-shows the current delivery mode). In scheduled mode, confirming a channel
-puts the post into that channel's paced queue: posts are published in
-order with at least `post_interval_minutes` between them (counting from
-the channel's last published or last queued post). Tapping the toggle
-switches the message to **immediate mode**, where confirmation publishes
-right away. Channels with a queued post show ⏱ on the keyboard, published
-ones show ✅; neither can be selected twice.
+Every approval message shows two direct buttons per destination channel:
+`🚀 فوری` and `⏱ اسکجول`. There is no separate confirmation step. Tapping
+`🚀 فوری` publishes immediately through the Telethon destination user
+session configured by `telegram.scheduler_session`. Tapping `⏱ اسکجول`
+uploads the post into Telegram's own scheduled-message list for that
+destination channel through the same session. The slot is 5 minutes after
+the latest scheduled/published post for that destination, or 5 minutes from
+now when there is no queued channel post.
+
+Active buttons show ✅ and remain clickable. A second tap on `✅ فوری`
+deletes the real published message from the destination channel. A second
+tap on `✅ اسکجول` removes the native Telegram scheduled message. If
+Telegram refuses deletion because of permissions or a missing message id,
+the state stays active and the bot shows an error alert.
+
+When multiple admins receive the same approval post, the bot stores every
+approval message id. If one admin publishes or schedules a post, keyboards
+for all other admins are refreshed best-effort. If one admin deletes or
+unschedules it, all keyboards are refreshed back to the available state. If
+an old approval message was deleted or the bot can no longer edit it, that
+message is marked inactive and the callback continues normally. Telegram's
+`message is not modified` response during refresh is a harmless no-op and
+does not deactivate the stored approval message.
+
+At startup, `src.main` repairs approval requests that were recorded in
+SQLite but no longer have any active approval-bot message references. Those
+orphaned approvals are sent to the currently configured admins again, so a
+bad refresh or crash cannot leave posts permanently invisible in
+`waiting_approval`. This repair is guarded by `publish_log`: if the post has
+any delivery record (`reserved`, `published`, `scheduled`, or `removed`) it
+is not resent to the approval bot after restart.
+
+Important: Bot API cannot create native scheduled channel messages and is
+not reliable for preserving premium custom emoji in destination posts. The
+scheduler/destination session is a normal Telegram user session, should be
+premium when source posts contain premium emoji, must be logged in once
+interactively, and must be added as an admin to the destination channels. If
+the scheduler session is not logged in and `telegram.scheduler_phone` is
+empty, `src.main` asks for the phone number in the terminal and then
+Telethon asks for the login code.
 
 ### Running the Collector
 
@@ -164,20 +215,39 @@ before enabling the systemd service.
 
 At startup the collector scans from the first message of the current
 Gregorian day in `scheduler.timezone` (Asia/Tehran by default) for every
-source channel, then waits for live updates. Messages are processed
-oldest-first so same-day history enters the same dedup/classify/store
-pipeline as live messages. The normal exact-hash and AI deduplication
-prevents restarts, cross-channel reposts, and already processed posts from
-being stored twice. `telegram.collector_daily_backfill_max_messages` is only
-a safety cap per source; increase it for very high-volume channels or set it
-to `0` only when you want a strict live-only listener.
+source channel, then waits for live updates. Startup uses the union of
+sources listed in `configuration.json` and enabled sources stored in
+SQLite, so sources you add to the config during development are included
+in the next same-day backfill even if SQLite has older state. Messages are processed
+oldest-first within each source and round-robin across sources, so one
+busy channel cannot delay all other channels' same-day posts. The normal
+exact-hash and AI deduplication prevents restarts, cross-channel reposts,
+and already processed posts from being stored twice. If a same-day post was
+already stored in MongoDB but never reached an active/successful
+`quality_score`, `vpn_test`, or `approval_request` queue item, the backfill
+requeues the missing next stage instead of hiding it as a duplicate. Stored source messages are
+checked before media download, so restarts do not download the same photo
+or video again when MongoDB already has the media. If an older bug or
+timeout stored the post without its video/photo, the collector downloads
+the missing media on the next same-day backfill and updates the existing
+MongoDB post.
+`telegram.collector_daily_backfill_max_messages` is only a safety cap per
+source; increase it for very high-volume channels or set it to `0` only
+when you want a strict live-only listener.
+If one source fails while reading history, the collector logs that source
+failure and continues backfilling the remaining sources.
 
 While running, the collector reloads the source channel list from SQLite
 every `telegram.source_refresh_seconds` seconds. Sources added with the
-management bot's `/addsource` (or seeded from `configuration.json` at
-startup) are resolved and backfilled from today's first message without
-restarting the process; sources removed with `/delsource` stop being
-collected on the next refresh.
+management bot's `/addsource` or added to `configuration.json` are resolved
+and backfilled from today's first message without restarting the process;
+sources removed with `/delsource` or removed from `configuration.json` stop
+being collected on the next refresh. On each refresh the collector also runs a
+lightweight current-day catch-up scan for already known sources, capped at
+300 recent messages per source. This covers Telethon reconnect/difference
+sync cases where account state advances but no live event is delivered to
+the handler. Already stored source messages are skipped before media
+download or AI calls, so the catch-up is idempotent.
 
 When the collector resolves a source channel, it stores the channel title
 and username in SQLite. Approval previews then show that readable source
@@ -185,6 +255,17 @@ label instead of the raw `-100...` chat id. The collector downloads photos,
 videos, and documents into `storage.media_directory`; approval previews and
 destination publishing send the first available media file with the post
 caption, falling back to a text-only message when no media file exists.
+The collector also stores Telegram custom emoji text entities next to the
+raw text. Destination publishing sends those entities back through Telethon
+`formatting_entities`, so premium emoji survive source mention rewriting
+and republishing when the destination user session has access to them.
+Approval previews try to send videos as Telegram videos first and fall back
+to sending the same local file as a document if Bot API rejects the video
+upload, so video posts do not disappear from the approval bot silently.
+If Telegram stalls while downloading a media file from another data center,
+the collector waits up to `storage.media_download_timeout_seconds`, logs a
+warning, and still stores/sends the text portion instead of blocking the
+rest of the backfill.
 
 ### Running the Scheduler
 
@@ -345,11 +426,20 @@ the Telethon session file exists.
   | Log line | Meaning |
   | --- | --- |
   | `Received live message chat=... msg=...` / `Received backfill message chat=... msg=...` | Collector got the message from Telegram; the log includes media counts such as `photos=... videos=...` |
+  | `Collector daily backfill queued source_count=... groups=... strategy=round_robin` | Startup/current-day backfill scanned all sources and will process them fairly across channels |
   | `Duplicate check passed ... provider=...` | AI dedup done (skips log `Skipping ... duplicate` instead) |
-  | `Classified ... category=... provider=...` | AI classification done (`irrelevant` posts stop here by design) |
-  | `Classification unavailable; storing for manual approval ...` | AI failed after fallback; post is still stored for admin review |
+  | `Classified ... category=... provider=...` | AI classification done (`irrelevant` posts are stored with `skipped_reason=irrelevant` and stop here by design) |
+  | `AI-pruned advertisement ...` | AI judged the source post to be promotional; it is stored with `skipped_reason=advertisement` and is not sent to approval |
+  | `Classification unavailable; storing for manual approval ...` | Every enabled AI provider failed classification; post is still stored for admin review |
   | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
-  | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued for the next stage |
+  | `Enqueued quality_score post=... scheduled_at=...` | The post is waiting for the required 0-100 quality score. Fresh posts wait until 15 minutes after source publish time; older backfill posts are due immediately |
+  | `Quality scored post=... score=.../100 provider=...` | Required AI quality score was stored in MongoDB and the post can continue to VPN testing or approval |
+  | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued after quality scoring for approval or VPN testing |
+  | `Repaired stored source post post=... chat=... msg=...` | Backfill found a post that was stored before but never reached quality scoring/approval/VPN flow, so it repaired the missing pipeline stage |
+  | `Skipping media download for stored source chat=... msg=...` | The post is already in MongoDB and has enough stored media, so restart/backfill did not download its media again |
+  | `Repaired stored source media post=... chat=... msg=... media=...` | Backfill found a stored post whose media was missing and updated MongoDB with the downloaded attachment |
+  | `Approval video preview failed; retrying as document ...` | Bot API rejected `send_video`; the approval bot retried the same file with `send_document` |
+  | `Media download timed out msg=... kind=...` | Telegram media download stalled; the collector continued with the text-only post |
   | `Queue item done id=... type=approval_request` | Approval message sent to admins |
 
   Common causes when the chain stops early:
@@ -359,19 +449,41 @@ the Telethon session file exists.
     message event. Confirm `telegram.source_channels` contains the exact
     source channels you want, and keep
     `collector_daily_backfill_max_messages` above `0` so today's source
-    posts are scanned on startup.
-  - `Classification unavailable; storing for manual approval ...` — both AI
-    providers failed (for example z.ai returned 429 and DeepSeek returned
-    402/payment required). The post is kept and sent to admins with a
-    conservative default category instead of being dropped. Check the
-    `Effective configuration` block logged at startup: it shows whether
-    each API key is `set` or `EMPTY` (values are never logged).
-  - Every post logs `Skipping irrelevant post` — the classifier judges the
-    source content as ads/spam; check the source channel content.
+    posts are scanned on startup. The running collector also performs a
+    periodic `Collector runtime catch-up ...` scan; if that line appears
+    but the expected source still never logs `Received ...`, the configured
+    account likely cannot read that channel or the channel is not in
+    `telegram.source_channels`/SQLite.
+  - `Classification unavailable; storing for manual approval ...` — every
+    enabled AI provider failed or hit a quota/rate/payment limit. The post
+    is kept and sent to admins with a conservative default category instead
+    of being dropped. Check the `Effective configuration` block logged at
+    startup: it shows provider order and active count without logging keys.
+    A provider that returns HTTP 429/402/403/5xx, timeout, quota, or rate
+    limit errors is temporarily cooled down in memory, so backfill bursts
+    stop hammering the same exhausted free quota and move to the next
+    enabled provider. Before AI duplicate detection, the collector now uses
+    local text fingerprints to find only the top few likely duplicate
+    candidates; unrelated recent posts are not sent into the prompt.
+  - Every post logs `Skipping irrelevant post` or
+    `AI-pruned advertisement` — the classifier judges the source content
+    as irrelevant or promotional; the post is stored with
+    `skipped_reason=irrelevant` or `skipped_reason=advertisement` and is
+    intentionally not sent to approval.
+    Check the source channel content or classification prompt if this is
+    wrong.
   - `Approval message failed admin=...` — the admin has never opened the
     approval bot and pressed Start. Each admin must send `/start` to the
     approval bot once; the bot replies whether that user id is a
-    configured admin.
+    configured admin. If every admin send fails, the approval queue item
+    now fails and retries instead of being recorded as successfully sent.
+  - `Approval request has no active bot messages; resending post=...` —
+    startup or queue repair found an approval that was recorded earlier but
+    has no active tracked approval-bot message. The bot resends that post to
+    the current admins.
+  - `Approval keyboard already current ...` — Telegram said the keyboard
+    already had the requested markup. This is expected during config reloads
+    and does not remove the tracked approval message.
 - **`ConfigurationError: Configuration file not found`** — copy the example
   file to `config/configuration.json` or set `TELEGRAM_ADMIN_BOT_CONFIG`.
 - **Persian text looks like `Ø³ÙØ§Ù` (Mojibake)** — a file was written
@@ -380,27 +492,31 @@ the Telethon session file exists.
   `PYTHONIOENCODING=utf-8` (already set in the service templates).
 - **Collector exits immediately under systemd** — the Telethon session was
   never created; run `python -m src.workers.collector` interactively once.
+- **Main bot waits for a Telegram login code** — the scheduler user session
+  was never created. Run `python -m src.main` interactively once, enter the
+  scheduler account phone/code when prompted, then restart the service
+  normally. You may also set `telegram.scheduler_phone` for the first run.
 - **Approval buttons answer "دسترسی غیرمجاز"** — the clicking user id is
   not listed in `telegram.admin_user_ids`.
 - **Publishing fails with `TelegramPublishError`** — the main bot is not an
   admin of the destination channel, or the `chat_id` is wrong (channel ids
   are negative and usually start with `-100`).
+- **Scheduled publishing fails** — the scheduler user account is not an
+  admin in the destination channel, lacks post permission, or Telegram
+  cannot resolve the destination `chat_id` from that user session.
 - **All VPN tests fail with `xray binary not found`** — set
   `vpn_testing.xray_binary_path` on the Iran server.
 - **Iran worker returns 401** — `worker_api_token` differs between the two
   servers' configuration files.
-- **AI errors in logs** — check keys and network reachability of z.ai; the
-  system falls back to DeepSeek automatically, so both failing means both
-  keys/endpoints are broken. Timeouts are configurable via
-  `ai.request_timeout_seconds`.
-- **AI calls fail with `HTTP 400` on both providers** — the log line now
-  includes the model name and the API's own error body (e.g.
-  `Model Not Exist`). The usual cause is a model override that belongs to
-  the other provider: model names must be set per provider via
-  `ai.zai_model` / `ai.deepseek_model`. Leave both empty to use the safe
-  defaults (`glm-4.6`, `deepseek-chat`). The deprecated shared
-  `classification_model`/`deduplication_model` keys are ignored and logged
-  with a warning.
+- **AI errors in logs** — check `ai.providers` order, enabled flags, keys,
+  model names, and network reachability. The service tries the next enabled
+  provider after quota/rate/payment/temporary provider failures such as
+  `429`, `402`, `403`, `500`, `502`, `503`, or `504`. Timeouts are
+  configurable per provider or through `ai.request_timeout_seconds`.
+- **AI calls fail with `HTTP 400`** — the log line includes the provider,
+  model name, and API response body. The usual cause is using a model name
+  from another provider. Set the model on the matching `ai.providers` entry
+  or leave the template defaults in place.
 - **Published posts still contain the source channel's @username** — the
   destination channel needs a `public_id`; without it mentions cannot be
   rewritten (a warning is logged at publish time). Set it with

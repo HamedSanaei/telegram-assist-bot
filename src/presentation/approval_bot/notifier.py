@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+from html import escape
 from pathlib import Path
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import FSInputFile
 
-from src.domain.entities import DestinationChannel, Post
+from src.domain.entities import ApprovalMessageRef, DestinationChannel, Post
 from src.domain.enums import MediaKind, PostCategory
 from src.domain.interfaces import AdminRepository, ChannelRepository
 from src.presentation.approval_bot.keyboards import build_channel_keyboard
+from src.shared.errors import TelegramPublishError
 from src.shared.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -20,6 +24,7 @@ logger = get_logger(__name__)
 _PREVIEW_TEXT_LIMIT = 3000
 _CAPTION_LIMIT = 1024
 _ADMIN_SEND_DELAY_SECONDS = 0.25
+_DEFAULT_TIMEZONE = "Asia/Tehran"
 
 _CATEGORY_LABELS: dict[PostCategory, str] = {
     PostCategory.GENERAL_NEWS: "خبر عمومی",
@@ -31,7 +36,11 @@ _CATEGORY_LABELS: dict[PostCategory, str] = {
 }
 
 
-def build_preview_text(post: Post, source_label: str | None = None) -> str:
+def build_preview_text(
+    post: Post,
+    source_label: str | None = None,
+    timezone_name: str = _DEFAULT_TIMEZONE,
+) -> str:
     """
     Build the Persian preview message shown to admins for approval.
 
@@ -43,19 +52,30 @@ def build_preview_text(post: Post, source_label: str | None = None) -> str:
         The formatted UTF-8 preview text.
     """
     category = _CATEGORY_LABELS.get(post.category, "نامشخص") if post.category else "نامشخص"
-    lines = [
+    header_lines = [
         "🆕 پست جدید در انتظار تایید",
         f"🏷 دسته‌بندی: {category}",
         f"📡 منبع: {source_label or post.source_chat_id}",
     ]
+    published_at = post.source_metrics.source_published_at
+    if published_at is not None:
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        local_time = published_at.astimezone(ZoneInfo(timezone_name))
+        header_lines.append(f"🕒 انتشار مبدا: {local_time.strftime('%Y-%m-%d %H:%M')}")
+    if post.quality_score is not None:
+        header_lines.append(
+            "⭐ امتیاز پیشنهادی: "
+            f"{post.quality_score.score:.0f}/100 — {post.quality_score.reason}"
+        )
     if post.media:
-        lines.append(f"📎 دارای {len(post.media)} پیوست رسانه‌ای")
+        header_lines.append(f"📎 دارای {len(post.media)} پیوست رسانه‌ای")
     if post.vpn_configs:
         working = sum(1 for c in post.vpn_configs if c.test_status.value == "working")
-        lines.append(f"🔐 کانفیگ‌ها: {len(post.vpn_configs)} (سالم از ایران: {working})")
-    lines.append("")
-    lines.append(post.text[:_PREVIEW_TEXT_LIMIT] if post.text else "(بدون متن)")
-    return "\n".join(lines)
+        header_lines.append(f"🔐 کانفیگ‌ها: {len(post.vpn_configs)} (سالم از ایران: {working})")
+    header = "\n".join(f"<i>{escape(line)}</i>" for line in header_lines)
+    body = escape(post.text[:_PREVIEW_TEXT_LIMIT] if post.text else "(بدون متن)")
+    return f"{header}\n\n{body}"
 
 
 def _first_existing_media(post: Post) -> tuple[MediaKind, Path] | None:
@@ -96,6 +116,7 @@ class AiogramApprovalNotifier:
         bot: Bot,
         admins: AdminRepository,
         channels: ChannelRepository | None = None,
+        timezone_name: str = _DEFAULT_TIMEZONE,
     ) -> None:
         """
         Args:
@@ -103,14 +124,16 @@ class AiogramApprovalNotifier:
             admins: Admin repository providing recipient user ids.
             channels: Optional channel repository used to display source
                 channel names instead of raw numeric chat ids.
+            timezone_name: IANA timezone used for source publish time display.
         """
         self._bot = bot
         self._admins = admins
         self._channels = channels
+        self._timezone_name = timezone_name
 
     async def send_approval_request(
         self, post: Post, channels: list[DestinationChannel]
-    ) -> None:
+    ) -> list[ApprovalMessageRef]:
         """
         Send the approval message to all admins.
 
@@ -118,17 +141,39 @@ class AiogramApprovalNotifier:
             post: The post awaiting approval.
             channels: Enabled destination channels for the buttons.
 
-        Side effects:
-            One Telegram message per admin. Per-admin failures are
-            logged and do not block delivery to the other admins.
+        Returns:
+            References to delivered Telegram messages that carry the inline
+            keyboard.
+
+        Raises:
+            TelegramPublishError: When no admin receives the approval
+                message, so the queue can retry instead of marking the post
+                as waiting for approval.
         """
-        text = build_preview_text(post, await self._source_label(post))
+        text = build_preview_text(
+            post,
+            await self._source_label(post),
+            timezone_name=self._timezone_name,
+        )
         keyboard = build_channel_keyboard(post.post_id, channels, published_chat_ids=set())
+        success_count = 0
+        failure_count = 0
+        delivered: list[ApprovalMessageRef] = []
         for admin_id in await self._admins.list_user_ids():
             try:
-                await self._send_preview(admin_id, post, text, keyboard)
+                message_id = await self._send_preview(admin_id, post, text, keyboard)
+                delivered.append(
+                    ApprovalMessageRef(
+                        post_id=post.post_id,
+                        admin_user_id=admin_id,
+                        chat_id=admin_id,
+                        message_id=message_id,
+                    )
+                )
+                success_count += 1
                 await asyncio.sleep(_ADMIN_SEND_DELAY_SECONDS)
             except Exception as exc:
+                failure_count += 1
                 logger.error(
                     "Approval message failed admin=%s post=%s error=%s "
                     "(hint: the admin must open the approval bot and press "
@@ -137,10 +182,16 @@ class AiogramApprovalNotifier:
                     post.post_id,
                     exc,
                 )
+        if success_count == 0:
+            raise TelegramPublishError(
+                "Approval message failed for all admins "
+                f"post={post.post_id} failures={failure_count}"
+            )
+        return delivered
 
     async def _send_preview(
         self, admin_id: int, post: Post, text: str, keyboard: object
-    ) -> None:
+    ) -> int:
         """
         Send the approval preview, including the first media file when present.
 
@@ -150,34 +201,59 @@ class AiogramApprovalNotifier:
             text: Preview text built by :func:`build_preview_text`.
             keyboard: Inline keyboard with destination channel buttons.
 
-        Side effects:
-            Sends one or two Telegram messages. The inline keyboard is
-            attached to the message that contains the preview text.
+        Returns:
+            Telegram message id that owns the inline keyboard.
         """
         media = _first_existing_media(post)
         if media is None:
-            await self._send_with_retry(
-                self._bot.send_message, admin_id, text, reply_markup=keyboard
+            sent = await self._send_with_retry(
+                self._bot.send_message,
+                admin_id,
+                text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
             )
-            return
+            return self._message_id(sent)
 
         media_kind, path = media
         input_file = FSInputFile(str(path))
         sender = self._media_sender(media_kind)
         if len(text) <= _CAPTION_LIMIT:
-            await self._send_with_retry(
-                sender,
-                admin_id,
-                input_file,
+            sent = await self._send_media_with_fallback(
+                sender=sender,
+                admin_id=admin_id,
+                input_file=input_file,
+                media_kind=media_kind,
+                post_id=post.post_id,
                 caption=text,
                 reply_markup=keyboard,
+                parse_mode="HTML",
             )
-            return
+            return self._message_id(sent)
 
-        await self._send_with_retry(sender, admin_id, input_file)
-        await self._send_with_retry(
-            self._bot.send_message, admin_id, text, reply_markup=keyboard
+        await self._send_media_with_fallback(
+            sender=sender,
+            admin_id=admin_id,
+            input_file=input_file,
+            media_kind=media_kind,
+            post_id=post.post_id,
         )
+        sent = await self._send_with_retry(
+            self._bot.send_message,
+            admin_id,
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return self._message_id(sent)
+
+    @staticmethod
+    def _message_id(message: object) -> int:
+        """Return the Telegram message id from an aiogram message object."""
+        message_id = getattr(message, "message_id", None)
+        if not isinstance(message_id, int):
+            raise TelegramPublishError("Telegram send returned no message_id")
+        return message_id
 
     def _media_sender(self, kind: MediaKind) -> object:
         """Return the Bot API send method for the media kind."""
@@ -186,6 +262,52 @@ class AiogramApprovalNotifier:
         if kind == MediaKind.VIDEO:
             return self._bot.send_video
         return self._bot.send_document
+
+    async def _send_media_with_fallback(
+        self,
+        sender: object,
+        admin_id: int,
+        input_file: FSInputFile,
+        media_kind: MediaKind,
+        post_id: str,
+        **kwargs: object,
+    ) -> object:
+        """
+        Send preview media and fall back to document for problematic videos.
+
+        Args:
+            sender: Primary aiogram media send method.
+            admin_id: Admin chat id.
+            input_file: Local media file.
+            media_kind: Stored media kind.
+            post_id: Post id for structured logs.
+            **kwargs: Bot API send arguments such as caption and keyboard.
+
+        Returns:
+            The aiogram message returned by Telegram.
+
+        Raises:
+            Exception: Re-raises non-video failures and document fallback
+            failures so the approval queue retries normally.
+        """
+        try:
+            return await self._send_with_retry(sender, admin_id, input_file, **kwargs)
+        except Exception as exc:
+            if media_kind != MediaKind.VIDEO:
+                raise
+            logger.warning(
+                "Approval video preview failed; retrying as document "
+                "admin=%s post=%s error=%s",
+                admin_id,
+                post_id,
+                exc,
+            )
+            return await self._send_with_retry(
+                self._bot.send_document,
+                admin_id,
+                input_file,
+                **kwargs,
+            )
 
     async def _source_label(self, post: Post) -> str | None:
         """Return a readable source channel label for the preview."""

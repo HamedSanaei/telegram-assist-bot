@@ -1,4 +1,4 @@
-"""Unit tests for AI provider fallback logic (z.ai -> DeepSeek)."""
+"""Unit tests for AI provider chain fallback logic."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from src.shared.errors import (
     DuplicateDetectionError,
     InvalidPostError,
     PostClassificationError,
+    QualityScoringError,
 )
 from tests.unit.application.fakes import FakeAiProvider
 
@@ -52,6 +53,39 @@ class TestClassifyFallback:
         with pytest.raises(InvalidPostError):
             await service.classify_post("   ")
 
+    async def test_rate_limited_provider_is_skipped_on_next_call(self) -> None:
+        primary = FakeAiProvider(
+            name="google_ai_studio",
+            fail=True,
+            fail_message="google_ai_studio: HTTP 429 for model 'gemini': quota",
+        )
+        fallback = FakeAiProvider(name="deepseek", category=PostCategory.BREAKING_NEWS)
+        service = AiService([primary, fallback])
+
+        first = await service.classify_post("خبر اول")
+        second = await service.classify_post("خبر دوم")
+
+        assert first.provider == "deepseek"
+        assert second.provider == "deepseek"
+        assert primary.classify_calls == 1
+        assert fallback.classify_calls == 2
+
+    async def test_quota_forbidden_provider_is_skipped_on_next_call(self) -> None:
+        primary = FakeAiProvider(
+            name="openrouter",
+            fail=True,
+            fail_message="openrouter: HTTP 403 for model 'm': quota exceeded",
+        )
+        fallback = FakeAiProvider(name="deepseek", category=PostCategory.TECHNOLOGY)
+        service = AiService([primary, fallback])
+
+        first = await service.classify_post("خبر اول")
+        second = await service.classify_post("خبر دوم")
+
+        assert first.provider == "deepseek"
+        assert second.provider == "deepseek"
+        assert primary.classify_calls == 1
+
 
 class TestDuplicateFallback:
     """Fallback behavior for duplicate detection."""
@@ -83,3 +117,48 @@ class TestDuplicateFallback:
         result = await service.is_duplicate("متن", [])
         assert result.is_duplicate is False
         assert primary.duplicate_calls == 0
+
+
+class TestCombinedAnalysisFallback:
+    """Fallback behavior for combined classification and duplicate checks."""
+
+    async def test_analyzes_with_first_healthy_provider(self) -> None:
+        primary = FakeAiProvider(name="google_ai_studio", fail=True)
+        fallback = FakeAiProvider(
+            name="deepseek", category=PostCategory.WAR, duplicate=True
+        )
+        service = AiService([primary, fallback])
+
+        result = await service.analyze_post("خبر جنگ", ["خبر مشابه"])
+
+        assert result.provider == "deepseek"
+        assert result.category == PostCategory.WAR
+        assert result.is_duplicate is True
+
+
+class TestQualityScoringFallback:
+    """Fallback behavior for quality scoring."""
+
+    async def test_scores_with_first_healthy_provider_in_chain(self) -> None:
+        google = FakeAiProvider(name="google_ai_studio", fail=True)
+        groq = FakeAiProvider(name="groq", score=8.5)
+        deepseek = FakeAiProvider(name="deepseek", score=6.0)
+        service = AiService([google, groq, deepseek])
+        result = await service.score_post(
+            "خبر مهم",
+            PostCategory.GENERAL_NEWS,
+            {"views": 1000},
+        )
+        assert result.provider == "groq"
+        assert result.score == 8.5
+        assert deepseek.score_calls == 0
+
+    async def test_raises_when_all_score_providers_fail(self) -> None:
+        service = AiService(
+            [
+                FakeAiProvider(name="google_ai_studio", fail=True),
+                FakeAiProvider(name="groq", fail=True),
+            ]
+        )
+        with pytest.raises(QualityScoringError):
+            await service.score_post("متن", PostCategory.GENERAL_NEWS, {})

@@ -7,16 +7,20 @@ from decimal import Decimal
 
 from src.domain.entities import (
     AdminUser,
+    ApprovalMessageRef,
     DestinationChannel,
     DollarPrice,
     Post,
+    PublishLogEntry,
     QueueItem,
     VpnConfig,
 )
 from src.domain.enums import PostCategory, QueueItemType, QueueStatus
 from src.domain.interfaces import (
     AiClassificationResult,
+    AiPostAnalysisResult,
     DuplicateCheckResult,
+    QualityScoreResult,
     VpnTestResult,
 )
 from src.shared.errors import AiProviderError, TelegramPublishError
@@ -30,28 +34,70 @@ class FakeAiProvider:
         name: str = "fake",
         category: PostCategory = PostCategory.GENERAL_NEWS,
         duplicate: bool = False,
+        score: float = 7.0,
+        advertisement: bool = False,
         fail: bool = False,
+        fail_message: str | None = None,
     ) -> None:
         self.name = name
         self._category = category
         self._duplicate = duplicate
+        self._score = score
+        self._advertisement = advertisement
         self._fail = fail
+        self._fail_message = fail_message
         self.classify_calls = 0
         self.duplicate_calls = 0
+        self.score_calls = 0
+        self.last_existing_texts: list[str] = []
 
     async def classify_post(self, text: str) -> AiClassificationResult:
         self.classify_calls += 1
         if self._fail:
-            raise AiProviderError(f"{self.name} is down")
+            raise AiProviderError(self._fail_message or f"{self.name} is down")
         return AiClassificationResult(category=self._category, provider=self.name)
 
     async def is_duplicate(
         self, new_text: str, existing_texts: list[str]
     ) -> DuplicateCheckResult:
         self.duplicate_calls += 1
+        self.last_existing_texts = list(existing_texts)
         if self._fail:
-            raise AiProviderError(f"{self.name} is down")
+            raise AiProviderError(self._fail_message or f"{self.name} is down")
         return DuplicateCheckResult(is_duplicate=self._duplicate, provider=self.name)
+
+    async def analyze_post(
+        self, new_text: str, existing_texts: list[str]
+    ) -> AiPostAnalysisResult:
+        """Return scripted duplicate and classification data in one call."""
+        self.duplicate_calls += 1
+        self.classify_calls += 1
+        self.last_existing_texts = list(existing_texts)
+        if self._fail:
+            raise AiProviderError(self._fail_message or f"{self.name} is down")
+        return AiPostAnalysisResult(
+            category=self._category,
+            is_duplicate=self._duplicate if existing_texts else False,
+            provider=self.name,
+            is_advertisement=self._advertisement,
+            reason="تحلیل آزمایشی",
+        )
+
+    async def score_post(
+        self,
+        text: str,
+        category: PostCategory | None,
+        metrics: dict[str, object],
+    ) -> QualityScoreResult:
+        self.score_calls += 1
+        if self._fail:
+            raise AiProviderError(self._fail_message or f"{self.name} is down")
+        return QualityScoreResult(
+            score=self._score,
+            reason="امتیاز آزمایشی",
+            provider=self.name,
+            raw_metrics=dict(metrics),
+        )
 
 
 class FakePostRepository:
@@ -67,13 +113,32 @@ class FakePostRepository:
         return self.posts.get(post_id)
 
     async def find_by_content_hash(self, content_hash: str) -> Post | None:
+        fallback: Post | None = None
         for post in self.posts.values():
             if post.content_hash == content_hash:
+                if not post.is_duplicate and not post.skipped_reason:
+                    return post
+                fallback = fallback or post
+        return fallback
+
+    async def find_by_source_message(
+        self, source_chat_id: int, source_message_id: int, grouped_id: int | None = None
+    ) -> Post | None:
+        for post in self.posts.values():
+            if (
+                post.source_chat_id == source_chat_id
+                and post.source_message_id == source_message_id
+                and post.grouped_id == grouped_id
+            ):
                 return post
         return None
 
     async def list_recent_texts(self, limit: int) -> list[str]:
-        texts = [p.text for p in self.posts.values() if p.text]
+        texts = [
+            p.text
+            for p in self.posts.values()
+            if p.text and not p.is_duplicate and not p.skipped_reason
+        ]
         return texts[-limit:]
 
     async def update_vpn_configs(self, post_id: str, configs: list[VpnConfig]) -> None:
@@ -145,6 +210,24 @@ class FakeQueueRepository:
                 count += 1
         return count
 
+    async def has_active_or_successful_post_item(
+        self, post_id: str, item_types: set[QueueItemType]
+    ) -> bool:
+        active_statuses = {
+            QueueStatus.PENDING,
+            QueueStatus.PROCESSING,
+            QueueStatus.WAITING_APPROVAL,
+            QueueStatus.APPROVED,
+            QueueStatus.COMPLETED,
+            QueueStatus.PUBLISHED,
+        }
+        return any(
+            item.payload.get("post_id") == post_id
+            and item.type in item_types
+            and item.status in active_statuses
+            for item in self.items
+        )
+
     def _pending_scheduled(self) -> list[QueueItem]:
         return [
             item
@@ -169,6 +252,84 @@ class FakeQueueRepository:
             for item in self._pending_scheduled()
             if item.payload.get("post_id") == post_id
         }
+
+
+class FakeApprovalRequestRepository:
+    """In-memory approval request idempotency repository."""
+
+    def __init__(self) -> None:
+        self.requested: set[str] = set()
+
+    async def has_requested(self, post_id: str) -> bool:
+        """Return whether the post id has been recorded."""
+        return post_id in self.requested
+
+    async def record_requested(self, post_id: str) -> None:
+        """Record one sent approval request."""
+        self.requested.add(post_id)
+
+    async def list_requested_post_ids(self) -> list[str]:
+        """Return requested post ids in deterministic order."""
+        return sorted(self.requested)
+
+
+class FakeApprovalMessageRepository:
+    """In-memory approval message reference repository."""
+
+    def __init__(self) -> None:
+        self.refs: list[ApprovalMessageRef] = []
+        self.deactivated: set[int] = set()
+
+    async def record_messages(self, refs: list[ApprovalMessageRef]) -> None:
+        """Record delivered approval message refs."""
+        for ref in refs:
+            ref.id = len(self.refs) + 1
+            self.refs.append(ref)
+
+    async def list_active(self, post_id: str) -> list[ApprovalMessageRef]:
+        """Return active refs for a post."""
+        return [
+            ref
+            for ref in self.refs
+            if ref.post_id == post_id and ref.active and ref.id not in self.deactivated
+        ]
+
+    async def set_delivery_mode(
+        self, post_id: str, chat_id: int, message_id: int, delivery_mode: str
+    ) -> None:
+        """Update one ref's delivery mode."""
+        for ref in self.refs:
+            if (
+                ref.post_id == post_id
+                and ref.chat_id == chat_id
+                and ref.message_id == message_id
+            ):
+                ref.delivery_mode = delivery_mode
+
+    async def deactivate(self, message_ref_id: int) -> None:
+        """Deactivate one ref by id."""
+        self.deactivated.add(message_ref_id)
+
+    async def list_active_post_ids(self) -> list[str]:
+        """Return post ids with active refs."""
+        return sorted({ref.post_id for ref in await self.list_active_refs()})
+
+    async def deactivate_admins_except(self, admin_user_ids: set[int]) -> int:
+        """Deactivate refs belonging to removed admins."""
+        count = 0
+        for ref in self.refs:
+            if ref.admin_user_id not in admin_user_ids and ref.id is not None:
+                self.deactivated.add(ref.id)
+                count += 1
+        return count
+
+    async def list_active_refs(self) -> list[ApprovalMessageRef]:
+        """Return all active refs."""
+        return [
+            ref
+            for ref in self.refs
+            if ref.active and ref.id not in self.deactivated
+        ]
 
 
 class FakeChannelRepository:
@@ -221,6 +382,17 @@ class FakeChannelRepository:
     async def disable_source(self, identifier: str) -> bool:
         return False
 
+    async def disable_sources_except(self, identifiers: set[str]) -> int:
+        return 0
+
+    async def disable_destinations_except(self, chat_ids: set[int]) -> int:
+        before = len([channel for channel in self.destinations if channel.enabled])
+        for channel in self.destinations:
+            if channel.chat_id not in chat_ids:
+                channel.enabled = False
+        after = len([channel for channel in self.destinations if channel.enabled])
+        return before - after
+
 
 class FakeAdminRepository:
     """Set-backed admin repository."""
@@ -230,6 +402,9 @@ class FakeAdminRepository:
 
     async def upsert(self, admin: AdminUser) -> None:
         self.admin_ids.add(admin.telegram_user_id)
+
+    async def replace_all(self, admins: list[AdminUser]) -> None:
+        self.admin_ids = {admin.telegram_user_id for admin in admins}
 
     async def is_admin(self, telegram_user_id: int) -> bool:
         return telegram_user_id in self.admin_ids
@@ -242,20 +417,121 @@ class FakePublishLogRepository:
     """Dict-backed publish log."""
 
     def __init__(self) -> None:
-        self.records: dict[tuple[str, int], int] = {}
+        self.records: dict[tuple[str, int], PublishLogEntry] = {}
         self.published_times: dict[int, datetime] = {}
 
+    async def has_any_delivery_record(self, post_id: str) -> bool:
+        """Return whether the fake has any publish-log row for the post."""
+        return any(pid == post_id for pid, _ in self.records)
+
     async def is_published(self, post_id: str, channel_chat_id: int) -> bool:
-        return (post_id, channel_chat_id) in self.records
+        record = self.records.get((post_id, channel_chat_id))
+        return (
+            record is not None
+            and record.mode == "immediate"
+            and record.status in {"reserved", "published"}
+        )
 
     async def record_published(
         self, post_id: str, channel_chat_id: int, message_id: int
     ) -> None:
-        self.records[(post_id, channel_chat_id)] = message_id
+        self.records[(post_id, channel_chat_id)] = PublishLogEntry(
+            post_id=post_id,
+            channel_chat_id=channel_chat_id,
+            mode="immediate",
+            status="published",
+            message_id=message_id,
+            published_at=datetime.now(timezone.utc),
+        )
         self.published_times[channel_chat_id] = datetime.now(timezone.utc)
 
+    async def try_reserve_publish(
+        self, post_id: str, channel_chat_id: int, mode: str
+    ) -> bool:
+        key = (post_id, channel_chat_id)
+        if key in self.records and self.records[key].status != "removed":
+            return False
+        self.records[key] = PublishLogEntry(
+            post_id=post_id,
+            channel_chat_id=channel_chat_id,
+            mode=mode,
+            status="reserved",
+            published_at=datetime.now(timezone.utc),
+        )
+        return True
+
+    async def mark_published(
+        self, post_id: str, channel_chat_id: int, message_id: int
+    ) -> None:
+        self.records[(post_id, channel_chat_id)] = PublishLogEntry(
+            post_id=post_id,
+            channel_chat_id=channel_chat_id,
+            mode="immediate",
+            status="published",
+            message_id=message_id,
+            published_at=datetime.now(timezone.utc),
+        )
+        self.published_times[channel_chat_id] = datetime.now(timezone.utc)
+
+    async def mark_scheduled(
+        self,
+        post_id: str,
+        channel_chat_id: int,
+        message_id: int,
+        scheduled_at: datetime,
+    ) -> None:
+        self.records[(post_id, channel_chat_id)] = PublishLogEntry(
+            post_id=post_id,
+            channel_chat_id=channel_chat_id,
+            mode="scheduled",
+            status="scheduled",
+            message_id=message_id,
+            published_at=datetime.now(timezone.utc),
+            scheduled_at=scheduled_at,
+        )
+
+    async def release_reservation(self, post_id: str, channel_chat_id: int) -> None:
+        key = (post_id, channel_chat_id)
+        if key in self.records and self.records[key].status == "reserved":
+            del self.records[key]
+
     async def published_channels(self, post_id: str) -> set[int]:
-        return {chat for (pid, chat) in self.records if pid == post_id}
+        return {
+            chat
+            for (pid, chat), record in self.records.items()
+            if pid == post_id
+            and record.mode == "immediate"
+            and record.status in {"reserved", "published"}
+        }
+
+    async def scheduled_channels(self, post_id: str) -> set[int]:
+        return {
+            chat
+            for (pid, chat), record in self.records.items()
+            if pid == post_id
+            and record.mode == "scheduled"
+            and record.status in {"reserved", "scheduled"}
+        }
+
+    async def get_active_record(
+        self, post_id: str, channel_chat_id: int
+    ) -> PublishLogEntry | None:
+        record = self.records.get((post_id, channel_chat_id))
+        if record is None or record.status == "removed":
+            return None
+        return record
+
+    async def mark_removed(self, post_id: str, channel_chat_id: int) -> None:
+        record = self.records[(post_id, channel_chat_id)]
+        self.records[(post_id, channel_chat_id)] = PublishLogEntry(
+            post_id=record.post_id,
+            channel_chat_id=record.channel_chat_id,
+            mode=record.mode,
+            status="removed",
+            published_at=record.published_at,
+            scheduled_at=record.scheduled_at,
+            removed_at=datetime.now(timezone.utc),
+        )
 
     async def last_published_at(self, channel_chat_id: int) -> datetime | None:
         return self.published_times.get(channel_chat_id)
@@ -282,6 +558,8 @@ class FakePublisher:
         self.texts: list[tuple[int, str]] = []
         self.posts: list[tuple[int, str]] = []
         self.post_texts: list[tuple[int, str]] = []
+        self.post_entities: list[tuple[int, list[object]]] = []
+        self.deleted: list[tuple[int, int]] = []
         self._fail = fail
         self._next_message_id = 100
 
@@ -297,8 +575,75 @@ class FakePublisher:
             raise TelegramPublishError("send failed")
         self.posts.append((chat_id, post.post_id))
         self.post_texts.append((chat_id, post.text))
+        self.post_entities.append((chat_id, list(post.text_entities)))
         self._next_message_id += 1
         return self._next_message_id
+
+    async def delete_message(self, chat_id: int, message_id: int) -> None:
+        if self._fail:
+            raise TelegramPublishError("delete failed")
+        self.deleted.append((chat_id, message_id))
+
+
+class FakeScheduledPublisher:
+    """Records native Telegram scheduled posts for approval tests."""
+
+    def __init__(self, latest: datetime | None = None) -> None:
+        self.latest = latest
+        self.scheduled: list[tuple[int, str, datetime]] = []
+        self.deleted: list[tuple[int, int]] = []
+        self._next_message_id = 500
+
+    async def latest_scheduled_at(self, chat_id: int) -> datetime | None:
+        """Return the scripted latest schedule time."""
+        return self.latest
+
+    async def schedule_post(
+        self, chat_id: int, post: Post, scheduled_at: datetime
+    ) -> int:
+        """Record one scheduled post and return a fake message id."""
+        self.scheduled.append((chat_id, post.post_id, scheduled_at))
+        self.latest = scheduled_at
+        self._next_message_id += 1
+        return self._next_message_id
+
+    async def delete_scheduled_message(self, chat_id: int, message_id: int) -> None:
+        """Record one scheduled message deletion."""
+        self.deleted.append((chat_id, message_id))
+
+
+class FakeMetadataRefresher:
+    """Returns scripted source metrics for quality-score tests."""
+
+    def __init__(self, metrics: object | None = None) -> None:
+        self.metrics = metrics
+        self.calls: list[tuple[int, int]] = []
+
+    async def refresh_metrics(self, source_chat_id: int, source_message_id: int) -> object | None:
+        """Record one refresh attempt and return the scripted metrics."""
+        self.calls.append((source_chat_id, source_message_id))
+        return self.metrics
+
+
+class FakeApprovalNotifier:
+    """Records approval previews sent by the approval service."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, list[int]]] = []
+
+    async def send_approval_request(
+        self, post: Post, channels: list[DestinationChannel]
+    ) -> list[ApprovalMessageRef]:
+        """Record the requested post id and destination channel ids."""
+        self.sent.append((post.post_id, [channel.chat_id for channel in channels]))
+        return [
+            ApprovalMessageRef(
+                post_id=post.post_id,
+                admin_user_id=1,
+                chat_id=1,
+                message_id=len(self.sent),
+            )
+        ]
 
 
 class FakeVpnTester:

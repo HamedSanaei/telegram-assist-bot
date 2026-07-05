@@ -1,4 +1,4 @@
-"""DeepSeek provider (fallback AI provider)."""
+"""Compatibility wrapper for the DeepSeek OpenAI-compatible provider."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ class DeepSeekProvider(OpenAiCompatibleProvider):
         Args:
             api_key: DeepSeek API key.
             base_url: API base URL.
-            model: Optional DeepSeek model override (``ai.deepseek_model``);
-                defaults to deepseek-chat. Must be a model that exists on
-                DeepSeek — model names of other providers are not valid here.
+            model: Optional DeepSeek model override. Defaults to
+                deepseek-chat. Must be a model that exists on DeepSeek;
+                model names of other providers are not valid here.
             timeout_seconds: HTTP timeout for every request.
         """
         super().__init__(

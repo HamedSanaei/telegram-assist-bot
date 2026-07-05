@@ -7,12 +7,19 @@ from decimal import Decimal
 
 import pytest
 
-from src.domain.entities import AdminUser, DestinationChannel, DollarPrice
+from src.domain.entities import (
+    AdminUser,
+    ApprovalMessageRef,
+    DestinationChannel,
+    DollarPrice,
+)
 from src.domain.enums import ChannelKind, QueueItemType, QueueStatus
 from src.infrastructure.db.sqlite.connection import Database
 from src.infrastructure.db.sqlite.migrations import apply_migrations
 from src.infrastructure.db.sqlite.repositories import (
     SqliteAdminRepository,
+    SqliteApprovalMessageRepository,
+    SqliteApprovalRequestRepository,
     SqliteChannelRepository,
     SqlitePriceHistoryRepository,
     SqlitePublishLogRepository,
@@ -35,6 +42,83 @@ class TestMigrations:
 
     async def test_migrations_are_repeatable(self, db: Database) -> None:
         assert await apply_migrations(db) == 0
+
+    async def test_existing_column_without_marker_is_repaired(
+        self, tmp_path
+    ) -> None:
+        database = Database(tmp_path / "partial.db")
+        await database.connect()
+        await database.executescript(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations (version, applied_at)
+                VALUES (1, 'now'), (2, 'now'), (3, 'now');
+
+            CREATE TABLE destination_channels (
+                chat_id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'news',
+                publish_usd_price INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                public_id TEXT NOT NULL DEFAULT '',
+                post_interval_minutes INTEGER NOT NULL DEFAULT 30
+            );
+
+            CREATE TABLE source_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                chat_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE admins (
+                telegram_user_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE queue_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                payload TEXT NOT NULL DEFAULT '{}',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                scheduled_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE publish_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id TEXT NOT NULL,
+                channel_chat_id INTEGER NOT NULL,
+                message_id INTEGER,
+                published_at TEXT NOT NULL,
+                UNIQUE (post_id, channel_chat_id)
+            );
+
+            CREATE TABLE price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                price TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL
+            );
+            """
+        )
+
+        applied = await apply_migrations(database)
+
+        assert applied == 5
+        row = await database.fetchone(
+            "SELECT 1 FROM schema_migrations WHERE version = 4"
+        )
+        assert row is not None
+        await database.close()
 
 
 class TestQueueRepository:
@@ -131,6 +215,37 @@ class TestQueueRepository:
         assert await repo.scheduled_publish_channels("p1") == {-100, -200}
         await repo.mark_status(first, QueueStatus.PUBLISHED)
         assert await repo.scheduled_publish_channels("p1") == {-200}
+
+    async def test_has_active_or_successful_post_item(self, db: Database) -> None:
+        repo = SqliteQueueRepository(db)
+        first = await repo.enqueue(QueueItemType.VPN_TEST, {"post_id": "p1"})
+        assert await repo.has_active_or_successful_post_item(
+            "p1", {QueueItemType.VPN_TEST}
+        )
+
+        await repo.mark_status(first, QueueStatus.FAILED)
+        assert not await repo.has_active_or_successful_post_item(
+            "p1", {QueueItemType.VPN_TEST}
+        )
+
+        second = await repo.enqueue(
+            QueueItemType.APPROVAL_REQUEST, {"post_id": "p1"}
+        )
+        await repo.mark_status(second, QueueStatus.WAITING_APPROVAL)
+        assert await repo.has_active_or_successful_post_item(
+            "p1", {QueueItemType.APPROVAL_REQUEST}
+        )
+
+
+class TestApprovalRequestRepository:
+    """Tests for :class:`SqliteApprovalRequestRepository`."""
+
+    async def test_records_sent_approval_request_once(self, db: Database) -> None:
+        repo = SqliteApprovalRequestRepository(db)
+        assert await repo.has_requested("p1") is False
+        await repo.record_requested("p1")
+        await repo.record_requested("p1")
+        assert await repo.has_requested("p1") is True
 
 
 class TestChannelRepository:
@@ -235,6 +350,19 @@ class TestChannelRepository:
         )
         assert await repo.get_source_label(-100123) == "کانال منبع (@source_channel)"
 
+    async def test_disable_missing_sources_and_destinations(self, db: Database) -> None:
+        repo = SqliteChannelRepository(db)
+        await repo.upsert_source("@keep")
+        await repo.upsert_source("@drop")
+        await repo.upsert_destination(DestinationChannel(chat_id=-100, title="Keep"))
+        await repo.upsert_destination(DestinationChannel(chat_id=-200, title="Drop"))
+
+        assert await repo.disable_sources_except({"@keep"}) == 1
+        assert await repo.disable_destinations_except({-100}) == 1
+
+        assert await repo.list_sources() == ["@keep"]
+        assert [channel.chat_id for channel in await repo.list_destinations()] == [-100]
+
 
 class TestAdminRepository:
     """Tests for :class:`SqliteAdminRepository`."""
@@ -246,17 +374,113 @@ class TestAdminRepository:
         assert await repo.is_admin(43) is False
         assert await repo.list_user_ids() == [42]
 
+    async def test_replace_all_makes_config_authoritative(self, db: Database) -> None:
+        repo = SqliteAdminRepository(db)
+        await repo.upsert(AdminUser(telegram_user_id=1))
+        await repo.upsert(AdminUser(telegram_user_id=2))
+
+        await repo.replace_all([AdminUser(telegram_user_id=2), AdminUser(telegram_user_id=3)])
+
+        assert await repo.list_user_ids() == [2, 3]
+
 
 class TestPublishLogRepository:
     """Tests for :class:`SqlitePublishLogRepository`."""
 
     async def test_publish_log_prevents_duplicates(self, db: Database) -> None:
         repo = SqlitePublishLogRepository(db)
+        assert await repo.has_any_delivery_record("p1") is False
         assert await repo.is_published("p1", -100) is False
         await repo.record_published("p1", -100, 555)
         await repo.record_published("p1", -100, 556)
+        assert await repo.has_any_delivery_record("p1") is True
         assert await repo.is_published("p1", -100) is True
         assert await repo.published_channels("p1") == {-100}
+
+    async def test_publish_reservation_is_atomic_and_releasable(
+        self, db: Database
+    ) -> None:
+        repo = SqlitePublishLogRepository(db)
+
+        assert await repo.try_reserve_publish("p1", -100, "immediate") is True
+        assert await repo.try_reserve_publish("p1", -100, "immediate") is False
+        assert await repo.is_published("p1", -100) is True
+
+        await repo.release_reservation("p1", -100)
+
+        assert await repo.is_published("p1", -100) is False
+
+    async def test_scheduled_and_removed_publish_states(self, db: Database) -> None:
+        repo = SqlitePublishLogRepository(db)
+        scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        assert await repo.try_reserve_publish("p1", -100, "scheduled") is True
+        await repo.mark_scheduled("p1", -100, 777, scheduled_at)
+
+        record = await repo.get_active_record("p1", -100)
+        assert record is not None
+        assert record.status == "scheduled"
+        assert record.mode == "scheduled"
+        assert record.message_id == 777
+        assert await repo.scheduled_channels("p1") == {-100}
+        assert await repo.published_channels("p1") == set()
+
+        await repo.mark_removed("p1", -100)
+
+        assert await repo.has_any_delivery_record("p1") is True
+        assert await repo.get_active_record("p1", -100) is None
+        assert await repo.try_reserve_publish("p1", -100, "immediate") is True
+
+
+class TestApprovalMessageRepository:
+    """Tests for :class:`SqliteApprovalMessageRepository`."""
+
+    async def test_records_modes_and_deactivation(self, db: Database) -> None:
+        repo = SqliteApprovalMessageRepository(db)
+        await repo.record_messages(
+            [
+                ApprovalMessageRef(
+                    post_id="p1",
+                    admin_user_id=42,
+                    chat_id=42,
+                    message_id=10,
+                )
+            ]
+        )
+        refs = await repo.list_active("p1")
+        assert len(refs) == 1
+        assert refs[0].delivery_mode == "s"
+
+        await repo.set_delivery_mode("p1", 42, 10, "i")
+        refs = await repo.list_active("p1")
+        assert refs[0].delivery_mode == "i"
+
+        await repo.deactivate(refs[0].id)
+        assert await repo.list_active("p1") == []
+
+    async def test_deactivates_messages_for_removed_admins(self, db: Database) -> None:
+        repo = SqliteApprovalMessageRepository(db)
+        await repo.record_messages(
+            [
+                ApprovalMessageRef(
+                    post_id="p1",
+                    admin_user_id=1,
+                    chat_id=1,
+                    message_id=10,
+                ),
+                ApprovalMessageRef(
+                    post_id="p1",
+                    admin_user_id=2,
+                    chat_id=2,
+                    message_id=20,
+                ),
+            ]
+        )
+
+        assert await repo.deactivate_admins_except({2}) == 1
+
+        refs = await repo.list_active("p1")
+        assert [ref.admin_user_id for ref in refs] == [2]
 
 
 class TestPriceHistoryRepository:

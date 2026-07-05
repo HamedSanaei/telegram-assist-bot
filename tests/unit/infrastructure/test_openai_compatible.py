@@ -39,6 +39,21 @@ class TestChatErrors:
         assert "fake-model" in message
         assert "Model Not Exist" in message
 
+    async def test_http_429_fails_fast_for_provider_chain_fallback(self) -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(429, json={"error": {"message": "quota"}})
+
+        provider = _provider(handler)
+        with pytest.raises(AiProviderError) as excinfo:
+            await provider.classify_post("متن خبر")
+
+        assert calls == 1
+        assert "HTTP 429" in str(excinfo.value)
+
     async def test_successful_classification_roundtrip(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content.decode("utf-8"))
@@ -55,4 +70,84 @@ class TestChatErrors:
         provider = _provider(handler)
         result = await provider.classify_post("متن فناوری")
         assert result.category.value == "technology"
+        assert result.provider == "fakeai"
+
+    async def test_successful_combined_analysis_roundtrip(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["model"] == "fake-model"
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"category": "breaking_news", '
+                                    '"is_duplicate": true, '
+                                    '"is_advertisement": false, '
+                                    '"matched_index": 0, '
+                                    '"reason": "خبر تکراری است"}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        provider = _provider(handler)
+        result = await provider.analyze_post("خبر فوری", ["خبر فوری قبلی"])
+        assert result.category.value == "breaking_news"
+        assert result.is_duplicate is True
+        assert result.is_advertisement is False
+        assert result.matched_index == 0
+        assert result.provider == "fakeai"
+
+    async def test_successful_analysis_detects_advertisement(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"category": "irrelevant", '
+                                    '"is_duplicate": false, '
+                                    '"is_advertisement": true, '
+                                    '"matched_index": null, '
+                                    '"reason": "تبلیغ کانال است"}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        provider = _provider(handler)
+        result = await provider.analyze_post("عضو کانال ما شوید", [])
+        assert result.is_advertisement is True
+        assert result.reason == "تبلیغ کانال است"
+
+    async def test_successful_quality_score_roundtrip(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["model"] == "fake-model"
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"score": 82, "reason": "خبر ارزشمند است"}'
+                            }
+                        }
+                    ]
+                },
+            )
+
+        provider = _provider(handler)
+        result = await provider.score_post("متن خبر", None, {"views": 100})
+        assert result.score == 82
+        assert result.reason == "خبر ارزشمند است"
         assert result.provider == "fakeai"

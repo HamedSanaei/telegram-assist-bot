@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 from src.domain.entities import DestinationChannel
-from src.presentation.approval_bot.keyboards import (
-    MODE_IMMEDIATE,
-    MODE_SCHEDULED,
-    build_channel_keyboard,
-    build_confirm_keyboard,
-)
+from src.presentation.approval_bot.keyboards import build_channel_keyboard
 
 POST_ID = "a" * 32
 NEWS = DestinationChannel(chat_id=-100200, title="News", post_interval_minutes=15)
@@ -23,37 +18,37 @@ def _flat_buttons(markup) -> list:
 class TestChannelKeyboard:
     """Tests for :func:`build_channel_keyboard`."""
 
-    def test_default_mode_is_scheduled(self) -> None:
+    def test_each_channel_has_immediate_and_schedule_buttons(self) -> None:
         markup = build_channel_keyboard(POST_ID, [NEWS], published_chat_ids=set())
-        toggle = markup.inline_keyboard[0][0]
-        assert toggle.callback_data == f"apv:mode:{POST_ID}:{MODE_IMMEDIATE}"
-        assert "زمان‌بندی" in toggle.text
-        send = markup.inline_keyboard[1][0]
-        assert send.callback_data == f"apv:send:{POST_ID}:{NEWS.chat_id}:{MODE_SCHEDULED}"
+        row = markup.inline_keyboard[0]
+        assert len(row) == 2
+        assert row[0].callback_data == f"apv:pub:{POST_ID}:{NEWS.chat_id}"
+        assert row[1].callback_data == f"apv:sch:{POST_ID}:{NEWS.chat_id}"
+        assert "فوری" in row[0].text
+        assert "اسکجول" in row[1].text
 
-    def test_immediate_mode_marks_buttons(self) -> None:
-        markup = build_channel_keyboard(
-            POST_ID, [NEWS], published_chat_ids=set(), immediate=True
-        )
-        toggle = markup.inline_keyboard[0][0]
-        assert toggle.callback_data == f"apv:mode:{POST_ID}:{MODE_SCHEDULED}"
-        assert "فوری" in toggle.text
-        send = markup.inline_keyboard[1][0]
-        assert send.callback_data == f"apv:send:{POST_ID}:{NEWS.chat_id}:{MODE_IMMEDIATE}"
-
-    def test_published_and_scheduled_channels_are_inert(self) -> None:
+    def test_published_button_stays_clickable_for_delete(self) -> None:
         markup = build_channel_keyboard(
             POST_ID,
-            [NEWS, VPN],
+            [NEWS],
             published_chat_ids={NEWS.chat_id},
-            scheduled_chat_ids={VPN.chat_id},
         )
-        published_button = markup.inline_keyboard[1][0]
-        scheduled_button = markup.inline_keyboard[2][0]
-        assert published_button.text.startswith("✅")
-        assert published_button.callback_data == "apv:nop:pub"
-        assert scheduled_button.text.startswith("⏱")
-        assert scheduled_button.callback_data == "apv:nop:sch"
+        row = markup.inline_keyboard[0]
+        assert row[0].text.startswith("✅ فوری")
+        assert row[0].callback_data == f"apv:pub:{POST_ID}:{NEWS.chat_id}"
+        assert row[1].callback_data == "apv:nop:published"
+
+    def test_scheduled_button_stays_clickable_for_delete(self) -> None:
+        markup = build_channel_keyboard(
+            POST_ID,
+            [NEWS],
+            published_chat_ids=set(),
+            scheduled_chat_ids={NEWS.chat_id},
+        )
+        row = markup.inline_keyboard[0]
+        assert row[0].callback_data == "apv:nop:scheduled"
+        assert row[1].text.startswith("✅ اسکجول")
+        assert row[1].callback_data == f"apv:sch:{POST_ID}:{NEWS.chat_id}"
 
     def test_callback_data_fits_telegram_limit(self) -> None:
         markup = build_channel_keyboard(
@@ -63,25 +58,3 @@ class TestChannelKeyboard:
         )
         for button in _flat_buttons(markup):
             assert len(button.callback_data.encode("utf-8")) <= 64
-
-
-class TestConfirmKeyboard:
-    """Tests for :func:`build_confirm_keyboard`."""
-
-    def test_scheduled_confirm_mentions_interval(self) -> None:
-        markup = build_confirm_keyboard(POST_ID, NEWS, immediate=False)
-        confirm = markup.inline_keyboard[0][0]
-        assert "15" in confirm.text
-        assert confirm.callback_data == (
-            f"apv:cfm:{POST_ID}:{NEWS.chat_id}:{MODE_SCHEDULED}"
-        )
-        cancel = markup.inline_keyboard[1][0]
-        assert cancel.callback_data == f"apv:cxl:{POST_ID}:{MODE_SCHEDULED}"
-
-    def test_immediate_confirm(self) -> None:
-        markup = build_confirm_keyboard(POST_ID, NEWS, immediate=True)
-        confirm = markup.inline_keyboard[0][0]
-        assert "فوری" in confirm.text
-        assert confirm.callback_data == (
-            f"apv:cfm:{POST_ID}:{NEWS.chat_id}:{MODE_IMMEDIATE}"
-        )

@@ -36,10 +36,36 @@ def _valid_config() -> dict:
             "admin_user_ids": [42],
         },
         "ai": {
-            "primary_provider": "zai",
-            "fallback_provider": "deepseek",
-            "zai_api_key": "zk",
-            "deepseek_api_key": "dk",
+            "providers": [
+                {
+                    "name": "google_ai_studio",
+                    "enabled": True,
+                    "api_key": "gk",
+                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "model": "gemini-2.0-flash",
+                },
+                {
+                    "name": "groq",
+                    "enabled": True,
+                    "api_key": "grk",
+                    "base_url": "https://api.groq.com/openai/v1",
+                    "model": "llama-3.3-70b-versatile",
+                },
+                {
+                    "name": "openrouter",
+                    "enabled": True,
+                    "api_key": "ork",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "model": "openai/gpt-4o-mini",
+                },
+                {
+                    "name": "deepseek",
+                    "enabled": True,
+                    "api_key": "dk",
+                    "base_url": "https://api.deepseek.com",
+                    "model": "deepseek-chat",
+                },
+            ],
         },
         "database": {
             "sqlite_path": "data/app.db",
@@ -65,12 +91,20 @@ class TestLoadConfiguration:
         assert config.telegram.source_channels == ["@منبع_خبر"]
         assert config.telegram.collector_daily_backfill_max_messages == 5000
         assert config.telegram.source_refresh_seconds == 60
+        assert config.telegram.scheduler_session == "data/scheduler"
         assert config.telegram.destination_channels[0].title == "کانال خبری"
         assert config.telegram.destination_channels[0].public_id == "@news_dest"
         assert config.telegram.destination_channels[0].publish_usd_price is True
-        assert config.ai.primary_provider == "zai"
+        assert [p.name for p in config.ai.providers] == [
+            "google_ai_studio",
+            "groq",
+            "openrouter",
+            "deepseek",
+        ]
         assert config.storage.retention_days == 14
+        assert config.storage.media_download_timeout_seconds == 60
         assert config.scheduler.usd_price_publish_times == ["09:00", "21:00"]
+        assert config.logging.color_console is True
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigurationError):
@@ -98,15 +132,35 @@ class TestLoadConfiguration:
         """The committed template must always stay parseable."""
         example = Path(__file__).resolve().parents[2] / "config" / "configuration.example.json"
         config = load_configuration(example)
-        assert config.ai.primary_provider == "zai"
-        assert config.ai.fallback_provider == "deepseek"
+        assert [p.name for p in config.ai.providers] == [
+            "google_ai_studio",
+            "groq",
+            "openrouter",
+            "deepseek",
+            "zai",
+        ]
+        assert config.ai.providers[-1].enabled is False
         assert config.usd_price.provider == "nobitex"
         assert config.telegram.collector_daily_backfill_max_messages == 5000
         assert config.telegram.source_refresh_seconds == 60
+        assert config.telegram.scheduler_session == "data/scheduler"
+        assert config.storage.media_download_timeout_seconds == 60
+        assert config.logging.color_console is True
 
     def test_usd_price_provider_defaults_to_nobitex(self, tmp_path: Path) -> None:
         config = load_configuration(_write(tmp_path, _valid_config()))
         assert config.usd_price.provider == "nobitex"
+
+    def test_legacy_ai_provider_keys_still_load(self, tmp_path: Path) -> None:
+        data = _valid_config()
+        data["ai"] = {
+            "primary_provider": "zai",
+            "fallback_provider": "deepseek",
+            "zai_api_key": "zk",
+            "deepseek_api_key": "dk",
+        }
+        config = load_configuration(_write(tmp_path, data))
+        assert [p.name for p in config.ai.providers] == ["zai", "deepseek"]
 
 
 class TestValidateMainAppConfig:
@@ -144,6 +198,15 @@ class TestValidateCollectorConfig:
     def test_negative_source_refresh_rejected(self, tmp_path: Path) -> None:
         data = _valid_config()
         data["telegram"]["source_refresh_seconds"] = -1
+        config = load_configuration(_write(tmp_path, data))
+        with pytest.raises(ConfigurationError):
+            validate_collector_config(config)
+
+    def test_non_positive_media_download_timeout_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        data = _valid_config()
+        data["storage"] = {"media_download_timeout_seconds": 0}
         config = load_configuration(_write(tmp_path, data))
         with pytest.raises(ConfigurationError):
             validate_collector_config(config)

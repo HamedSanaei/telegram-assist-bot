@@ -2,25 +2,46 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
-from src.application.channel_mention_rewriter import rewrite_source_channel_mentions
-from src.domain.entities import DestinationChannel, Post
-from src.domain.enums import QueueItemType
+from src.application.channel_mention_rewriter import (
+    rewrite_source_channel_mentions_with_entities,
+)
+from src.domain.entities import ApprovalMessageRef, DestinationChannel, Post
 from src.domain.interfaces import (
     AdminRepository,
+    ApprovalMessageRepository,
+    ApprovalRequestRepository,
     ApprovalNotifier,
     ChannelRepository,
     MessagePublisher,
     PostRepository,
     PublishLogRepository,
     QueueRepository,
+    ScheduledMessagePublisher,
 )
-from src.shared.errors import ApprovalStateError
+from src.shared.errors import ApprovalStateError, TelegramPublishError
 from src.shared.logging_setup import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ApprovalToggleResult:
+    """
+    Result of one direct approval-button toggle.
+
+    Attributes:
+        action: Short action name: ``published``, ``unpublished``,
+            ``scheduled``, or ``unscheduled``.
+        message_id: Telegram message id when an action created one.
+        scheduled_at: Native Telegram schedule time for scheduled actions.
+    """
+
+    action: str
+    message_id: int | None = None
+    scheduled_at: datetime | None = None
 
 
 class ApprovalService:
@@ -46,6 +67,9 @@ class ApprovalService:
         notifier: ApprovalNotifier | None = None,
         source_identifiers: list[str | int] | None = None,
         queue: QueueRepository | None = None,
+        approval_requests: ApprovalRequestRepository | None = None,
+        approval_messages: ApprovalMessageRepository | None = None,
+        scheduled_publisher: ScheduledMessagePublisher | None = None,
     ) -> None:
         """
         Args:
@@ -61,6 +85,12 @@ class ApprovalService:
                 the selected destination channel public id before publishing.
             queue: Background job queue; required for scheduled publishing
                 (:meth:`schedule_publish`), optional otherwise.
+            approval_requests: Optional repository that prevents sending
+                the same approval preview more than once.
+            approval_messages: Optional repository storing approval-bot
+                message ids for multi-admin keyboard propagation.
+            scheduled_publisher: Optional Telethon user-session publisher
+                used for native Telegram channel scheduling.
         """
         self._posts = posts
         self._publish_log = publish_log
@@ -70,6 +100,9 @@ class ApprovalService:
         self._notifier = notifier
         self._source_identifiers = source_identifiers or []
         self._queue = queue
+        self._approval_requests = approval_requests
+        self._approval_messages = approval_messages
+        self._scheduled_publisher = scheduled_publisher
 
     async def request_approval(self, post_id: str) -> None:
         """
@@ -85,9 +118,101 @@ class ApprovalService:
         post = await self._get_post(post_id)
         if self._notifier is None:
             raise ApprovalStateError("No approval notifier configured")
+        already_requested = (
+            self._approval_requests is not None
+            and await self._approval_requests.has_requested(post_id)
+        )
+        if already_requested:
+            active_refs = (
+                await self._approval_messages.list_active(post_id)
+                if self._approval_messages is not None
+                else []
+            )
+            if active_refs or self._approval_messages is None:
+                logger.info("Approval request already sent post=%s", post_id)
+                return
+            if await self._publish_log.has_any_delivery_record(post_id):
+                logger.info(
+                    "Skipping approval repair for delivered post=%s", post_id
+                )
+                return
+            logger.warning(
+                "Approval request has no active bot messages; resending post=%s",
+                post_id,
+            )
         channels = await self._channels.list_destinations()
-        await self._notifier.send_approval_request(post, channels)
+        message_refs = await self._notifier.send_approval_request(post, channels)
+        if self._approval_messages is not None:
+            await self._approval_messages.record_messages(message_refs)
+        if self._approval_requests is not None:
+            await self._approval_requests.record_requested(post_id)
         logger.info("Approval requested post=%s channels=%d", post_id, len(channels))
+
+    async def repair_orphaned_approval_requests(self) -> int:
+        """
+        Resend approval previews that were recorded but have no active message refs.
+
+        Returns:
+            Number of approval requests successfully repaired.
+
+        Side effects:
+            Sends approval messages again for orphaned posts. Failures are
+            logged and do not stop application startup.
+        """
+        if (
+            self._approval_requests is None
+            or self._approval_messages is None
+            or self._notifier is None
+        ):
+            return 0
+        repaired = 0
+        for post_id in await self._approval_requests.list_requested_post_ids():
+            if await self._approval_messages.list_active(post_id):
+                continue
+            if await self._publish_log.has_any_delivery_record(post_id):
+                logger.info(
+                    "Skipping approval repair for delivered post=%s", post_id
+                )
+                continue
+            try:
+                await self.request_approval(post_id)
+            except Exception as exc:
+                logger.warning(
+                    "Approval repair failed post=%s error=%s", post_id, exc
+                )
+                continue
+            repaired += 1
+        if repaired:
+            logger.warning("Repaired orphaned approval requests count=%d", repaired)
+        return repaired
+
+    async def active_approval_messages(self, post_id: str) -> list[ApprovalMessageRef]:
+        """Return active approval-bot message references for a post."""
+        if self._approval_messages is None:
+            return []
+        return await self._approval_messages.list_active(post_id)
+
+    async def active_approval_post_ids(self) -> list[str]:
+        """Return post ids that still have active approval-bot messages."""
+        if self._approval_messages is None:
+            return []
+        return await self._approval_messages.list_active_post_ids()
+
+    async def set_approval_message_mode(
+        self, post_id: str, chat_id: int, message_id: int, delivery_mode: str
+    ) -> None:
+        """Persist the delivery mode selected on one approval message."""
+        if self._approval_messages is None:
+            return
+        await self._approval_messages.set_delivery_mode(
+            post_id, chat_id, message_id, delivery_mode
+        )
+
+    async def deactivate_approval_message(self, message_ref_id: int) -> None:
+        """Mark an approval message as inactive after Telegram edit failure."""
+        if self._approval_messages is None:
+            return
+        await self._approval_messages.deactivate(message_ref_id)
 
     async def ensure_admin(self, telegram_user_id: int) -> None:
         """
@@ -149,9 +274,19 @@ class ApprovalService:
             raise ApprovalStateError(
                 f"Post {post_id} already published to channel {chat_id}"
             )
+        if not await self._publish_log.try_reserve_publish(
+            post_id, chat_id, "immediate"
+        ):
+            raise ApprovalStateError(
+                f"Post {post_id} already reserved or published to channel {chat_id}"
+            )
         publish_post = await self._post_for_destination(post, channel)
-        message_id = await self._publisher.publish_post(chat_id, publish_post)
-        await self._publish_log.record_published(post_id, chat_id, message_id)
+        try:
+            message_id = await self._publisher.publish_post(chat_id, publish_post)
+        except TelegramPublishError:
+            await self._publish_log.release_reservation(post_id, chat_id)
+            raise
+        await self._publish_log.mark_published(post_id, chat_id, message_id)
         logger.info(
             "Published post=%s channel=%s message=%s admin=%s",
             post_id,
@@ -161,22 +296,68 @@ class ApprovalService:
         )
         return message_id
 
+    async def toggle_publish(
+        self, post_id: str, chat_id: int, admin_user_id: int
+    ) -> ApprovalToggleResult:
+        """
+        Toggle immediate publishing for a post/channel pair.
+
+        If the post is not active for the channel, it is published
+        immediately. If it is already published in immediate mode, the real
+        Telegram channel message is deleted and the state is marked removed.
+
+        Args:
+            post_id: Internal collected post id.
+            chat_id: Destination channel chat id.
+            admin_user_id: Telegram user id of the acting admin.
+
+        Returns:
+            The performed toggle action.
+
+        Raises:
+            ApprovalStateError: When another active mode exists or validation
+                fails.
+            TelegramPublishError: When Telegram publish/delete fails.
+        """
+        record = await self._publish_log.get_active_record(post_id, chat_id)
+        if record is not None:
+            if record.mode != "immediate" or record.status != "published":
+                raise ApprovalStateError(
+                    f"Post {post_id} has active {record.mode}/{record.status} "
+                    f"state for channel {chat_id}"
+                )
+            if record.message_id is None:
+                raise ApprovalStateError(
+                    f"Published post {post_id} channel {chat_id} has no message id"
+                )
+            await self.ensure_admin(admin_user_id)
+            await self._publisher.delete_message(chat_id, record.message_id)
+            await self._publish_log.mark_removed(post_id, chat_id)
+            logger.info(
+                "Deleted published post=%s channel=%s message=%s admin=%s",
+                post_id,
+                chat_id,
+                record.message_id,
+                admin_user_id,
+            )
+            return ApprovalToggleResult(action="unpublished")
+        message_id = await self.publish(post_id, chat_id, admin_user_id)
+        return ApprovalToggleResult(action="published", message_id=message_id)
+
     async def scheduled_channels(self, post_id: str) -> set[int]:
-        """Return chat ids with a pending scheduled publish of this post."""
-        if self._queue is None:
-            return set()
-        return await self._queue.scheduled_publish_channels(post_id)
+        """Return chat ids with an active native scheduled publish."""
+        return await self._publish_log.scheduled_channels(post_id)
 
     async def schedule_publish(
         self, post_id: str, chat_id: int, admin_user_id: int
     ) -> datetime:
         """
-        Queue an approved post for paced publishing to one channel.
+        Upload an approved post into Telegram's native channel schedule.
 
-        Runs the same validations as :meth:`publish`, then enqueues a
-        ``scheduled_publish`` job whose due time keeps at least
-        ``post_interval_minutes`` (per destination channel) between the
-        channel's last publish, its last queued slot, and this post.
+        Runs the same validations as :meth:`publish`, computes a paced slot
+        five minutes after the latest scheduled/published post for that
+        destination, uploads the post through the Telethon user session, and
+        records the result so the same post cannot be scheduled twice.
 
         Args:
             post_id: Internal id of the approved post.
@@ -188,13 +369,13 @@ class ApprovalService:
 
         Raises:
             ApprovalStateError: When validation fails (not an admin, post
-                missing, unknown channel, already published, already
-                queued for this channel, or no queue configured).
+            missing, unknown channel, already published, already scheduled,
+            or no scheduled publisher configured).
         """
-        if self._queue is None:
-            raise ApprovalStateError("No queue configured for scheduled publishing")
+        if self._scheduled_publisher is None:
+            raise ApprovalStateError("No native Telegram scheduler configured")
         await self.ensure_admin(admin_user_id)
-        await self._get_post(post_id)
+        post = await self._get_post(post_id)
         channel = await self._channels.get_destination(chat_id)
         if channel is None or not channel.enabled:
             raise ApprovalStateError(f"Unknown destination channel {chat_id}")
@@ -202,44 +383,106 @@ class ApprovalService:
             raise ApprovalStateError(
                 f"Post {post_id} already published to channel {chat_id}"
             )
-        if chat_id in await self._queue.scheduled_publish_channels(post_id):
+        active = await self._publish_log.get_active_record(post_id, chat_id)
+        if active is not None:
             raise ApprovalStateError(
-                f"Post {post_id} already scheduled for channel {chat_id}"
+                f"Post {post_id} already has active {active.mode}/{active.status} "
+                f"state for channel {chat_id}"
+            )
+        if not await self._publish_log.try_reserve_publish(
+            post_id, chat_id, "scheduled"
+        ):
+            raise ApprovalStateError(
+                f"Post {post_id} already reserved or published to channel {chat_id}"
             )
         scheduled_at = await self._next_publish_slot(channel)
-        await self._queue.enqueue(
-            QueueItemType.SCHEDULED_PUBLISH,
-            {"post_id": post_id, "chat_id": chat_id, "admin_user_id": admin_user_id},
-            scheduled_at=scheduled_at,
+        publish_post = await self._post_for_destination(post, channel)
+        try:
+            message_id = await self._scheduled_publisher.schedule_post(
+                chat_id, publish_post, scheduled_at
+            )
+        except TelegramPublishError:
+            await self._publish_log.release_reservation(post_id, chat_id)
+            raise
+        await self._publish_log.mark_scheduled(
+            post_id, chat_id, message_id, scheduled_at
         )
         logger.info(
-            "Scheduled publish post=%s channel=%s at=%s interval_min=%d admin=%s",
+            "Native Telegram scheduled post=%s channel=%s message=%s at=%s admin=%s",
             post_id,
             chat_id,
+            message_id,
             scheduled_at.isoformat(),
-            channel.post_interval_minutes,
             admin_user_id,
         )
         return scheduled_at
+
+    async def toggle_schedule(
+        self, post_id: str, chat_id: int, admin_user_id: int
+    ) -> ApprovalToggleResult:
+        """
+        Toggle native Telegram scheduling for a post/channel pair.
+
+        If the post is not active for the channel, it is uploaded into the
+        destination channel's native schedule. If it is already scheduled, the
+        scheduled Telegram message is deleted and the state is marked removed.
+        """
+        record = await self._publish_log.get_active_record(post_id, chat_id)
+        if record is not None:
+            if record.mode != "scheduled" or record.status != "scheduled":
+                raise ApprovalStateError(
+                    f"Post {post_id} has active {record.mode}/{record.status} "
+                    f"state for channel {chat_id}"
+                )
+            if self._scheduled_publisher is None:
+                raise ApprovalStateError("No native Telegram scheduler configured")
+            if record.message_id is None:
+                raise ApprovalStateError(
+                    f"Scheduled post {post_id} channel {chat_id} has no message id"
+                )
+            await self.ensure_admin(admin_user_id)
+            await self._scheduled_publisher.delete_scheduled_message(
+                chat_id, record.message_id
+            )
+            await self._publish_log.mark_removed(post_id, chat_id)
+            logger.info(
+                "Deleted scheduled post=%s channel=%s message=%s admin=%s",
+                post_id,
+                chat_id,
+                record.message_id,
+                admin_user_id,
+            )
+            return ApprovalToggleResult(action="unscheduled")
+        scheduled_at = await self.schedule_publish(post_id, chat_id, admin_user_id)
+        return ApprovalToggleResult(action="scheduled", scheduled_at=scheduled_at)
 
     async def _next_publish_slot(self, channel: DestinationChannel) -> datetime:
         """
         Compute the next allowed publish time for a channel.
 
-        The slot is ``interval`` minutes after the later of the channel's
-        last publish and its last queued slot; when that lies in the past
-        the post is due immediately.
+        The slot is five minutes after the later of the channel's last
+        recorded publish, last internal scheduled item (legacy safety), and
+        latest native Telegram scheduled message when available.
         """
         now = datetime.now(timezone.utc)
-        interval = timedelta(minutes=max(channel.post_interval_minutes, 0))
+        earliest = now + timedelta(minutes=5)
+        interval = timedelta(minutes=5)
+        native_latest = (
+            await self._scheduled_publisher.latest_scheduled_at(channel.chat_id)
+            if self._scheduled_publisher is not None
+            else None
+        )
         candidates = [
             await self._publish_log.last_published_at(channel.chat_id),
-            await self._queue.latest_scheduled_publish_for_channel(channel.chat_id),
+            await self._queue.latest_scheduled_publish_for_channel(channel.chat_id)
+            if self._queue is not None
+            else None,
+            native_latest,
         ]
         base = max((c for c in candidates if c is not None), default=None)
         if base is None:
-            return now
-        return max(now, base + interval)
+            return earliest
+        return max(earliest, base + interval)
 
     async def _get_post(self, post_id: str) -> Post:
         """Load a post or raise :class:`ApprovalStateError`."""
@@ -279,17 +522,19 @@ class ApprovalService:
             )
             return post
         identifiers: list[str | int] = list(self._source_identifiers)
+        identifiers.extend(await self._channels.list_sources())
         identifiers.extend(
             f"@{username}" for username in await self._channels.list_source_usernames()
         )
-        rewritten_text = rewrite_source_channel_mentions(
+        rewritten = rewrite_source_channel_mentions_with_entities(
             post.text,
+            post.text_entities,
             identifiers,
             channel.public_id,
         )
-        if rewritten_text == post.text:
+        if rewritten.text == post.text and rewritten.entities == post.text_entities:
             return post
         logger.info(
             "Rewrote source mentions post=%s channel=%s", post.post_id, channel.chat_id
         )
-        return replace(post, text=rewritten_text)
+        return replace(post, text=rewritten.text, text_entities=rewritten.entities)

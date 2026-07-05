@@ -12,8 +12,10 @@ from decimal import Decimal
 
 from src.domain.entities import (
     AdminUser,
+    ApprovalMessageRef,
     DestinationChannel,
     DollarPrice,
+    PublishLogEntry,
     QueueItem,
 )
 from src.domain.enums import ChannelKind, QueueItemType, QueueStatus
@@ -106,6 +108,30 @@ class SqliteChannelRepository:
                 (channel.public_id, channel.chat_id),
             )
 
+    async def disable_destinations_except(self, chat_ids: set[int]) -> int:
+        """Disable destinations whose chat ids are absent from ``chat_ids``."""
+        if not chat_ids:
+            rows = await self._db.fetchall(
+                """
+                UPDATE destination_channels
+                SET enabled = 0
+                WHERE enabled = 1
+                RETURNING chat_id
+                """
+            )
+            return len(rows)
+        placeholders = ",".join("?" for _ in chat_ids)
+        rows = await self._db.fetchall(
+            f"""
+            UPDATE destination_channels
+            SET enabled = 0
+            WHERE enabled = 1 AND chat_id NOT IN ({placeholders})
+            RETURNING chat_id
+            """,
+            tuple(chat_ids),
+        )
+        return len(rows)
+
     async def get_destination(self, chat_id: int) -> DestinationChannel | None:
         """Return one destination channel regardless of enabled state."""
         row = await self._db.fetchone(
@@ -162,6 +188,31 @@ class SqliteChannelRepository:
             (identifier, identifier.lstrip("@"), _as_int_or_none(identifier)),
         )
         return len(rows) > 0
+
+    async def disable_sources_except(self, identifiers: set[str]) -> int:
+        """Disable sources whose identifiers are absent from ``identifiers``."""
+        normalized = {identifier.strip() for identifier in identifiers if identifier.strip()}
+        if not normalized:
+            rows = await self._db.fetchall(
+                """
+                UPDATE source_channels
+                SET enabled = 0
+                WHERE enabled = 1
+                RETURNING id
+                """
+            )
+            return len(rows)
+        placeholders = ",".join("?" for _ in normalized)
+        rows = await self._db.fetchall(
+            f"""
+            UPDATE source_channels
+            SET enabled = 0
+            WHERE enabled = 1 AND identifier NOT IN ({placeholders})
+            RETURNING id
+            """,
+            tuple(normalized),
+        )
+        return len(rows)
 
     async def upsert_source_details(
         self,
@@ -251,6 +302,20 @@ class SqliteAdminRepository:
             """,
             (admin.telegram_user_id, admin.name),
         )
+
+    async def replace_all(self, admins: list[AdminUser]) -> None:
+        """Make the admins table exactly match the provided admin list."""
+        user_ids = {admin.telegram_user_id for admin in admins}
+        if user_ids:
+            placeholders = ",".join("?" for _ in user_ids)
+            await self._db.execute(
+                f"DELETE FROM admins WHERE telegram_user_id NOT IN ({placeholders})",
+                tuple(user_ids),
+            )
+        else:
+            await self._db.execute("DELETE FROM admins")
+        for admin in admins:
+            await self.upsert(admin)
 
     async def is_admin(self, telegram_user_id: int) -> bool:
         """Return whether the user id exists in the admins table."""
@@ -347,6 +412,38 @@ class SqliteQueueRepository:
         )
         return len(rows)
 
+    async def has_active_or_successful_post_item(
+        self, post_id: str, item_types: set[QueueItemType]
+    ) -> bool:
+        """Return whether the post has a non-failed item of the requested types."""
+        if not item_types:
+            return False
+        placeholders = ",".join("?" for _ in item_types)
+        statuses = (
+            QueueStatus.PENDING.value,
+            QueueStatus.PROCESSING.value,
+            QueueStatus.WAITING_APPROVAL.value,
+            QueueStatus.APPROVED.value,
+            QueueStatus.COMPLETED.value,
+            QueueStatus.PUBLISHED.value,
+        )
+        status_placeholders = ",".join("?" for _ in statuses)
+        row = await self._db.fetchone(
+            f"""
+            SELECT 1 FROM queue_items
+            WHERE json_extract(payload, '$.post_id') = ?
+              AND type IN ({placeholders})
+              AND status IN ({status_placeholders})
+            LIMIT 1
+            """,
+            (
+                post_id,
+                *(item_type.value for item_type in item_types),
+                *statuses,
+            ),
+        )
+        return row is not None
+
     async def get(self, item_id: int) -> QueueItem | None:
         """Return one item by id, or ``None``."""
         row = await self._db.fetchone("SELECT * FROM queue_items WHERE id = ?", (item_id,))
@@ -396,6 +493,159 @@ class SqliteQueueRepository:
         )
 
 
+class SqliteApprovalRequestRepository:
+    """SQLite-backed idempotency store for approval-bot requests."""
+
+    def __init__(self, db: Database) -> None:
+        """Args: db: Connected database wrapper."""
+        self._db = db
+
+    async def has_requested(self, post_id: str) -> bool:
+        """Return whether an approval request was already sent for the post."""
+        row = await self._db.fetchone(
+            "SELECT 1 FROM approval_requests WHERE post_id = ?", (post_id,)
+        )
+        return row is not None
+
+    async def record_requested(self, post_id: str) -> None:
+        """Record that the approval request was sent successfully."""
+        await self._db.execute(
+            """
+            INSERT OR IGNORE INTO approval_requests (post_id, requested_at)
+            VALUES (?, ?)
+            """,
+            (post_id, _utcnow_iso()),
+        )
+
+    async def list_requested_post_ids(self) -> list[str]:
+        """Return all post ids recorded as sent to the approval bot."""
+        rows = await self._db.fetchall(
+            "SELECT post_id FROM approval_requests ORDER BY requested_at, post_id"
+        )
+        return [row["post_id"] for row in rows]
+
+
+class SqliteApprovalMessageRepository:
+    """SQLite-backed store for approval-bot message references."""
+
+    def __init__(self, db: Database) -> None:
+        """Args: db: Connected database wrapper."""
+        self._db = db
+
+    async def record_messages(self, refs: list[ApprovalMessageRef]) -> None:
+        """Persist delivered approval messages."""
+        now = _utcnow_iso()
+        for ref in refs:
+            await self._db.execute(
+                """
+                INSERT INTO approval_messages
+                    (post_id, admin_user_id, chat_id, message_id, delivery_mode,
+                     active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(post_id, admin_user_id, message_id) DO UPDATE SET
+                    chat_id = excluded.chat_id,
+                    delivery_mode = excluded.delivery_mode,
+                    active = 1,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    ref.post_id,
+                    ref.admin_user_id,
+                    ref.chat_id,
+                    ref.message_id,
+                    ref.delivery_mode,
+                    int(ref.active),
+                    now,
+                    now,
+                ),
+            )
+
+    async def list_active(self, post_id: str) -> list[ApprovalMessageRef]:
+        """Return active approval messages for a post."""
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM approval_messages
+            WHERE post_id = ? AND active = 1
+            ORDER BY id
+            """,
+            (post_id,),
+        )
+        return [self._row_to_ref(row) for row in rows]
+
+    async def set_delivery_mode(
+        self, post_id: str, chat_id: int, message_id: int, delivery_mode: str
+    ) -> None:
+        """Update delivery mode for one approval message."""
+        await self._db.execute(
+            """
+            UPDATE approval_messages
+            SET delivery_mode = ?, updated_at = ?
+            WHERE post_id = ? AND chat_id = ? AND message_id = ? AND active = 1
+            """,
+            (delivery_mode, _utcnow_iso(), post_id, chat_id, message_id),
+        )
+
+    async def deactivate(self, message_ref_id: int) -> None:
+        """Mark one approval message as inactive."""
+        await self._db.execute(
+            """
+            UPDATE approval_messages
+            SET active = 0, updated_at = ?
+            WHERE id = ?
+            """,
+            (_utcnow_iso(), message_ref_id),
+        )
+
+    async def list_active_post_ids(self) -> list[str]:
+        """Return post ids that have active approval messages."""
+        rows = await self._db.fetchall(
+            """
+            SELECT DISTINCT post_id FROM approval_messages
+            WHERE active = 1
+            ORDER BY post_id
+            """
+        )
+        return [row["post_id"] for row in rows]
+
+    async def deactivate_admins_except(self, admin_user_ids: set[int]) -> int:
+        """Deactivate approval messages for admins absent from ``admin_user_ids``."""
+        if not admin_user_ids:
+            rows = await self._db.fetchall(
+                """
+                UPDATE approval_messages
+                SET active = 0, updated_at = ?
+                WHERE active = 1
+                RETURNING id
+                """,
+                (_utcnow_iso(),),
+            )
+            return len(rows)
+        placeholders = ",".join("?" for _ in admin_user_ids)
+        rows = await self._db.fetchall(
+            f"""
+            UPDATE approval_messages
+            SET active = 0, updated_at = ?
+            WHERE active = 1 AND admin_user_id NOT IN ({placeholders})
+            RETURNING id
+            """,
+            (_utcnow_iso(), *admin_user_ids),
+        )
+        return len(rows)
+
+    @staticmethod
+    def _row_to_ref(row: object) -> ApprovalMessageRef:
+        """Map a database row to :class:`ApprovalMessageRef`."""
+        return ApprovalMessageRef(
+            id=row["id"],
+            post_id=row["post_id"],
+            admin_user_id=row["admin_user_id"],
+            chat_id=row["chat_id"],
+            message_id=row["message_id"],
+            delivery_mode=row["delivery_mode"],
+            active=bool(row["active"]),
+        )
+
+
 class SqlitePublishLogRepository:
     """SQLite-backed implementation of :class:`PublishLogRepository`."""
 
@@ -403,10 +653,23 @@ class SqlitePublishLogRepository:
         """Args: db: Connected database wrapper."""
         self._db = db
 
-    async def is_published(self, post_id: str, channel_chat_id: int) -> bool:
-        """Return whether the post/channel pair exists in the log."""
+    async def has_any_delivery_record(self, post_id: str) -> bool:
+        """Return whether the post has any publish-log row."""
         row = await self._db.fetchone(
-            "SELECT 1 FROM publish_log WHERE post_id = ? AND channel_chat_id = ?",
+            "SELECT 1 FROM publish_log WHERE post_id = ? LIMIT 1",
+            (post_id,),
+        )
+        return row is not None
+
+    async def is_published(self, post_id: str, channel_chat_id: int) -> bool:
+        """Return whether the post/channel pair has an active publish state."""
+        row = await self._db.fetchone(
+            """
+            SELECT 1 FROM publish_log
+            WHERE post_id = ? AND channel_chat_id = ?
+              AND status IN ('reserved', 'published')
+              AND mode = 'immediate'
+            """,
             (post_id, channel_chat_id),
         )
         return row is not None
@@ -414,29 +677,184 @@ class SqlitePublishLogRepository:
     async def record_published(
         self, post_id: str, channel_chat_id: int, message_id: int
     ) -> None:
-        """Insert a publish record; ignores duplicates defensively."""
+        """Insert a successful publish record; ignore duplicates defensively."""
         await self._db.execute(
             """
-            INSERT OR IGNORE INTO publish_log (post_id, channel_chat_id, message_id, published_at)
-            VALUES (?, ?, ?, ?)
+            INSERT OR IGNORE INTO publish_log
+                (post_id, channel_chat_id, message_id, published_at,
+                 scheduled_at, removed_at, status, mode)
+            VALUES (?, ?, ?, ?, NULL, NULL, 'published', 'immediate')
             """,
             (post_id, channel_chat_id, message_id, _utcnow_iso()),
         )
 
+    async def try_reserve_publish(
+        self, post_id: str, channel_chat_id: int, mode: str
+    ) -> bool:
+        """Atomically reserve a post/channel pair before Telegram publishing."""
+        now = _utcnow_iso()
+        cursor = await self._db.connection.execute(
+            """
+            INSERT OR IGNORE INTO publish_log
+                (post_id, channel_chat_id, message_id, published_at,
+                 scheduled_at, removed_at, status, mode)
+            VALUES (?, ?, NULL, ?, NULL, NULL, 'reserved', ?)
+            """,
+            (post_id, channel_chat_id, now, mode),
+        )
+        await self._db.connection.commit()
+        if cursor.rowcount == 1:
+            return True
+        cursor = await self._db.connection.execute(
+            """
+            UPDATE publish_log
+            SET message_id = NULL,
+                published_at = ?,
+                scheduled_at = NULL,
+                removed_at = NULL,
+                status = 'reserved',
+                mode = ?
+            WHERE post_id = ? AND channel_chat_id = ? AND status = 'removed'
+            """,
+            (now, mode, post_id, channel_chat_id),
+        )
+        await self._db.connection.commit()
+        return cursor.rowcount == 1
+
+    async def mark_published(
+        self, post_id: str, channel_chat_id: int, message_id: int
+    ) -> None:
+        """Mark a reserved post/channel pair as published."""
+        await self._db.execute(
+            """
+            UPDATE publish_log
+            SET message_id = ?,
+                published_at = ?,
+                scheduled_at = NULL,
+                removed_at = NULL,
+                status = 'published',
+                mode = 'immediate'
+            WHERE post_id = ? AND channel_chat_id = ?
+            """,
+            (message_id, _utcnow_iso(), post_id, channel_chat_id),
+        )
+
+    async def mark_scheduled(
+        self,
+        post_id: str,
+        channel_chat_id: int,
+        message_id: int,
+        scheduled_at: datetime,
+    ) -> None:
+        """Mark a reserved post/channel pair as scheduled in Telegram."""
+        await self._db.execute(
+            """
+            UPDATE publish_log
+            SET message_id = ?,
+                published_at = ?,
+                scheduled_at = ?,
+                removed_at = NULL,
+                status = 'scheduled',
+                mode = 'scheduled'
+            WHERE post_id = ? AND channel_chat_id = ?
+            """,
+            (
+                message_id,
+                _utcnow_iso(),
+                scheduled_at.isoformat(),
+                post_id,
+                channel_chat_id,
+            ),
+        )
+
+    async def release_reservation(self, post_id: str, channel_chat_id: int) -> None:
+        """Remove an unpublished reservation after Telegram failure."""
+        await self._db.execute(
+            """
+            DELETE FROM publish_log
+            WHERE post_id = ? AND channel_chat_id = ?
+              AND status = 'reserved' AND message_id IS NULL
+            """,
+            (post_id, channel_chat_id),
+        )
+
     async def published_channels(self, post_id: str) -> set[int]:
-        """Return chat ids the post was already published to."""
+        """Return chat ids the post was immediately published to."""
         rows = await self._db.fetchall(
-            "SELECT channel_chat_id FROM publish_log WHERE post_id = ?", (post_id,)
+            """
+            SELECT channel_chat_id FROM publish_log
+            WHERE post_id = ?
+              AND status IN ('reserved', 'published')
+              AND mode = 'immediate'
+            """,
+            (post_id,),
         )
         return {row["channel_chat_id"] for row in rows}
+
+    async def scheduled_channels(self, post_id: str) -> set[int]:
+        """Return chat ids the post was natively scheduled to."""
+        rows = await self._db.fetchall(
+            """
+            SELECT channel_chat_id FROM publish_log
+            WHERE post_id = ?
+              AND status IN ('reserved', 'scheduled')
+              AND mode = 'scheduled'
+            """,
+            (post_id,),
+        )
+        return {row["channel_chat_id"] for row in rows}
+
+    async def get_active_record(
+        self, post_id: str, channel_chat_id: int
+    ) -> PublishLogEntry | None:
+        """Return the active publish/schedule row for a post/channel."""
+        row = await self._db.fetchone(
+            """
+            SELECT * FROM publish_log
+            WHERE post_id = ? AND channel_chat_id = ?
+              AND status IN ('reserved', 'published', 'scheduled')
+            """,
+            (post_id, channel_chat_id),
+        )
+        return self._row_to_publish_entry(row) if row is not None else None
+
+    async def mark_removed(self, post_id: str, channel_chat_id: int) -> None:
+        """Mark a published/scheduled message as removed from Telegram."""
+        await self._db.execute(
+            """
+            UPDATE publish_log
+            SET status = 'removed',
+                removed_at = ?,
+                message_id = NULL
+            WHERE post_id = ? AND channel_chat_id = ?
+            """,
+            (_utcnow_iso(), post_id, channel_chat_id),
+        )
 
     async def last_published_at(self, channel_chat_id: int) -> datetime | None:
         """Return the most recent publish time on the channel, or ``None``."""
         row = await self._db.fetchone(
-            "SELECT MAX(published_at) AS latest FROM publish_log WHERE channel_chat_id = ?",
+            """
+            SELECT MAX(published_at) AS latest FROM publish_log
+            WHERE channel_chat_id = ? AND status = 'published'
+            """,
             (channel_chat_id,),
         )
         return _parse_dt(row["latest"]) if row is not None else None
+
+    @staticmethod
+    def _row_to_publish_entry(row: object) -> PublishLogEntry:
+        """Map a database row to :class:`PublishLogEntry`."""
+        return PublishLogEntry(
+            post_id=row["post_id"],
+            channel_chat_id=row["channel_chat_id"],
+            mode=row["mode"],
+            status=row["status"],
+            message_id=row["message_id"],
+            published_at=_parse_dt(row["published_at"]),
+            scheduled_at=_parse_dt(row["scheduled_at"]),
+            removed_at=_parse_dt(row["removed_at"]),
+        )
 
 
 class SqlitePriceHistoryRepository:

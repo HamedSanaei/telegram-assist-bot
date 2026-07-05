@@ -40,6 +40,66 @@ class MediaItem:
 
 
 @dataclass
+class TextEntity:
+    """
+    Framework-neutral formatted-text entity captured from Telegram.
+
+    Attributes:
+        kind: Entity kind. Currently ``"custom_emoji"`` is used for
+            Telegram premium/custom emoji preservation.
+        offset: Entity start offset as reported by Telegram.
+        length: Entity length as reported by Telegram.
+        data: Provider-specific metadata, such as ``document_id`` for a
+            custom emoji entity.
+    """
+
+    kind: str
+    offset: int
+    length: int
+    data: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class PostSourceMetrics:
+    """
+    Telegram-side engagement metadata captured from a source message.
+
+    Attributes:
+        views: Telegram view count when available.
+        forwards: Telegram forward/share count when available.
+        replies_count: Reply/comment count when available.
+        reactions_count: Sum of visible reaction counts when available.
+        source_published_at: UTC timestamp of the original source message.
+    """
+
+    views: int | None = None
+    forwards: int | None = None
+    replies_count: int | None = None
+    reactions_count: int | None = None
+    source_published_at: datetime | None = None
+
+
+@dataclass
+class PostQualityScore:
+    """
+    AI-generated quality score used to help admins decide on reposting.
+
+    Attributes:
+        score: Suggested repost value from 0 to 100.
+        reason: Short Persian reason shown in the approval preview.
+        provider: AI provider that produced the score.
+        scored_at: UTC timestamp when scoring was completed.
+        metrics: Raw source metrics used as part of scoring.
+    """
+
+    score: float
+    reason: str
+    provider: str
+    scored_at: datetime | None = None
+    metrics: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
 class VpnConfig:
     """
     A vmess/vless configuration extracted from a post.
@@ -78,11 +138,19 @@ class Post:
         post_id: Internal unique identifier (uuid4 hex).
         source_chat_id: Telegram chat id of the source channel.
         source_message_id: Telegram message id inside the source channel.
+        grouped_id: Telegram album/group id, when the post came from an album.
         text: Raw post text, preserved exactly (UTF-8).
+        text_entities: Formatting entities attached to ``text``.
         content_hash: Hash of the normalized text used for exact dedup.
         media: Downloaded media attachments.
         category: AI-assigned category, if classified.
         ai_provider: Name of the AI provider that classified the post.
+        is_duplicate: Whether AI judged this post as a duplicate.
+        duplicate_of: Post id of the matched duplicate, when known.
+        duplicate_provider: AI provider that produced the duplicate decision.
+        skipped_reason: Reason a stored post is intentionally not sent onward.
+        source_metrics: Source-side Telegram engagement metrics.
+        quality_score: Suggested repost quality score, if calculated.
         vpn_configs: Extracted vmess/vless configs, if any.
         collected_at: UTC time the post was collected.
         expires_at: UTC time after which the post is removed (14 days).
@@ -93,9 +161,17 @@ class Post:
     source_message_id: int
     text: str
     content_hash: str
+    text_entities: list[TextEntity] = field(default_factory=list)
+    grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
     category: PostCategory | None = None
     ai_provider: str | None = None
+    is_duplicate: bool = False
+    duplicate_of: str | None = None
+    duplicate_provider: str | None = None
+    skipped_reason: str | None = None
+    source_metrics: PostSourceMetrics = field(default_factory=PostSourceMetrics)
+    quality_score: PostQualityScore | None = None
     vpn_configs: list[VpnConfig] = field(default_factory=list)
     collected_at: datetime | None = None
     expires_at: datetime | None = None
@@ -121,8 +197,9 @@ class DestinationChannel:
         kind: Channel kind used for routing (news, vpn, ...).
         publish_usd_price: Whether scheduled USD price posts go here.
         enabled: Whether the channel is currently active.
-        post_interval_minutes: Minimum minutes between scheduled posts
-            published to this channel (pacing policy for the send queue).
+        post_interval_minutes: Legacy per-channel pacing setting retained
+            for management commands; native scheduled posts currently use
+            a fixed five-minute slot policy.
     """
 
     chat_id: int
@@ -186,6 +263,57 @@ class PublishRecord:
     channel_chat_id: int
     message_id: int | None = None
     published_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class PublishLogEntry:
+    """
+    Persisted publish/schedule state for one post and destination channel.
+
+    Attributes:
+        post_id: Internal collected post id.
+        channel_chat_id: Destination Telegram channel id.
+        mode: Delivery mode, either ``"immediate"`` or ``"scheduled"``.
+        status: State such as ``"reserved"``, ``"published"``,
+            ``"scheduled"``, or ``"removed"``.
+        message_id: Telegram message id returned by the publish/schedule call.
+        published_at: UTC time when the state was last activated.
+        scheduled_at: UTC Telegram schedule time for native scheduled posts.
+        removed_at: UTC time when the published/scheduled message was removed.
+    """
+
+    post_id: str
+    channel_chat_id: int
+    mode: str
+    status: str
+    message_id: int | None = None
+    published_at: datetime | None = None
+    scheduled_at: datetime | None = None
+    removed_at: datetime | None = None
+
+
+@dataclass
+class ApprovalMessageRef:
+    """
+    A Telegram approval-bot message carrying an inline keyboard.
+
+    Attributes:
+        post_id: Internal id of the post shown in the approval message.
+        admin_user_id: Telegram user id of the admin recipient.
+        chat_id: Chat id where the approval message was sent.
+        message_id: Telegram message id that owns the inline keyboard.
+        delivery_mode: Current per-message delivery mode (``"s"`` or ``"i"``).
+        active: Whether the message can still be edited.
+        id: Optional SQLite row id.
+    """
+
+    post_id: str
+    admin_user_id: int
+    chat_id: int
+    message_id: int
+    delivery_mode: str = "s"
+    active: bool = True
+    id: int | None = None
 
 
 @dataclass

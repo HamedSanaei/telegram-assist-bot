@@ -1,8 +1,9 @@
-"""Use case: process one newly collected message from a source channel.
+"""Use case for idempotent ingestion of one collected Telegram post.
 
-Pipeline: normalize -> exact-hash dedup -> AI near-duplicate check ->
-AI classification -> VPN config extraction -> store in MongoDB with a
-14-day expiry -> enqueue the follow-up job (VPN test or approval).
+Pipeline:
+    source identity check -> exact duplicate check -> AI near-duplicate
+    check -> AI classification -> VPN config extraction -> MongoDB storage
+    -> required quality-score queue stage -> approval/VPN handoff.
 """
 
 from __future__ import annotations
@@ -10,11 +11,13 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from src.application.ai_service import AiService
-from src.domain.entities import MediaItem, Post
+from src.domain.entities import MediaItem, Post, PostSourceMetrics, TextEntity, VpnConfig
 from src.domain.enums import PostCategory, QueueItemType
 from src.domain.interfaces import PostRepository, QueueRepository
+from src.domain.services.text_fingerprint import rank_similar_texts
 from src.domain.services.text_normalizer import content_hash
 from src.domain.services.vpn_parser import extract_vpn_configs
 from src.shared.errors import DuplicateDetectionError, PostClassificationError
@@ -22,33 +25,46 @@ from src.shared.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
+QUALITY_SCORE_DELAY_MINUTES = 15
+LOCAL_DUPLICATE_SCORE_THRESHOLD = 0.92
+LOCAL_AI_CANDIDATE_LIMIT = 5
+
 
 @dataclass(frozen=True)
 class CollectedMessage:
     """
-    Raw input describing one message collected from a source channel.
+    Raw input describing one message or album collected from a source channel.
 
     Attributes:
         source_chat_id: Telegram chat id of the source channel.
-        message_id: Telegram message id in the source channel.
-        text: Message text (may be empty for media-only posts).
-        media: Media attachments already downloaded to local storage.
+        message_id: First Telegram message id for a single message or album.
+        text: Message text or caption. It may be empty for media-only posts.
+        grouped_id: Telegram album/group id, if available.
+        media: Attachments downloaded by the collector.
+        text_entities: Formatting entities captured from the source text.
+        source_metrics: Telegram-side engagement metrics.
     """
 
     source_chat_id: int
     message_id: int
     text: str
+    grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
+    text_entities: list[TextEntity] = field(default_factory=list)
+    source_metrics: PostSourceMetrics = field(default_factory=PostSourceMetrics)
 
 
 class CollectPostUseCase:
     """
-    Orchestrates deduplication, classification, storage, and queueing
-    for newly collected posts.
+    Coordinates storage, AI checks, and queue handoff for collected posts.
+
+    The use case is restart-safe: if a source message is already stored but
+    never reached an active queue stage, it repairs the missing stage instead
+    of dropping the post.
 
     Example:
         use_case = CollectPostUseCase(posts, queue, ai)
-        post = await use_case.handle_new_message(message)
+        post = await use_case.handle_new_message(collected)
     """
 
     def __init__(
@@ -62,14 +78,13 @@ class CollectPostUseCase:
     ) -> None:
         """
         Args:
-            posts: Post repository (MongoDB in production).
-            queue: Background job queue repository (SQLite).
-            ai: AI service used for dedup and classification.
-            retention_days: How many days posts are kept before expiry.
-            recent_compare_limit: How many recent posts the AI duplicate
-                check compares against.
-            vpn_testing_enabled: When ``False``, posts containing VPN
-                configs skip the Iran test and go straight to approval.
+            posts: Post repository, backed by MongoDB in production.
+            queue: SQLite queue repository.
+            ai: AI service used for classification and near-deduplication.
+            retention_days: Number of days before stored posts expire.
+            recent_compare_limit: Number of recent post texts to compare.
+            vpn_testing_enabled: Whether VPN config posts must pass the
+                Iran worker before approval.
         """
         self._posts = posts
         self._queue = queue
@@ -77,6 +92,59 @@ class CollectPostUseCase:
         self._retention_days = retention_days
         self._recent_compare_limit = recent_compare_limit
         self._vpn_testing_enabled = vpn_testing_enabled
+
+    async def has_seen_source_message(
+        self, source_chat_id: int, message_id: int, grouped_id: int | None = None
+    ) -> bool:
+        """
+        Return whether a source message identity already exists in MongoDB.
+
+        Args:
+            source_chat_id: Telegram source chat id.
+            message_id: Telegram source message id.
+            grouped_id: Optional Telegram album/group id.
+
+        Returns:
+            ``True`` when the post is already stored.
+        """
+        return (
+            await self._posts.find_by_source_message(
+                source_chat_id, message_id, grouped_id
+            )
+            is not None
+        )
+
+    async def should_download_media(
+        self,
+        source_chat_id: int,
+        message_id: int,
+        grouped_id: int | None,
+        expected_media_count: int,
+    ) -> bool:
+        """
+        Return whether the collector should download media for a source message.
+
+        Args:
+            source_chat_id: Telegram source chat id.
+            message_id: Telegram source message id.
+            grouped_id: Optional Telegram album/group id.
+            expected_media_count: Number of media messages in the current
+                Telegram update/backfill batch.
+
+        Returns:
+            ``True`` when the source is new, or when MongoDB has an older
+            copy with missing media that should be repaired.
+        """
+        if expected_media_count <= 0:
+            return False
+        existing = await self._posts.find_by_source_message(
+            source_chat_id, message_id, grouped_id
+        )
+        if existing is None:
+            return True
+        return len(existing.media) < expected_media_count or not self._stored_media_exists(
+            existing
+        )
 
     async def handle_new_message(self, message: CollectedMessage) -> Post | None:
         """
@@ -86,16 +154,15 @@ class CollectPostUseCase:
             message: The collected message.
 
         Returns:
-            The stored :class:`Post`, or ``None`` when the message was
-            skipped (empty, duplicate, or irrelevant).
+            The stored :class:`Post`, or ``None`` when the message is empty.
 
         Raises:
             RepositoryError: When persistence fails.
 
-        Notes:
-            Temporary AI failures are logged, but they no longer drop the
-            post. The post is stored with a conservative default category
-            so an administrator can review it manually.
+        Side effects:
+            Stores every non-empty source message in MongoDB, including
+            duplicates and irrelevant posts, so restart backfills do not keep
+            redownloading or reprocessing the same Telegram message.
         """
         text = (message.text or "").strip()
         if not text and not message.media:
@@ -106,102 +173,218 @@ class CollectPostUseCase:
             )
             return None
 
-        hash_source = text or f"media:{message.source_chat_id}:{message.message_id}"
-        post_hash = content_hash(hash_source)
-        if await self._posts.find_by_content_hash(post_hash) is not None:
+        existing_source = await self._posts.find_by_source_message(
+            message.source_chat_id,
+            message.message_id,
+            message.grouped_id,
+        )
+        if existing_source is not None:
+            repaired_media = await self._repair_existing_media(
+                existing_source, message
+            )
+            if await self._ensure_pipeline_queued(existing_source):
+                logger.info(
+                    "Repaired stored source post post=%s chat=%s msg=%s",
+                    existing_source.post_id,
+                    message.source_chat_id,
+                    message.message_id,
+                )
+                return existing_source
+            if repaired_media:
+                return existing_source
             logger.info(
-                "Skipping exact duplicate chat=%s msg=%s",
+                "Skipping already processed source message chat=%s msg=%s",
                 message.source_chat_id,
                 message.message_id,
             )
             return None
 
+        hash_source = text or f"media:{message.source_chat_id}:{message.message_id}"
+        post_hash = content_hash(hash_source)
+        existing_hash = await self._posts.find_by_content_hash(post_hash)
+        if existing_hash is not None:
+            duplicate = await self._store_skipped_post(
+                message=message,
+                post_hash=post_hash,
+                category=existing_hash.category or PostCategory.GENERAL_NEWS,
+                provider="exact_hash",
+                skipped_reason="duplicate",
+                is_duplicate=True,
+                duplicate_of=existing_hash.post_id,
+                duplicate_provider="exact_hash",
+            )
+            if await self._ensure_pipeline_queued(existing_hash):
+                logger.info(
+                    "Repaired original post for exact duplicate original=%s duplicate=%s",
+                    existing_hash.post_id,
+                    duplicate.post_id,
+                )
+            logger.info(
+                "Stored exact duplicate chat=%s msg=%s duplicate_of=%s",
+                message.source_chat_id,
+                message.message_id,
+                existing_hash.post_id,
+            )
+            return duplicate
+
+        return await self._classify_and_store_new(message, post_hash, text)
+
+    async def _classify_and_store_new(
+        self, message: CollectedMessage, post_hash: str, text: str
+    ) -> Post:
+        """
+        Classify and store a source message that has not been seen before.
+
+        Args:
+            message: The collected source message.
+            post_hash: Exact content hash.
+            text: Normalized post text.
+
+        Returns:
+            The stored post, including skipped duplicate/irrelevant posts.
+        """
         category = PostCategory.GENERAL_NEWS
         provider_name: str | None = None
-        if text:
-            recent = await self._posts.list_recent_texts(self._recent_compare_limit)
-            if recent:
-                try:
-                    dup = await self._ai.is_duplicate(text, recent)
-                    if dup.is_duplicate:
-                        logger.info(
-                            "Skipping AI-detected duplicate chat=%s msg=%s provider=%s",
-                            message.source_chat_id,
-                            message.message_id,
-                            dup.provider,
-                        )
-                        return None
-                    logger.info(
-                        "Duplicate check passed chat=%s msg=%s provider=%s compared=%d",
-                        message.source_chat_id,
-                        message.message_id,
-                        dup.provider,
-                        len(recent),
-                    )
-                except DuplicateDetectionError as exc:
-                    logger.warning(
-                        "Duplicate check unavailable; continuing chat=%s msg=%s error=%s",
-                        message.source_chat_id,
-                        message.message_id,
-                        exc,
-                    )
-            try:
-                classification = await self._ai.classify_post(text)
-                category = classification.category
-                provider_name = classification.provider
-                logger.info(
-                    "Classified chat=%s msg=%s category=%s provider=%s",
-                    message.source_chat_id,
-                    message.message_id,
-                    category.value,
-                    provider_name,
-                )
-                if category == PostCategory.IRRELEVANT:
-                    logger.info(
-                        "Skipping irrelevant post chat=%s msg=%s provider=%s",
-                        message.source_chat_id,
-                        message.message_id,
-                        provider_name,
-                    )
-                    return None
-            except PostClassificationError as exc:
-                provider_name = "unavailable"
-                logger.error(
-                    "Classification unavailable; storing for manual approval "
-                    "chat=%s msg=%s default_category=%s error=%s",
-                    message.source_chat_id,
-                    message.message_id,
-                    category.value,
-                    exc,
-                )
+        is_duplicate = False
+        duplicate_provider: str | None = None
+        skipped_reason: str | None = None
 
         configs = extract_vpn_configs(text) if text else []
+        if text:
+            recent = await self._posts.list_recent_texts(self._recent_compare_limit)
+            local_candidates = rank_similar_texts(
+                text,
+                recent,
+                limit=LOCAL_AI_CANDIDATE_LIMIT,
+            )
+            if (
+                local_candidates
+                and local_candidates[0].score >= LOCAL_DUPLICATE_SCORE_THRESHOLD
+            ):
+                is_duplicate = True
+                duplicate_provider = "local_fuzzy"
+                skipped_reason = "duplicate"
+                provider_name = "local_fuzzy"
+                logger.info(
+                    "Local fuzzy duplicate chat=%s msg=%s score=%.3f compared=%d",
+                    message.source_chat_id,
+                    message.message_id,
+                    local_candidates[0].score,
+                    len(recent),
+                )
+                return await self._store_post(
+                    message=message,
+                    post_hash=post_hash,
+                    category=category,
+                    provider=provider_name,
+                    skipped_reason=skipped_reason,
+                    is_duplicate=is_duplicate,
+                    duplicate_of=None,
+                    duplicate_provider=duplicate_provider,
+                    configs=configs,
+                )
+            compare_texts = [candidate.text for candidate in local_candidates]
+            try:
+                analysis = await self._ai.analyze_post(text, compare_texts)
+                category = analysis.category
+                provider_name = analysis.provider
+                if analysis.is_duplicate:
+                    is_duplicate = True
+                    duplicate_provider = analysis.provider
+                    skipped_reason = "duplicate"
+                    logger.info(
+                        "AI-detected duplicate chat=%s msg=%s provider=%s compared=%d",
+                        message.source_chat_id,
+                        message.message_id,
+                        analysis.provider,
+                        len(compare_texts),
+                    )
+                elif analysis.is_advertisement and not configs:
+                    skipped_reason = "advertisement"
+                    logger.info(
+                        "AI-pruned advertisement chat=%s msg=%s provider=%s reason=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        analysis.provider,
+                        analysis.reason,
+                    )
+                elif analysis.is_advertisement and configs:
+                    logger.info(
+                        "Ignored advertisement label for VPN config chat=%s msg=%s "
+                        "provider=%s configs=%d reason=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        analysis.provider,
+                        len(configs),
+                        analysis.reason,
+                    )
+                else:
+                    logger.info(
+                        "Analyzed chat=%s msg=%s category=%s provider=%s compared=%d",
+                        message.source_chat_id,
+                        message.message_id,
+                        category.value,
+                        provider_name,
+                        len(compare_texts),
+                    )
+                    if category == PostCategory.IRRELEVANT:
+                        skipped_reason = "irrelevant"
+            except (DuplicateDetectionError, PostClassificationError) as exc:
+                logger.warning(
+                    "Combined analysis unavailable; falling back chat=%s msg=%s error=%s",
+                    message.source_chat_id,
+                    message.message_id,
+                    exc,
+                )
+                try:
+                    classification = await self._ai.classify_post(text)
+                    category = classification.category
+                    provider_name = classification.provider
+                    logger.info(
+                        "Classified chat=%s msg=%s category=%s provider=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        category.value,
+                        provider_name,
+                    )
+                    if category == PostCategory.IRRELEVANT:
+                        skipped_reason = "irrelevant"
+                except PostClassificationError as exc:
+                    provider_name = "unavailable"
+                    logger.error(
+                        "Classification unavailable; storing for manual approval "
+                        "chat=%s msg=%s default_category=%s error=%s",
+                        message.source_chat_id,
+                        message.message_id,
+                        category.value,
+                        exc,
+                    )
+
         if configs and category not in (PostCategory.VPN, PostCategory.VPN_CONFIG):
             category = PostCategory.VPN_CONFIG
 
-        now = datetime.now(timezone.utc)
-        post = Post(
-            post_id=uuid.uuid4().hex,
-            source_chat_id=message.source_chat_id,
-            source_message_id=message.message_id,
-            text=text,
-            content_hash=post_hash,
-            media=list(message.media),
+        post = await self._store_post(
+            message=message,
+            post_hash=post_hash,
             category=category,
-            ai_provider=provider_name,
-            vpn_configs=configs,
-            collected_at=now,
-            expires_at=now + timedelta(days=self._retention_days),
+            provider=provider_name,
+            skipped_reason=skipped_reason,
+            is_duplicate=is_duplicate,
+            duplicate_of=None,
+            duplicate_provider=duplicate_provider,
+            configs=configs,
         )
-        await self._posts.save(post)
-        logger.info("Saved post to MongoDB id=%s", post.post_id)
+        if skipped_reason:
+            logger.info(
+                "Stored skipped post id=%s chat=%s msg=%s reason=%s",
+                post.post_id,
+                message.source_chat_id,
+                message.message_id,
+                skipped_reason,
+            )
+            return post
 
-        if configs and self._vpn_testing_enabled:
-            next_step = QueueItemType.VPN_TEST
-        else:
-            next_step = QueueItemType.APPROVAL_REQUEST
-        await self._queue.enqueue(next_step, {"post_id": post.post_id})
-        logger.info("Enqueued %s post=%s", next_step.value, post.post_id)
+        await self._enqueue_next_stage(post)
         logger.info(
             "Stored post id=%s chat=%s msg=%s category=%s configs=%d",
             post.post_id,
@@ -211,3 +394,181 @@ class CollectPostUseCase:
             len(configs),
         )
         return post
+
+    async def _store_skipped_post(
+        self,
+        message: CollectedMessage,
+        post_hash: str,
+        category: PostCategory,
+        provider: str | None,
+        skipped_reason: str,
+        is_duplicate: bool,
+        duplicate_of: str | None,
+        duplicate_provider: str | None,
+    ) -> Post:
+        """Store a skipped source message without queueing any next stage."""
+        return await self._store_post(
+            message=message,
+            post_hash=post_hash,
+            category=category,
+            provider=provider,
+            skipped_reason=skipped_reason,
+            is_duplicate=is_duplicate,
+            duplicate_of=duplicate_of,
+            duplicate_provider=duplicate_provider,
+            configs=[],
+        )
+
+    async def _store_post(
+        self,
+        message: CollectedMessage,
+        post_hash: str,
+        category: PostCategory,
+        provider: str | None,
+        skipped_reason: str | None,
+        is_duplicate: bool,
+        duplicate_of: str | None,
+        duplicate_provider: str | None,
+        configs: list[VpnConfig],
+    ) -> Post:
+        """Persist one normalized post document in MongoDB."""
+        now = datetime.now(timezone.utc)
+        post = Post(
+            post_id=uuid.uuid4().hex,
+            source_chat_id=message.source_chat_id,
+            source_message_id=message.message_id,
+            text=(message.text or "").strip(),
+            text_entities=list(message.text_entities),
+            content_hash=post_hash,
+            grouped_id=message.grouped_id,
+            media=list(message.media),
+            category=category,
+            ai_provider=provider,
+            is_duplicate=is_duplicate,
+            duplicate_of=duplicate_of,
+            duplicate_provider=duplicate_provider,
+            skipped_reason=skipped_reason,
+            source_metrics=message.source_metrics,
+            vpn_configs=configs,
+            collected_at=now,
+            expires_at=now + timedelta(days=self._retention_days),
+        )
+        await self._posts.save(post)
+        logger.info("Saved post to MongoDB id=%s", post.post_id)
+        return post
+
+    async def _repair_existing_media(
+        self, existing: Post, message: CollectedMessage
+    ) -> bool:
+        """
+        Add newly downloaded media to an already stored source post.
+
+        Args:
+            existing: Existing MongoDB post found by source identity.
+            message: Current collector input, possibly with downloaded media.
+
+        Returns:
+            ``True`` when the stored post was updated.
+        """
+        if not message.media:
+            return False
+        if len(existing.media) >= len(message.media) and self._stored_media_exists(
+            existing
+        ):
+            return False
+        existing.media = list(message.media)
+        if message.text_entities:
+            existing.text_entities = list(message.text_entities)
+        existing.source_metrics = message.source_metrics
+        await self._posts.save(existing)
+        logger.info(
+            "Repaired stored source media post=%s chat=%s msg=%s media=%d",
+            existing.post_id,
+            message.source_chat_id,
+            message.message_id,
+            len(message.media),
+        )
+        return True
+
+    @staticmethod
+    def _stored_media_exists(post: Post) -> bool:
+        """Return whether all stored media paths still exist on disk."""
+        if not post.media:
+            return False
+        for media in post.media:
+            if not media.file_path or not Path(media.file_path).exists():
+                return False
+        return True
+
+    async def _ensure_pipeline_queued(self, post: Post) -> bool:
+        """
+        Requeue a stored post that never reached an active pipeline stage.
+
+        Same-day backfill may see posts saved in MongoDB before a crash, code
+        bug, or queue failure. Exact hash dedup must not hide those posts
+        forever; this method restarts the missing next stage once.
+        """
+        if post.skipped_reason:
+            return False
+        if post.quality_score is None:
+            relevant_types = {QueueItemType.QUALITY_SCORE}
+        else:
+            relevant_types = {
+                QueueItemType.VPN_TEST,
+                QueueItemType.APPROVAL_REQUEST,
+            }
+        if await self._queue.has_active_or_successful_post_item(
+            post.post_id, relevant_types
+        ):
+            return False
+        await self._enqueue_next_stage(post)
+        return True
+
+    async def _enqueue_next_stage(self, post: Post) -> QueueItemType:
+        """Enqueue the immediate next eligible pipeline step for a stored post."""
+        next_step = self._next_stage(post)
+        scheduled_at = (
+            self._quality_score_due_at(post)
+            if next_step == QueueItemType.QUALITY_SCORE
+            else None
+        )
+        await self._queue.enqueue(
+            next_step, {"post_id": post.post_id}, scheduled_at=scheduled_at
+        )
+        if scheduled_at is None:
+            logger.info("Enqueued %s post=%s", next_step.value, post.post_id)
+        else:
+            logger.info(
+                "Enqueued %s post=%s scheduled_at=%s",
+                next_step.value,
+                post.post_id,
+                scheduled_at.isoformat(),
+            )
+        return next_step
+
+    def _next_stage(self, post: Post) -> QueueItemType:
+        """Return the next queue stage for an eligible stored post."""
+        if post.quality_score is None:
+            return QueueItemType.QUALITY_SCORE
+        if post.vpn_configs and self._vpn_testing_enabled:
+            return QueueItemType.VPN_TEST
+        return QueueItemType.APPROVAL_REQUEST
+
+    @staticmethod
+    def _quality_score_due_at(post: Post) -> datetime:
+        """
+        Return when the post should be scored.
+
+        Posts younger than 15 minutes wait until source engagement metrics
+        have had time to settle. Older backfill posts are scored immediately.
+        """
+        now = datetime.now(timezone.utc)
+        source_published_at = post.source_metrics.source_published_at
+        if source_published_at is None:
+            return now
+        if source_published_at.tzinfo is None:
+            source_published_at = source_published_at.replace(tzinfo=timezone.utc)
+        else:
+            source_published_at = source_published_at.astimezone(timezone.utc)
+        due_at = source_published_at + timedelta(minutes=QUALITY_SCORE_DELAY_MINUTES)
+        return max(now, due_at)

@@ -21,7 +21,28 @@ DEFAULT_CONFIG_PATH = "config/configuration.json"
 CONFIG_PATH_ENV_VAR = "TELEGRAM_ADMIN_BOT_CONFIG"
 
 DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_GOOGLE_AI_STUDIO_BASE_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/openai/"
+)
+DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+DEFAULT_AI_PROVIDER_MODELS = {
+    "google_ai_studio": "gemini-2.0-flash",
+    "groq": "llama-3.3-70b-versatile",
+    "openrouter": "openai/gpt-4o-mini",
+    "deepseek": "deepseek-chat",
+    "zai": "glm-4.6",
+}
+
+DEFAULT_AI_PROVIDER_BASE_URLS = {
+    "google_ai_studio": DEFAULT_GOOGLE_AI_STUDIO_BASE_URL,
+    "groq": DEFAULT_GROQ_BASE_URL,
+    "openrouter": DEFAULT_OPENROUTER_BASE_URL,
+    "deepseek": DEFAULT_DEEPSEEK_BASE_URL,
+    "zai": DEFAULT_ZAI_BASE_URL,
+}
 
 
 @dataclass(frozen=True)
@@ -48,23 +69,31 @@ class TelegramConfig:
     destination_channels: list[DestinationChannelConfig] = field(default_factory=list)
     admin_user_ids: list[int] = field(default_factory=list)
     collector_session: str = "data/collector"
+    scheduler_session: str = "data/scheduler"
+    scheduler_phone: str = ""
     collector_daily_backfill_max_messages: int = 5000
     source_refresh_seconds: int = 60
 
 
 @dataclass(frozen=True)
-class AiConfig:
-    """
-    AI provider selection, credentials, and model overrides.
+class AiProviderConfig:
+    """One configured AI provider in priority order."""
 
-    Model overrides are per provider (``zai_model``, ``deepseek_model``)
-    because each API only accepts its own model names. The legacy shared
-    keys ``deduplication_model``/``classification_model`` are deprecated
-    and ignored: a single shared name cannot be valid on both providers.
-    """
+    name: str
+    enabled: bool = True
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    timeout_seconds: int = 30
+
+
+@dataclass(frozen=True)
+class AiConfig:
+    """AI provider chain and legacy compatibility fields."""
 
     primary_provider: str = "zai"
     fallback_provider: str = "deepseek"
+    providers: list[AiProviderConfig] = field(default_factory=list)
     zai_api_key: str = ""
     deepseek_api_key: str = ""
     zai_base_url: str = DEFAULT_ZAI_BASE_URL
@@ -92,6 +121,7 @@ class StorageConfig:
 
     media_directory: str = "data/media"
     retention_days: int = 14
+    media_download_timeout_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -141,6 +171,7 @@ class LoggingConfig:
 
     level: str = "INFO"
     file: str = "logs/app.log"
+    color_console: bool = True
 
 
 @dataclass(frozen=True)
@@ -186,6 +217,67 @@ def _parse_destinations(raw: list[Any]) -> list[DestinationChannelConfig]:
     return channels
 
 
+def _parse_ai_providers(ai: dict[str, Any]) -> list[AiProviderConfig]:
+    """Parse the AI provider chain, preserving legacy config compatibility."""
+    raw = ai.get("providers")
+    if isinstance(raw, list):
+        providers: list[AiProviderConfig] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise ConfigurationError("Each ai.providers item must be an object")
+            name = str(entry.get("name", "")).strip()
+            if not name:
+                raise ConfigurationError("Each ai.providers item must have a name")
+            providers.append(
+                AiProviderConfig(
+                    name=name,
+                    enabled=bool(entry.get("enabled", True)),
+                    api_key=str(entry.get("api_key") or ai.get(f"{name}_api_key", "")),
+                    base_url=str(
+                        entry.get(
+                            "base_url",
+                            DEFAULT_AI_PROVIDER_BASE_URLS.get(name, ""),
+                        )
+                    ),
+                    model=str(
+                        entry.get("model", DEFAULT_AI_PROVIDER_MODELS.get(name, ""))
+                    ),
+                    timeout_seconds=int(
+                        entry.get(
+                            "timeout_seconds",
+                            ai.get("request_timeout_seconds", 30),
+                        )
+                    ),
+                )
+            )
+        return providers
+
+    legacy_names = [
+        str(ai.get("primary_provider", "zai")),
+        str(ai.get("fallback_provider", "deepseek")),
+    ]
+    providers = []
+    for name in dict.fromkeys(n for n in legacy_names if n):
+        providers.append(
+            AiProviderConfig(
+                name=name,
+                enabled=True,
+                api_key=str(ai.get(f"{name}_api_key", "")),
+                base_url=str(
+                    ai.get(
+                        f"{name}_base_url",
+                        DEFAULT_AI_PROVIDER_BASE_URLS.get(name, ""),
+                    )
+                ),
+                model=str(
+                    ai.get(f"{name}_model", DEFAULT_AI_PROVIDER_MODELS.get(name, ""))
+                ),
+                timeout_seconds=int(ai.get("request_timeout_seconds", 30)),
+            )
+        )
+    return providers
+
+
 def load_configuration(path: str | Path | None = None) -> AppConfig:
     """
     Load and parse the application configuration file.
@@ -213,7 +305,9 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
     try:
         data = json.loads(resolved.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ConfigurationError(f"Configuration file is not valid UTF-8 JSON: {exc}") from exc
+        raise ConfigurationError(
+            f"Configuration file is not valid UTF-8 JSON: {exc}"
+        ) from exc
     if not isinstance(data, dict):
         raise ConfigurationError("Configuration root must be a JSON object")
 
@@ -234,9 +328,13 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 api_id=str(tg.get("api_id", "")),
                 api_hash=str(tg.get("api_hash", "")),
                 source_channels=list(tg.get("source_channels", [])),
-                destination_channels=_parse_destinations(list(tg.get("destination_channels", []))),
+                destination_channels=_parse_destinations(
+                    list(tg.get("destination_channels", []))
+                ),
                 admin_user_ids=[int(x) for x in tg.get("admin_user_ids", [])],
                 collector_session=str(tg.get("collector_session", "data/collector")),
+                scheduler_session=str(tg.get("scheduler_session", "data/scheduler")),
+                scheduler_phone=str(tg.get("scheduler_phone", "")),
                 collector_daily_backfill_max_messages=int(
                     tg.get("collector_daily_backfill_max_messages", 5000)
                 ),
@@ -245,16 +343,21 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
             ai=AiConfig(
                 primary_provider=str(ai.get("primary_provider", "zai")),
                 fallback_provider=str(ai.get("fallback_provider", "deepseek")),
+                providers=_parse_ai_providers(ai),
                 zai_api_key=str(ai.get("zai_api_key", "")),
                 deepseek_api_key=str(ai.get("deepseek_api_key", "")),
                 zai_base_url=str(ai.get("zai_base_url", DEFAULT_ZAI_BASE_URL)),
-                deepseek_base_url=str(ai.get("deepseek_base_url", DEFAULT_DEEPSEEK_BASE_URL)),
+                deepseek_base_url=str(
+                    ai.get("deepseek_base_url", DEFAULT_DEEPSEEK_BASE_URL)
+                ),
                 zai_model=str(ai.get("zai_model", "")),
                 deepseek_model=str(ai.get("deepseek_model", "")),
                 deduplication_model=str(ai.get("deduplication_model", "")),
                 classification_model=str(ai.get("classification_model", "")),
                 request_timeout_seconds=int(ai.get("request_timeout_seconds", 30)),
-                recent_posts_compare_limit=int(ai.get("recent_posts_compare_limit", 30)),
+                recent_posts_compare_limit=int(
+                    ai.get("recent_posts_compare_limit", 30)
+                ),
             ),
             database=DatabaseConfig(
                 sqlite_path=str(db.get("sqlite_path", "data/app.db")),
@@ -264,6 +367,9 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
             storage=StorageConfig(
                 media_directory=str(storage.get("media_directory", "data/media")),
                 retention_days=int(storage.get("retention_days", 14)),
+                media_download_timeout_seconds=int(
+                    storage.get("media_download_timeout_seconds", 60)
+                ),
             ),
             vpn_testing=VpnTestingConfig(
                 iran_worker_enabled=bool(vpn.get("iran_worker_enabled", True)),
@@ -276,7 +382,12 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 test_url=str(vpn.get("test_url", "https://www.gstatic.com/generate_204")),
             ),
             scheduler=SchedulerConfig(
-                usd_price_publish_times=[str(t) for t in sched.get("usd_price_publish_times", ["09:00", "21:00"])],
+                usd_price_publish_times=[
+                    str(t)
+                    for t in sched.get(
+                        "usd_price_publish_times", ["09:00", "21:00"]
+                    )
+                ],
                 timezone=str(sched.get("timezone", "Asia/Tehran")),
                 cleanup_time=str(sched.get("cleanup_time", "04:30")),
             ),
@@ -290,6 +401,7 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
             logging=LoggingConfig(
                 level=str(log.get("level", "INFO")),
                 file=str(log.get("file", "logs/app.log")),
+                color_console=bool(log.get("color_console", True)),
             ),
         )
     except (TypeError, ValueError) as exc:
@@ -302,6 +414,15 @@ def _require_non_empty(value: str, name: str) -> None:
         raise ConfigurationError(f"Required configuration value is empty: {name}")
 
 
+def _active_ai_providers(config: AppConfig) -> list[AiProviderConfig]:
+    """Return providers that are enabled and have the minimum required fields."""
+    return [
+        provider
+        for provider in config.ai.providers
+        if provider.enabled and provider.api_key and provider.base_url and provider.model
+    ]
+
+
 def validate_main_app_config(config: AppConfig) -> None:
     """
     Validate values required by the main bot process (``src.main``).
@@ -311,11 +432,25 @@ def validate_main_app_config(config: AppConfig) -> None:
     """
     _require_non_empty(config.telegram.bot_token, "telegram.bot_token")
     _require_non_empty(config.telegram.approval_bot_token, "telegram.approval_bot_token")
-    _require_non_empty(config.database.mongodb_connection_string, "database.mongodb_connection_string")
+    _require_non_empty(config.telegram.api_id, "telegram.api_id")
+    _require_non_empty(config.telegram.api_hash, "telegram.api_hash")
+    _require_non_empty(
+        config.database.mongodb_connection_string,
+        "database.mongodb_connection_string",
+    )
     if not config.telegram.admin_user_ids:
         raise ConfigurationError("telegram.admin_user_ids must contain at least one admin")
     if not config.telegram.destination_channels:
         raise ConfigurationError("telegram.destination_channels must not be empty")
+    _require_non_empty(
+        config.telegram.scheduler_session,
+        "telegram.scheduler_session",
+    )
+    if not _active_ai_providers(config):
+        raise ConfigurationError(
+            "ai.providers must contain at least one enabled provider "
+            "with api_key and model"
+        )
 
 
 def validate_collector_config(config: AppConfig) -> None:
@@ -327,7 +462,10 @@ def validate_collector_config(config: AppConfig) -> None:
     """
     _require_non_empty(config.telegram.api_id, "telegram.api_id")
     _require_non_empty(config.telegram.api_hash, "telegram.api_hash")
-    _require_non_empty(config.database.mongodb_connection_string, "database.mongodb_connection_string")
+    _require_non_empty(
+        config.database.mongodb_connection_string,
+        "database.mongodb_connection_string",
+    )
     if not config.telegram.source_channels:
         raise ConfigurationError("telegram.source_channels must not be empty")
     if config.telegram.collector_daily_backfill_max_messages < 0:
@@ -336,6 +474,13 @@ def validate_collector_config(config: AppConfig) -> None:
         )
     if config.telegram.source_refresh_seconds < 0:
         raise ConfigurationError("telegram.source_refresh_seconds must be >= 0")
+    if config.storage.media_download_timeout_seconds <= 0:
+        raise ConfigurationError("storage.media_download_timeout_seconds must be > 0")
+    if not _active_ai_providers(config):
+        raise ConfigurationError(
+            "ai.providers must contain at least one enabled provider "
+            "with api_key and model"
+        )
 
 
 def validate_worker_config(config: AppConfig) -> None:
@@ -379,13 +524,17 @@ def log_startup_summary(config: AppConfig) -> None:
         return "set" if value else "EMPTY"
 
     ai = config.ai
+    provider_summary = ", ".join(
+        f"{provider.name}:{'on' if provider.enabled else 'off'}"
+        for provider in ai.providers
+    )
     logger = get_logger(__name__)
     logger.info(
         "Effective configuration:\n"
         "  sources=%d destinations=%d admins=%d\n"
-        "  ai: primary=%s (key %s) fallback=%s (key %s) "
-        "zai_model=%s deepseek_model=%s\n"
+        "  ai: providers=%s active=%d\n"
         "  telegram: bot_token %s, approval_bot_token %s, api_id %s\n"
+        "  scheduler_session: %s phone %s\n"
         "  collector: daily_backfill_max_messages=%d source_refresh_seconds=%d timezone=%s\n"
         "  mongodb: host=%s db=%s | sqlite: %s\n"
         "  vpn_testing: enabled=%s worker_url %s\n"
@@ -393,15 +542,13 @@ def log_startup_summary(config: AppConfig) -> None:
         len(config.telegram.source_channels),
         len(config.telegram.destination_channels),
         len(config.telegram.admin_user_ids),
-        ai.primary_provider,
-        set_or_not(ai.zai_api_key if ai.primary_provider == "zai" else ai.deepseek_api_key),
-        ai.fallback_provider or "(none)",
-        set_or_not(ai.deepseek_api_key if ai.fallback_provider == "deepseek" else ai.zai_api_key),
-        ai.zai_model or "(default glm-4.6)",
-        ai.deepseek_model or "(default deepseek-chat)",
+        provider_summary or "(none)",
+        len(_active_ai_providers(config)),
         set_or_not(config.telegram.bot_token),
         set_or_not(config.telegram.approval_bot_token),
         set_or_not(config.telegram.api_id),
+        config.telegram.scheduler_session,
+        set_or_not(config.telegram.scheduler_phone),
         config.telegram.collector_daily_backfill_max_messages,
         config.telegram.source_refresh_seconds,
         config.scheduler.timezone,
