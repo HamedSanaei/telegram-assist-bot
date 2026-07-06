@@ -501,26 +501,92 @@ class SqliteApprovalRequestRepository:
         self._db = db
 
     async def has_requested(self, post_id: str) -> bool:
-        """Return whether an approval request was already sent for the post."""
+        """Return whether an approval request already entered dispatch."""
         row = await self._db.fetchone(
-            "SELECT 1 FROM approval_requests WHERE post_id = ?", (post_id,)
+            """
+            SELECT 1 FROM approval_requests
+            WHERE post_id = ? AND status IN ('reserved', 'sent')
+            """,
+            (post_id,),
         )
         return row is not None
 
     async def record_requested(self, post_id: str) -> None:
         """Record that the approval request was sent successfully."""
+        now = _utcnow_iso()
         await self._db.execute(
             """
-            INSERT OR IGNORE INTO approval_requests (post_id, requested_at)
-            VALUES (?, ?)
+            INSERT INTO approval_requests
+                (post_id, requested_at, status, last_error, updated_at)
+            VALUES (?, ?, 'sent', NULL, ?)
+            ON CONFLICT(post_id) DO UPDATE SET
+                status = 'sent',
+                last_error = NULL,
+                updated_at = excluded.updated_at
             """,
-            (post_id, _utcnow_iso()),
+            (post_id, now, now),
+        )
+
+    async def reserve_request(self, post_id: str) -> bool:
+        """Reserve an approval request unless it is already reserved or sent."""
+        now = _utcnow_iso()
+        cursor = await self._db.connection.execute(
+            """
+            INSERT OR IGNORE INTO approval_requests
+                (post_id, requested_at, status, last_error, updated_at)
+            VALUES (?, ?, 'reserved', NULL, ?)
+            """,
+            (post_id, now, now),
+        )
+        await self._db.connection.commit()
+        if cursor.rowcount == 1:
+            return True
+        row = await self._db.fetchone(
+            "SELECT status FROM approval_requests WHERE post_id = ?", (post_id,)
+        )
+        if row is None or row["status"] != "failed":
+            return False
+        cursor = await self._db.connection.execute(
+            """
+            UPDATE approval_requests
+            SET status = 'reserved', last_error = NULL, updated_at = ?
+            WHERE post_id = ? AND status = 'failed'
+            """,
+            (now, post_id),
+        )
+        await self._db.connection.commit()
+        return cursor.rowcount == 1
+
+    async def mark_sent(self, post_id: str) -> None:
+        """Mark a reserved approval request as sent."""
+        await self._db.execute(
+            """
+            UPDATE approval_requests
+            SET status = 'sent', last_error = NULL, updated_at = ?
+            WHERE post_id = ?
+            """,
+            (_utcnow_iso(), post_id),
+        )
+
+    async def mark_failed(self, post_id: str, error: str) -> None:
+        """Mark a reserved approval request as failed."""
+        await self._db.execute(
+            """
+            UPDATE approval_requests
+            SET status = 'failed', last_error = ?, updated_at = ?
+            WHERE post_id = ?
+            """,
+            (error, _utcnow_iso(), post_id),
         )
 
     async def list_requested_post_ids(self) -> list[str]:
-        """Return all post ids recorded as sent to the approval bot."""
+        """Return post ids already reserved or sent to the approval bot."""
         rows = await self._db.fetchall(
-            "SELECT post_id FROM approval_requests ORDER BY requested_at, post_id"
+            """
+            SELECT post_id FROM approval_requests
+            WHERE status IN ('reserved', 'sent')
+            ORDER BY requested_at, post_id
+            """
         )
         return [row["post_id"] for row in rows]
 

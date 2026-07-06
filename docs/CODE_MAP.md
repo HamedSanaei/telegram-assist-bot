@@ -99,9 +99,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   schedule/unschedule toggles, and duplicate-prevention via the publish log.
   It records approval-bot message references and reserves a post/channel
   pair before Telegram actions so multiple admins cannot race the same
-  destination. Startup approval repair skips any post that already has a
-  publish-log delivery record (`reserved`, `published`, `scheduled`, or
-  `removed`), so restarts do not resend already handled posts.
+  destination. The `approval_requests` table is the approval-preview
+  idempotency boundary: startup never resends posts that already entered the
+  approval stage, even if old message refs are inactive.
 - `price_service.py` — `UsdPriceService` + `format_price_message` (Persian
   message with 🔺/🔻 change vs. previous record).
 - `cleanup_service.py` — `CleanupService`: TTL safety net + queue expiry.
@@ -127,6 +127,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
   `ai.providers` entry (Google AI Studio, Groq, OpenRouter, DeepSeek by
   default; z.ai is present but disabled in the template). HTTP error
   messages include the provider, model name, and API response body.
+  OpenRouter entries may set `fallback_models` and `route: "fallback"` so
+  OpenRouter handles model fallback inside one provider request.
   `ai/zai_provider.py` and `ai/deepseek_provider.py` remain compatibility
   wrappers for older direct construction.
 - `telegram/publisher.py` — `AiogramMessagePublisher` (text, or first
@@ -252,7 +254,10 @@ source refresh also performs a lightweight current-day catch-up scan
 (maximum 300 recent messages per known source) to recover source-channel
 updates missed during Telethon reconnect/difference sync. Destination
 `public_id` values are used to replace configured source-channel mentions
-before publishing or native scheduling to each selected destination.
+before publishing or native scheduling to each selected destination. After
+that replacement, remaining Telegram `@username`, `t.me/...`, and
+`telegram.me/...` references are removed unless they point to the
+destination public id.
 `telegram.scheduler_session` is the Telethon destination user session used
 for approved immediate publishing, native Telegram channel scheduling, and
 custom emoji preservation; the user account must be an admin in destination
@@ -261,7 +266,8 @@ channels.
 AI settings use a priority-ordered `ai.providers` list. The default template
 orders Google AI Studio, Groq, OpenRouter, and DeepSeek, while keeping z.ai
 as a disabled entry. Providers with `enabled: false`, missing keys, missing
-models, or missing base URLs are skipped.
+models, or missing base URLs are skipped. OpenRouter-specific
+`fallback_models` are sent as OpenRouter's `models` routing list.
 
 Channel and admin lists in the config file are **authoritative at runtime**:
 `sync_config_to_sqlite` upserts configured rows, disables missing channels,
@@ -370,6 +376,17 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-06 — Made approval preview dispatch restart-idempotent:
+`approval_requests` now records reserved/sent/failed dispatch state, and
+startup no longer resends posts that previously entered the approval bot
+stage even when old approval message refs are inactive.
+
+2026-07-05 — Added Telegram id cleanup during publish-time rewrite:
+configured source mentions are replaced with the destination id and all
+other Telegram handles/links are removed. Added OpenRouter
+`fallback_models`/`route` config support so OpenRouter can perform
+server-side fallback routing.
 
 2026-07-04 — Added approval-repair delivery guards so posts with any
 publish-log history are not resent to admins after restart. Added custom

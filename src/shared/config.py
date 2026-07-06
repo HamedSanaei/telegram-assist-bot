@@ -84,6 +84,8 @@ class AiProviderConfig:
     api_key: str = ""
     base_url: str = ""
     model: str = ""
+    fallback_models: list[str] = field(default_factory=list)
+    route: str = ""
     timeout_seconds: int = 30
 
 
@@ -242,6 +244,8 @@ def _parse_ai_providers(ai: dict[str, Any]) -> list[AiProviderConfig]:
                     model=str(
                         entry.get("model", DEFAULT_AI_PROVIDER_MODELS.get(name, ""))
                     ),
+                    fallback_models=_string_list(entry.get("fallback_models", [])),
+                    route=str(entry.get("route", "")),
                     timeout_seconds=int(
                         entry.get(
                             "timeout_seconds",
@@ -272,10 +276,19 @@ def _parse_ai_providers(ai: dict[str, Any]) -> list[AiProviderConfig]:
                 model=str(
                     ai.get(f"{name}_model", DEFAULT_AI_PROVIDER_MODELS.get(name, ""))
                 ),
+                fallback_models=[],
+                route="",
                 timeout_seconds=int(ai.get("request_timeout_seconds", 30)),
             )
         )
     return providers
+
+
+def _string_list(value: object) -> list[str]:
+    """Return a clean list of strings from a JSON array value."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def load_configuration(path: str | Path | None = None) -> AppConfig:

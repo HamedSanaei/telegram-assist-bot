@@ -57,6 +57,11 @@ def _valid_config() -> dict:
                     "api_key": "ork",
                     "base_url": "https://openrouter.ai/api/v1",
                     "model": "openai/gpt-4o-mini",
+                    "fallback_models": [
+                        "google/gemini-flash-1.5",
+                        "deepseek/deepseek-chat",
+                    ],
+                    "route": "fallback",
                 },
                 {
                     "name": "deepseek",
@@ -101,6 +106,12 @@ class TestLoadConfiguration:
             "openrouter",
             "deepseek",
         ]
+        openrouter = config.ai.providers[2]
+        assert openrouter.fallback_models == [
+            "google/gemini-flash-1.5",
+            "deepseek/deepseek-chat",
+        ]
+        assert openrouter.route == "fallback"
         assert config.storage.retention_days == 14
         assert config.storage.media_download_timeout_seconds == 60
         assert config.scheduler.usd_price_publish_times == ["09:00", "21:00"]
@@ -140,6 +151,12 @@ class TestLoadConfiguration:
             "zai",
         ]
         assert config.ai.providers[-1].enabled is False
+        openrouter = config.ai.providers[2]
+        assert openrouter.fallback_models == [
+            "google/gemini-flash-1.5",
+            "deepseek/deepseek-chat",
+        ]
+        assert openrouter.route == "fallback"
         assert config.usd_price.provider == "nobitex"
         assert config.telegram.collector_daily_backfill_max_messages == 5000
         assert config.telegram.source_refresh_seconds == 60

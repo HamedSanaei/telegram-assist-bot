@@ -22,6 +22,23 @@ def _provider(handler) -> OpenAiCompatibleProvider:
     )
 
 
+def _openrouter_provider(handler) -> OpenAiCompatibleProvider:
+    """Build an OpenRouter provider with fallback routing enabled."""
+    return OpenAiCompatibleProvider(
+        name="openrouter",
+        api_key="k",
+        base_url="https://openrouter.ai/api/v1",
+        default_model="openai/gpt-4o-mini",
+        fallback_models=[
+            "google/gemini-flash-1.5",
+            "openai/gpt-4o-mini",
+            "deepseek/deepseek-chat",
+        ],
+        route="fallback",
+        transport=httpx.MockTransport(handler),
+    )
+
+
 class TestChatErrors:
     """Tests for error reporting of the chat-completions call."""
 
@@ -151,3 +168,53 @@ class TestChatErrors:
         assert result.score == 82
         assert result.reason == "خبر ارزشمند است"
         assert result.provider == "fakeai"
+
+    async def test_openrouter_payload_includes_fallback_routing(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["model"] == "openai/gpt-4o-mini"
+            assert payload["models"] == [
+                "openai/gpt-4o-mini",
+                "google/gemini-flash-1.5",
+                "deepseek/deepseek-chat",
+            ]
+            assert payload["route"] == "fallback"
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": '{"category": "technology"}'}}
+                    ]
+                },
+            )
+
+        provider = _openrouter_provider(handler)
+        result = await provider.classify_post("متن فناوری")
+        assert result.category.value == "technology"
+
+    async def test_non_openrouter_payload_ignores_fallback_models(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["model"] == "fake-model"
+            assert "models" not in payload
+            assert "route" not in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": '{"category": "technology"}'}}
+                    ]
+                },
+            )
+
+        provider = OpenAiCompatibleProvider(
+            name="fakeai",
+            api_key="k",
+            base_url="https://fake.example/v1",
+            default_model="fake-model",
+            fallback_models=["other-model"],
+            route="fallback",
+            transport=httpx.MockTransport(handler),
+        )
+        result = await provider.classify_post("متن فناوری")
+        assert result.category.value == "technology"

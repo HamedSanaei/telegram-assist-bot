@@ -54,6 +54,11 @@
         "api_key": "",
         "base_url": "https://openrouter.ai/api/v1",
         "model": "openai/gpt-4o-mini",
+        "fallback_models": [
+          "google/gemini-flash-1.5",
+          "deepseek/deepseek-chat"
+        ],
+        "route": "fallback",
         "timeout_seconds": 30
       },
       {

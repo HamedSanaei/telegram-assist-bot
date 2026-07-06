@@ -93,6 +93,8 @@ def create_ai_service(config: AppConfig) -> AiService:
             default_model=entry.model,
             classification_model=entry.model,
             deduplication_model=entry.model,
+            fallback_models=entry.fallback_models if entry.name == "openrouter" else [],
+            route=entry.route if entry.name == "openrouter" else "",
             timeout_seconds=entry.timeout_seconds,
         )
         for entry in config.ai.providers

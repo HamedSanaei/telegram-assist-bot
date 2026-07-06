@@ -28,11 +28,11 @@ price updates twice per day with the change compared to the previous record.
   per-channel immediate/native-scheduled toggle buttons, and ✅ marks after
   successful publishing or scheduling. A second click deletes the published
   message or removes the native scheduled message; duplicate publishing is
-  blocked. Startup repairs only approval requests that were recorded without
-  active approval-bot message refs and have no publish/schedule/remove
-  history.
+  blocked. Restart never resends a post that already entered the approval
+  stage, even if old approval-bot message refs are inactive.
 - Source-channel `@...` / `t.me/...` mentions are replaced with the selected
-  destination channel `public_id` before publishing.
+  destination channel `public_id`; all other Telegram handles/links are
+  removed before publishing.
 - Premium custom emoji entities are stored with the post text and preserved
   when approved posts are sent through the Telethon destination user session.
 - USD price publishing twice per day with change vs. the previous price.

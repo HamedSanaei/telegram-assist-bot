@@ -184,10 +184,10 @@ class TestApprovalService:
         assert len(refs) == 1
         assert refs[0].post_id == "p1"
 
-    async def test_request_approval_resends_when_record_has_no_active_messages(
+    async def test_request_approval_does_not_resend_record_without_active_messages(
         self,
     ) -> None:
-        """A recorded but orphaned approval request is delivered again."""
+        """A recorded approval request is never resent automatically."""
         posts = FakePostRepository()
         publish_log = FakePublishLogRepository()
         channels = FakeChannelRepository(
@@ -212,13 +212,13 @@ class TestApprovalService:
 
         await service.request_approval("p1")
 
-        assert notifier.sent == [("p1", [NEWS_CHANNEL])]
-        assert len(await service.active_approval_messages("p1")) == 1
+        assert notifier.sent == []
+        assert len(await service.active_approval_messages("p1")) == 0
 
-    async def test_repair_orphaned_approval_requests_resends_missing_messages(
+    async def test_repair_orphaned_approval_requests_does_not_resend_messages(
         self,
     ) -> None:
-        """Startup repair resends recorded approvals that have no active refs."""
+        """Startup repair never resends already requested approvals."""
         posts = FakePostRepository()
         channels = FakeChannelRepository(
             [DestinationChannel(chat_id=NEWS_CHANNEL, title="News")]
@@ -247,10 +247,35 @@ class TestApprovalService:
 
         repaired = await service.repair_orphaned_approval_requests()
 
-        assert repaired == 1
-        assert notifier.sent == [("p1", [NEWS_CHANNEL])]
+        assert repaired == 0
+        assert notifier.sent == []
         refs = await service.active_approval_messages("p2")
         assert [ref.message_id for ref in refs] == [22]
+
+    async def test_request_approval_does_not_resend_reserved_request(self) -> None:
+        """A reserved approval request is treated as already in-flight."""
+        posts = FakePostRepository()
+        channels = FakeChannelRepository(
+            [DestinationChannel(chat_id=NEWS_CHANNEL, title="News")]
+        )
+        notifier = FakeApprovalNotifier()
+        approval_requests = FakeApprovalRequestRepository()
+        service = ApprovalService(
+            posts=posts,
+            publish_log=FakePublishLogRepository(),
+            channels=channels,
+            admins=FakeAdminRepository({ADMIN_ID}),
+            publisher=FakePublisher(),
+            notifier=notifier,
+            approval_requests=approval_requests,
+            approval_messages=FakeApprovalMessageRepository(),
+        )
+        await posts.save(_post())
+        assert await approval_requests.reserve_request("p1") is True
+
+        await service.request_approval("p1")
+
+        assert notifier.sent == []
 
     async def test_repair_skips_posts_with_any_delivery_record(self) -> None:
         """Startup repair does not resend posts already touched by publishing."""
@@ -319,6 +344,32 @@ class TestApprovalService:
         await service.request_approval("p1")
 
         assert notifier.sent == []
+
+    async def test_request_approval_retries_failed_reservation(self) -> None:
+        """A failed approval dispatch can be retried by the queue item."""
+        posts = FakePostRepository()
+        channels = FakeChannelRepository(
+            [DestinationChannel(chat_id=NEWS_CHANNEL, title="News")]
+        )
+        notifier = FakeApprovalNotifier()
+        approval_requests = FakeApprovalRequestRepository()
+        service = ApprovalService(
+            posts=posts,
+            publish_log=FakePublishLogRepository(),
+            channels=channels,
+            admins=FakeAdminRepository({ADMIN_ID}),
+            publisher=FakePublisher(),
+            notifier=notifier,
+            approval_requests=approval_requests,
+            approval_messages=FakeApprovalMessageRepository(),
+        )
+        await posts.save(_post())
+        await approval_requests.mark_failed("p1", "telegram error")
+
+        await service.request_approval("p1")
+
+        assert notifier.sent == [("p1", [NEWS_CHANNEL])]
+        assert await approval_requests.has_requested("p1") is True
 
     async def test_publish_rewrites_source_mentions_for_destination(self) -> None:
         service, posts, _, publisher = _make_service()

@@ -7,6 +7,15 @@ from dataclasses import dataclass, replace
 
 from src.domain.entities import TextEntity
 
+_TELEGRAM_LINK_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z0-9_]{5,})(?:/\d+)?",
+    flags=re.IGNORECASE,
+)
+_TELEGRAM_HANDLE_RE = re.compile(
+    r"(?<![\w@./:-])@([A-Za-z0-9_]{5,})(?![\w])",
+    flags=re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class RewrittenText:
@@ -56,7 +65,7 @@ def rewrite_source_channel_mentions(
     destination_public_id: str,
 ) -> str:
     """
-    Replace configured source-channel mentions with the destination id.
+    Replace source mentions and remove other Telegram handles/links.
 
     Args:
         text: Original post text.
@@ -66,8 +75,10 @@ def rewrite_source_channel_mentions(
 
     Returns:
         Text with source ``@channel`` and ``t.me/channel`` references
-        replaced by ``destination_public_id``. When no destination public id
-        is configured, the text is returned unchanged.
+        replaced by ``destination_public_id``. Other Telegram handles/links
+        are removed so support or advertising ids are not republished. When
+        no destination public id is configured, the text is returned
+        unchanged.
 
     Example:
         rewrite_source_channel_mentions("از @source", ["@source"], "@dest")
@@ -87,7 +98,7 @@ def rewrite_source_channel_mentions_with_entities(
     destination_public_id: str,
 ) -> RewrittenText:
     """
-    Replace source-channel mentions and keep entity offsets aligned.
+    Replace source mentions, remove other Telegram ids, and align entities.
 
     Args:
         text: Original post text.
@@ -126,6 +137,13 @@ def rewrite_source_channel_mentions_with_entities(
             ),
             replacement_text,
         )
+    destination_handle = _handle_from_identifier(replacement_text)
+    rewritten, entities = _remove_unwanted_telegram_mentions(
+        rewritten,
+        entities,
+        protected_handle=destination_handle.lower() if destination_handle else None,
+    )
+    rewritten, entities = _normalize_cleanup_spacing(rewritten, entities)
     return RewrittenText(text=rewritten, entities=entities)
 
 
@@ -177,3 +195,96 @@ def _shift_entities_after_replacement(
         elif entity.offset >= end:
             shifted.append(replace(entity, offset=entity.offset + delta))
     return shifted
+
+
+def _remove_unwanted_telegram_mentions(
+    text: str,
+    entities: list[TextEntity],
+    protected_handle: str | None,
+) -> tuple[str, list[TextEntity]]:
+    """
+    Remove Telegram handles/links except the destination public handle.
+
+    Args:
+        text: Text after known source mentions were rewritten.
+        entities: Text entities aligned with ``text``.
+        protected_handle: Destination handle without ``@`` to preserve.
+
+    Returns:
+        Cleaned text and shifted entities.
+    """
+    cleaned, shifted = _remove_matches_except_handle(
+        text,
+        entities,
+        _TELEGRAM_LINK_RE,
+        protected_handle,
+    )
+    return _remove_matches_except_handle(
+        cleaned,
+        shifted,
+        _TELEGRAM_HANDLE_RE,
+        protected_handle,
+    )
+
+
+def _remove_matches_except_handle(
+    text: str,
+    entities: list[TextEntity],
+    pattern: re.Pattern[str],
+    protected_handle: str | None,
+) -> tuple[str, list[TextEntity]]:
+    """Remove repeated regex matches unless they target the protected handle."""
+    rewritten = text
+    shifted = list(entities)
+    search_from = 0
+    while True:
+        match = pattern.search(rewritten, search_from)
+        if match is None:
+            return rewritten, shifted
+        handle = match.group(1).lower()
+        if protected_handle and handle == protected_handle:
+            search_from = match.end()
+            continue
+        start, end = match.span()
+        old_length = end - start
+        rewritten = f"{rewritten[:start]}{rewritten[end:]}"
+        shifted = _shift_entities_after_replacement(
+            shifted,
+            start=start,
+            old_length=old_length,
+            new_length=0,
+        )
+        search_from = start
+
+
+def _normalize_cleanup_spacing(
+    text: str, entities: list[TextEntity]
+) -> tuple[str, list[TextEntity]]:
+    """Collapse repeated spaces left behind after mention/link removal."""
+    collapsed, shifted = _replace_with_entity_shift(
+        text,
+        entities,
+        re.compile(r"[ \t]{2,}"),
+        " ",
+    )
+    return _trim_outer_whitespace(collapsed, shifted)
+
+
+def _trim_outer_whitespace(
+    text: str, entities: list[TextEntity]
+) -> tuple[str, list[TextEntity]]:
+    """Trim leading/trailing whitespace while keeping entity offsets valid."""
+    leading = len(text) - len(text.lstrip())
+    if leading:
+        text = text[leading:]
+        entities = _shift_entities_after_replacement(
+            entities, start=0, old_length=leading, new_length=0
+        )
+    trailing = len(text) - len(text.rstrip())
+    if trailing:
+        start = len(text) - trailing
+        text = text[:start]
+        entities = _shift_entities_after_replacement(
+            entities, start=start, old_length=trailing, new_length=0
+        )
+    return text, entities

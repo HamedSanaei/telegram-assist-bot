@@ -76,6 +76,19 @@ _MAX_COMPARE_TEXT_CHARS = 800
 _MAX_HTTP_ATTEMPTS = 1
 
 
+def _dedupe_models(models: list[str]) -> list[str]:
+    """Return model names in order without duplicates or blanks."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        clean = model.strip()
+        if not clean or clean in seen:
+            continue
+        result.append(clean)
+        seen.add(clean)
+    return result
+
+
 class OpenAiCompatibleProvider:
     """
     AI provider speaking the OpenAI chat-completions protocol.
@@ -98,6 +111,8 @@ class OpenAiCompatibleProvider:
         default_model: str,
         classification_model: str = "",
         deduplication_model: str = "",
+        fallback_models: list[str] | None = None,
+        route: str = "",
         timeout_seconds: int = 30,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -109,6 +124,9 @@ class OpenAiCompatibleProvider:
             default_model: Model used when no override is configured.
             classification_model: Optional model override for classification.
             deduplication_model: Optional model override for duplicate checks.
+            fallback_models: Optional OpenRouter fallback routing models.
+            route: Optional OpenRouter route strategy, usually
+                ``"fallback"``.
             timeout_seconds: HTTP timeout for every request.
             transport: Optional httpx transport, used by unit tests to
                 mock the API without real network access.
@@ -118,6 +136,8 @@ class OpenAiCompatibleProvider:
         self._base_url = base_url.rstrip("/")
         self._classification_model = classification_model or default_model
         self._deduplication_model = deduplication_model or default_model
+        self._fallback_models = fallback_models or []
+        self._route = route
         self._timeout = timeout_seconds
         self._transport = transport
 
@@ -306,15 +326,27 @@ class OpenAiCompatibleProvider:
             AiProviderError: On any transport or protocol failure.
         """
         url = f"{self._base_url}/chat/completions"
-        payload = {"model": model, "messages": messages, "temperature": 0}
+        payload = self._chat_payload(model, messages)
         headers = {"Authorization": f"Bearer {self._api_key}"}
         last_http_error: httpx.HTTPError | None = None
-        logger.info(
-            "Using AI provider=%s model=%s",
-            self.name,
-            model,
-            extra={"event_kind": "ai_success"},
-        )
+        route = payload.get("route")
+        models = payload.get("models")
+        if route and isinstance(models, list):
+            logger.info(
+                "Using AI provider=%s model=%s route=%s models_count=%d",
+                self.name,
+                model,
+                route,
+                len(models),
+                extra={"event_kind": "ai_success"},
+            )
+        else:
+            logger.info(
+                "Using AI provider=%s model=%s",
+                self.name,
+                model,
+                extra={"event_kind": "ai_success"},
+            )
         async with httpx.AsyncClient(
             timeout=self._timeout, transport=self._transport
         ) as client:
@@ -323,12 +355,23 @@ class OpenAiCompatibleProvider:
                     response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
                     body = response.json()
-                    logger.info(
-                        "AI provider=%s model=%s request succeeded",
-                        self.name,
-                        model,
-                        extra={"event_kind": "ai_success"},
-                    )
+                    if route and isinstance(models, list):
+                        logger.info(
+                            "AI provider=%s model=%s request succeeded route=%s "
+                            "models_count=%d",
+                            self.name,
+                            model,
+                            route,
+                            len(models),
+                            extra={"event_kind": "ai_success"},
+                        )
+                    else:
+                        logger.info(
+                            "AI provider=%s model=%s request succeeded",
+                            self.name,
+                            model,
+                            extra={"event_kind": "ai_success"},
+                        )
                     break
                 except httpx.HTTPStatusError as exc:
                     last_http_error = exc
@@ -375,6 +418,28 @@ class OpenAiCompatibleProvider:
             return body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise AiProviderError(f"{self.name}: unexpected response shape") from exc
+
+    def _chat_payload(
+        self, model: str, messages: list[dict[str, str]]
+    ) -> dict[str, object]:
+        """
+        Build the provider-specific chat-completions payload.
+
+        OpenRouter supports server-side fallback routing via ``models`` and
+        ``route``. Other providers receive the standard single-model payload.
+        """
+        payload: dict[str, object] = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0,
+        }
+        if self.name != "openrouter" or not self._fallback_models:
+            return payload
+        models = _dedupe_models([model, *self._fallback_models])
+        if len(models) > 1:
+            payload["models"] = models
+            payload["route"] = self._route or "fallback"
+        return payload
 
     def _status_error_message(self, model: str, exc: httpx.HTTPStatusError) -> str:
         """

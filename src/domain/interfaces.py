@@ -412,11 +412,30 @@ class ApprovalRequestRepository(Protocol):
     """Persistence port for approval request dispatch idempotency."""
 
     async def has_requested(self, post_id: str) -> bool:
-        """Return whether the post was already sent to the approval bot."""
+        """Return whether the post already entered the approval dispatch stage."""
         ...
 
     async def record_requested(self, post_id: str) -> None:
         """Record that the post was sent to the approval bot."""
+        ...
+
+    async def reserve_request(self, post_id: str) -> bool:
+        """
+        Reserve an approval dispatch attempt for a post.
+
+        Returns:
+            ``True`` when this caller may send the approval preview. Returns
+            ``False`` when the post is already reserved or was already sent.
+            Failed dispatches may be reserved again by queue retry.
+        """
+        ...
+
+    async def mark_sent(self, post_id: str) -> None:
+        """Mark a reserved approval request as successfully sent."""
+        ...
+
+    async def mark_failed(self, post_id: str, error: str) -> None:
+        """Mark a reserved approval request as failed for queue retry."""
         ...
 
     async def list_requested_post_ids(self) -> list[str]:

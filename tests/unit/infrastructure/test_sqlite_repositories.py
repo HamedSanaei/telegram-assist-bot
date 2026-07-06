@@ -247,6 +247,20 @@ class TestApprovalRequestRepository:
         await repo.record_requested("p1")
         assert await repo.has_requested("p1") is True
 
+    async def test_reservation_blocks_resend_until_failed(self, db: Database) -> None:
+        repo = SqliteApprovalRequestRepository(db)
+
+        assert await repo.reserve_request("p1") is True
+        assert await repo.reserve_request("p1") is False
+        assert await repo.has_requested("p1") is True
+
+        await repo.mark_failed("p1", "telegram error")
+        assert await repo.has_requested("p1") is False
+        assert await repo.reserve_request("p1") is True
+
+        await repo.mark_sent("p1")
+        assert await repo.reserve_request("p1") is False
+
 
 class TestChannelRepository:
     """Tests for :class:`SqliteChannelRepository`."""

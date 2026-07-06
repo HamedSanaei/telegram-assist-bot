@@ -164,6 +164,15 @@ async def run(configure_logging: bool = True) -> None:
         """Score a post, then queue its next eligible stage."""
         post_id = str(item.payload["post_id"])
         next_step = await quality_scores.score_post(post_id)
+        if (
+            next_step == QueueItemType.APPROVAL_REQUEST
+            and await repos["approval_requests"].has_requested(post_id)
+        ):
+            logger.info(
+                "Skipping approval queue; approval already requested post=%s",
+                post_id,
+            )
+            return QueueStatus.COMPLETED
         await repos["queue"].enqueue(next_step, {"post_id": post_id})
         logger.info(
             "Quality score complete post=%s next=%s",
@@ -179,6 +188,12 @@ async def run(configure_logging: bool = True) -> None:
         if not eligible:
             logger.info("Post not eligible for VPN channels post=%s", post_id)
             return QueueStatus.SKIPPED
+        if await repos["approval_requests"].has_requested(post_id):
+            logger.info(
+                "Skipping approval queue; approval already requested post=%s",
+                post_id,
+            )
+            return QueueStatus.COMPLETED
         await repos["queue"].enqueue(QueueItemType.APPROVAL_REQUEST, {"post_id": post_id})
         return QueueStatus.COMPLETED
 

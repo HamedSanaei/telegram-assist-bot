@@ -51,7 +51,7 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `telegram.source_channels` | Usernames (`"@channel"`) or numeric ids to collect from. This list is hot-reloaded and authoritative at runtime. |
 | `telegram.destination_channels` | Objects: `chat_id`, `title`, `public_id`, `kind` (`news`/`breaking`/`technology`/`vpn`), `publish_usd_price`, `post_interval_minutes` (kept for compatibility; native scheduled posts are currently paced every 5 minutes). `chat_id` is the numeric Telegram id of the channel (negative, usually starting with `-100`); forward a channel post to `@userinfobot` or open the channel in Telegram Web and prefix the number in the URL with `-100` to find it. `public_id` is the public destination handle/link (for example `@my_channel`) used to replace source-channel mentions before publishing. The scheduler/destination user must be an admin for approved immediate publishing and native scheduled publishing. |
 | `telegram.admin_user_ids` | Telegram user ids allowed to approve posts |
-| `ai.providers` | Priority-ordered AI provider chain. Each entry has `name`, `enabled`, `api_key`, `base_url`, `model`, and `timeout_seconds`. Disabled providers, or providers without a key/model/base URL, are skipped. The default order is `google_ai_studio`, `groq`, `openrouter`, `deepseek`, with `zai` kept as `enabled: false`. |
+| `ai.providers` | Priority-ordered AI provider chain. Each entry has `name`, `enabled`, `api_key`, `base_url`, `model`, and `timeout_seconds`. Disabled providers, or providers without a key/model/base URL, are skipped. The default order is `google_ai_studio`, `groq`, `openrouter`, `deepseek`, with `zai` kept as `enabled: false`. For OpenRouter only, `fallback_models` plus `route: "fallback"` enables OpenRouter's own model fallback routing inside that provider. |
 | `ai.request_timeout_seconds` / `recent_posts_compare_limit` | Shared timeout fallback for provider entries and the number of recent posts used for AI duplicate checks. |
 | `database.sqlite_path` | SQLite file (default `data/app.db`) |
 | `database.mongodb_connection_string` | e.g. `mongodb://localhost:27017` |
@@ -186,13 +186,12 @@ message is marked inactive and the callback continues normally. Telegram's
 `message is not modified` response during refresh is a harmless no-op and
 does not deactivate the stored approval message.
 
-At startup, `src.main` repairs approval requests that were recorded in
-SQLite but no longer have any active approval-bot message references. Those
-orphaned approvals are sent to the currently configured admins again, so a
-bad refresh or crash cannot leave posts permanently invisible in
-`waiting_approval`. This repair is guarded by `publish_log`: if the post has
-any delivery record (`reserved`, `published`, `scheduled`, or `removed`) it
-is not resent to the approval bot after restart.
+At startup, `src.main` never resends posts that already have an
+`approval_requests` row. That row is the idempotency boundary for approval
+previews: if an approval message was previously delivered, deleted, or later
+marked inactive because Telegram could not edit it, restart still does not
+create a duplicate preview. Missing approval-message refs are logged for
+manual inspection instead of being resent automatically.
 
 Important: Bot API cannot create native scheduled channel messages and is
 not reliable for preserving premium custom emoji in destination posts. The
@@ -477,10 +476,10 @@ the Telethon session file exists.
     approval bot once; the bot replies whether that user id is a
     configured admin. If every admin send fails, the approval queue item
     now fails and retries instead of being recorded as successfully sent.
-  - `Approval request has no active bot messages; resending post=...` —
-    startup or queue repair found an approval that was recorded earlier but
-    has no active tracked approval-bot message. The bot resends that post to
-    the current admins.
+  - `Skipping approval resend; approval already requested post=...` —
+    startup or queue processing found a post that has already entered the
+    approval stage. The bot intentionally does not resend it after restart,
+    even if the old approval message is no longer tracked as active.
   - `Approval keyboard already current ...` — Telegram said the keyboard
     already had the requested markup. This is expected during config reloads
     and does not remove the tracked approval message.
@@ -513,6 +512,9 @@ the Telethon session file exists.
   provider after quota/rate/payment/temporary provider failures such as
   `429`, `402`, `403`, `500`, `502`, `503`, or `504`. Timeouts are
   configurable per provider or through `ai.request_timeout_seconds`.
+  OpenRouter can also route within its own configured model list when
+  `fallback_models` is set; logs show `route=fallback` and `models_count`
+  for those requests.
 - **AI calls fail with `HTTP 400`** — the log line includes the provider,
   model name, and API response body. The usual cause is using a model name
   from another provider. Set the model on the matching `ai.providers` entry
@@ -522,7 +524,9 @@ the Telethon session file exists.
   rewritten (a warning is logged at publish time). Set it with
   `/setdest <chat_id> public_id @your_channel` in the management bot. The
   rewriter replaces mentions/links of all configured source identifiers
-  plus the usernames the collector resolved for the source channels.
+  plus the usernames the collector resolved for the source channels, then
+  removes any remaining Telegram `@username`, `t.me/...`, or
+  `telegram.me/...` mentions that do not point to the destination.
 - **USD price job fails with `PriceFetchError: Nobitex request failed`** —
   `apiv2.nobitex.ir` is unreachable from the server (DNS/filtering). Either
   fix connectivity or switch to `usd_price.provider: "http_json"` with a

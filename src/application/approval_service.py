@@ -118,46 +118,39 @@ class ApprovalService:
         post = await self._get_post(post_id)
         if self._notifier is None:
             raise ApprovalStateError("No approval notifier configured")
-        already_requested = (
-            self._approval_requests is not None
-            and await self._approval_requests.has_requested(post_id)
-        )
-        if already_requested:
-            active_refs = (
-                await self._approval_messages.list_active(post_id)
-                if self._approval_messages is not None
-                else []
-            )
-            if active_refs or self._approval_messages is None:
-                logger.info("Approval request already sent post=%s", post_id)
-                return
-            if await self._publish_log.has_any_delivery_record(post_id):
+        reserved = True
+        if self._approval_requests is not None:
+            reserved = await self._approval_requests.reserve_request(post_id)
+            if not reserved:
                 logger.info(
-                    "Skipping approval repair for delivered post=%s", post_id
+                    "Skipping approval resend; approval already requested post=%s",
+                    post_id,
                 )
                 return
-            logger.warning(
-                "Approval request has no active bot messages; resending post=%s",
-                post_id,
-            )
         channels = await self._channels.list_destinations()
-        message_refs = await self._notifier.send_approval_request(post, channels)
+        try:
+            message_refs = await self._notifier.send_approval_request(post, channels)
+        except Exception as exc:
+            if self._approval_requests is not None:
+                await self._approval_requests.mark_failed(post_id, str(exc))
+            raise
         if self._approval_messages is not None:
             await self._approval_messages.record_messages(message_refs)
         if self._approval_requests is not None:
-            await self._approval_requests.record_requested(post_id)
+            await self._approval_requests.mark_sent(post_id)
         logger.info("Approval requested post=%s channels=%d", post_id, len(channels))
 
     async def repair_orphaned_approval_requests(self) -> int:
         """
-        Resend approval previews that were recorded but have no active message refs.
+        Report previously requested approval previews without resending them.
 
         Returns:
-            Number of approval requests successfully repaired.
+            Always ``0``. Approval resend is intentionally disabled because
+            ``approval_requests`` is the idempotency boundary.
 
         Side effects:
-            Sends approval messages again for orphaned posts. Failures are
-            logged and do not stop application startup.
+            Logs approval requests that no longer have active tracked
+            messages, so operators can inspect them manually if needed.
         """
         if (
             self._approval_requests is None
@@ -165,26 +158,14 @@ class ApprovalService:
             or self._notifier is None
         ):
             return 0
-        repaired = 0
         for post_id in await self._approval_requests.list_requested_post_ids():
             if await self._approval_messages.list_active(post_id):
                 continue
-            if await self._publish_log.has_any_delivery_record(post_id):
-                logger.info(
-                    "Skipping approval repair for delivered post=%s", post_id
-                )
-                continue
-            try:
-                await self.request_approval(post_id)
-            except Exception as exc:
-                logger.warning(
-                    "Approval repair failed post=%s error=%s", post_id, exc
-                )
-                continue
-            repaired += 1
-        if repaired:
-            logger.warning("Repaired orphaned approval requests count=%d", repaired)
-        return repaired
+            logger.info(
+                "Skipping approval resend; approval already requested post=%s",
+                post_id,
+            )
+        return 0
 
     async def active_approval_messages(self, post_id: str) -> list[ApprovalMessageRef]:
         """Return active approval-bot message references for a post."""

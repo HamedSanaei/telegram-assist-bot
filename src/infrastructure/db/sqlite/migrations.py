@@ -152,6 +152,19 @@ MIGRATIONS: list[tuple[int, str]] = [
             ADD COLUMN removed_at TEXT;
         """,
     ),
+    (
+        9,
+        """
+        ALTER TABLE approval_requests
+            ADD COLUMN status TEXT NOT NULL DEFAULT 'sent';
+
+        ALTER TABLE approval_requests
+            ADD COLUMN last_error TEXT;
+
+        ALTER TABLE approval_requests
+            ADD COLUMN updated_at TEXT;
+        """,
+    ),
 ]
 
 
@@ -275,6 +288,23 @@ async def _apply_migration(db: Database, version: int) -> None:
     if version == 8:
         await _ensure_column(db, "publish_log", "scheduled_at", "TEXT")
         await _ensure_column(db, "publish_log", "removed_at", "TEXT")
+        return
+    if version == 9:
+        await _ensure_column(
+            db,
+            "approval_requests",
+            "status",
+            "TEXT NOT NULL DEFAULT 'sent'",
+        )
+        await _ensure_column(db, "approval_requests", "last_error", "TEXT")
+        await _ensure_column(db, "approval_requests", "updated_at", "TEXT")
+        await db.execute(
+            """
+            UPDATE approval_requests
+            SET status = COALESCE(NULLIF(status, ''), 'sent'),
+                updated_at = COALESCE(updated_at, requested_at)
+            """
+        )
         return
     raise ValueError(f"Unknown migration version: {version}")
 

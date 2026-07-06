@@ -24,10 +24,20 @@ class TestRewriteSourceChannelMentions:
         )
         assert result == "لینک: @dest و @dest"
 
-    def test_leaves_other_mentions_unchanged(self) -> None:
+    def test_removes_other_mentions(self) -> None:
         text = "سلام @other"
         result = rewrite_source_channel_mentions(text, ["@source"], "@dest")
-        assert result == text
+        assert result == "سلام"
+
+    def test_removes_other_tme_links_but_keeps_destination(self) -> None:
+        text = "خبر @source پشتیبانی @support لینک t.me/adsch/55 مقصد @dest"
+        result = rewrite_source_channel_mentions(text, ["@source"], "@dest")
+        assert result == "خبر @dest پشتیبانی لینک مقصد @dest"
+
+    def test_keeps_email_and_vless_userinfo(self) -> None:
+        text = "ایمیل a@example.com کانفیگ vless://uuid@host:443 و @support"
+        result = rewrite_source_channel_mentions(text, ["@source"], "@dest")
+        assert result == "ایمیل a@example.com کانفیگ vless://uuid@host:443 و"
 
     def test_empty_destination_disables_rewrite(self) -> None:
         text = "سلام @source"
@@ -60,3 +70,23 @@ class TestRewriteSourceChannelMentions:
                 data={"document_id": 123456789},
             )
         ]
+
+    def test_cleanup_shifts_custom_emoji_after_removed_mention(self) -> None:
+        """Entity offsets shift after unrelated Telegram ids are removed."""
+        text = "خبر @support بعد *"
+        entity = TextEntity(
+            kind="custom_emoji",
+            offset=text.index("*"),
+            length=1,
+            data={"document_id": 123456789},
+        )
+
+        result = rewrite_source_channel_mentions_with_entities(
+            text,
+            [entity],
+            ["@source"],
+            "@destination",
+        )
+
+        assert result.text == "خبر بعد *"
+        assert result.entities[0].offset == result.text.index("*")

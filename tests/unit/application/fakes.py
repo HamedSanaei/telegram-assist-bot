@@ -258,19 +258,44 @@ class FakeApprovalRequestRepository:
     """In-memory approval request idempotency repository."""
 
     def __init__(self) -> None:
-        self.requested: set[str] = set()
+        self.statuses: dict[str, str] = {}
+        self.errors: dict[str, str] = {}
 
     async def has_requested(self, post_id: str) -> bool:
         """Return whether the post id has been recorded."""
-        return post_id in self.requested
+        return self.statuses.get(post_id) in {"reserved", "sent"}
 
     async def record_requested(self, post_id: str) -> None:
         """Record one sent approval request."""
-        self.requested.add(post_id)
+        self.statuses[post_id] = "sent"
+        self.errors.pop(post_id, None)
+
+    async def reserve_request(self, post_id: str) -> bool:
+        """Reserve one approval request unless it is already active."""
+        status = self.statuses.get(post_id)
+        if status in {"reserved", "sent"}:
+            return False
+        self.statuses[post_id] = "reserved"
+        self.errors.pop(post_id, None)
+        return True
+
+    async def mark_sent(self, post_id: str) -> None:
+        """Mark one approval request as sent."""
+        self.statuses[post_id] = "sent"
+        self.errors.pop(post_id, None)
+
+    async def mark_failed(self, post_id: str, error: str) -> None:
+        """Mark one approval request as failed."""
+        self.statuses[post_id] = "failed"
+        self.errors[post_id] = error
 
     async def list_requested_post_ids(self) -> list[str]:
         """Return requested post ids in deterministic order."""
-        return sorted(self.requested)
+        return sorted(
+            post_id
+            for post_id, status in self.statuses.items()
+            if status in {"reserved", "sent"}
+        )
 
 
 class FakeApprovalMessageRepository:
