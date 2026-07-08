@@ -23,6 +23,11 @@ from src.shared.logging_setup import get_logger
 logger = get_logger(__name__)
 
 
+def _is_message_not_modified_error(exc: Exception) -> bool:
+    """Return whether Telegram rejected a no-op keyboard edit."""
+    return "message is not modified" in str(exc).lower()
+
+
 def format_scheduled_time(scheduled_at: datetime, timezone_name: str) -> str:
     """
     Format a UTC schedule time for the admin answer in the local timezone.
@@ -106,11 +111,17 @@ def create_approval_router(
         channels = await approval.list_channels()
         published = await approval.published_channels(post_id)
         scheduled = await approval.scheduled_channels(post_id)
-        await callback.message.edit_reply_markup(
-            reply_markup=build_channel_keyboard(
-                post_id, channels, published, scheduled
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=build_channel_keyboard(
+                    post_id, channels, published, scheduled
+                )
             )
-        )
+        except Exception as exc:
+            if _is_message_not_modified_error(exc):
+                logger.debug("Clicked approval keyboard already current post=%s", post_id)
+                return
+            raise
 
     async def _refresh_all_approval_keyboards(
         callback: CallbackQuery, post_id: str
@@ -134,6 +145,15 @@ def create_approval_router(
                     ),
                 )
             except Exception as exc:
+                if _is_message_not_modified_error(exc):
+                    logger.debug(
+                        "Approval keyboard already current post=%s chat=%s message=%s ref=%s",
+                        post_id,
+                        ref.chat_id,
+                        ref.message_id,
+                        ref.id,
+                    )
+                    continue
                 logger.warning(
                     "Approval keyboard refresh failed post=%s chat=%s message=%s "
                     "ref=%s error=%s",

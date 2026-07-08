@@ -498,11 +498,17 @@ the Telethon session file exists.
 - **Approval buttons answer "دسترسی غیرمجاز"** — the clicking user id is
   not listed in `telegram.admin_user_ids`.
 - **Publishing fails with `TelegramPublishError`** — the main bot is not an
-  admin of the destination channel, or the `chat_id` is wrong (channel ids
-  are negative and usually start with `-100`).
+  admin of the destination channel, the scheduler/destination user session
+  is not an admin, or the `chat_id` is wrong (channel ids are negative and
+  usually start with `-100`). Transient Telethon disconnects are retried
+  once automatically; persistent `Cannot send requests while disconnected`
+  errors usually mean the session file is stale or the user session needs
+  to be logged in again interactively.
 - **Scheduled publishing fails** — the scheduler user account is not an
   admin in the destination channel, lacks post permission, or Telegram
-  cannot resolve the destination `chat_id` from that user session.
+  cannot resolve the destination `chat_id` from that user session. The app
+  now reconnects the session before scheduled-history lookup and scheduling
+  requests, then retries once after a disconnect.
 - **All VPN tests fail with `xray binary not found`** — set
   `vpn_testing.xray_binary_path` on the Iran server.
 - **Iran worker returns 401** — `worker_api_token` differs between the two

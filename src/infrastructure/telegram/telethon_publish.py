@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Awaitable, Callable, TypeVar
 
 from telethon import TelegramClient, functions, types
 
@@ -15,6 +16,59 @@ from src.shared.logging_setup import get_logger
 logger = get_logger(__name__)
 
 _CAPTION_LIMIT = 1024
+T = TypeVar("T")
+
+
+def _is_disconnected_error(exc: Exception) -> bool:
+    """Return whether an exception means the Telethon client disconnected."""
+    return isinstance(exc, ConnectionError) or "while disconnected" in str(exc).lower()
+
+
+async def _ensure_connected(client: TelegramClient) -> None:
+    """
+    Ensure a Telethon client is connected before issuing MTProto requests.
+
+    Args:
+        client: Telethon user client shared by publishing and metadata refresh.
+
+    Side effects:
+        Reconnects the client when Telethon reports it as disconnected.
+    """
+    is_connected = getattr(client, "is_connected", None)
+    if callable(is_connected) and not is_connected():
+        logger.warning("Telethon user session disconnected; reconnecting")
+        await client.connect()
+
+
+async def _run_with_reconnect(
+    client: TelegramClient,
+    operation: Callable[[], Awaitable[T]],
+    context: str,
+) -> T:
+    """
+    Run one Telethon operation, reconnecting once after disconnection.
+
+    Args:
+        client: Telethon user client.
+        operation: Async callable that performs the MTProto request.
+        context: Short log context describing the operation.
+
+    Returns:
+        The operation result.
+
+    Raises:
+        Exception: Re-raises the original operation error after one failed
+        reconnect retry, or immediately for non-disconnection errors.
+    """
+    await _ensure_connected(client)
+    try:
+        return await operation()
+    except Exception as exc:
+        if not _is_disconnected_error(exc):
+            raise
+        logger.warning("Telethon request disconnected context=%s; reconnecting", context)
+        await client.connect()
+        return await operation()
 
 
 class TelethonDestinationPublisher:
@@ -55,8 +109,13 @@ class TelethonDestinationPublisher:
             TelegramPublishError: When Telegram rejects the send.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
-            message = await self._client.send_message(entity, text)
+            async def operation() -> object:
+                entity = await self._client.get_entity(chat_id)
+                return await self._client.send_message(entity, text)
+
+            message = await _run_with_reconnect(
+                self._client, operation, f"publish_text chat={chat_id}"
+            )
             return int(getattr(message, "id", 0) or 0)
         except Exception as exc:
             raise TelegramPublishError(
@@ -78,8 +137,13 @@ class TelethonDestinationPublisher:
             TelegramPublishError: When the Telethon send fails.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
-            message = await self._send_post(entity, post, schedule=None)
+            async def operation() -> object:
+                entity = await self._client.get_entity(chat_id)
+                return await self._send_post(entity, post, schedule=None)
+
+            message = await _run_with_reconnect(
+                self._client, operation, f"publish_post post={post.post_id} chat={chat_id}"
+            )
             return int(getattr(message, "id", 0) or 0)
         except TelegramPublishError:
             raise
@@ -100,8 +164,15 @@ class TelethonDestinationPublisher:
             TelegramPublishError: When Telegram rejects deletion.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
-            await self._client.delete_messages(entity, [message_id])
+            async def operation() -> None:
+                entity = await self._client.get_entity(chat_id)
+                await self._client.delete_messages(entity, [message_id])
+
+            await _run_with_reconnect(
+                self._client,
+                operation,
+                f"delete_message chat={chat_id} message={message_id}",
+            )
         except Exception as exc:
             raise TelegramPublishError(
                 f"delete_message failed chat={chat_id} message={message_id}: {exc}"
@@ -119,9 +190,14 @@ class TelethonDestinationPublisher:
             scheduled messages or the lookup fails.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
-            result = await self._client(
-                functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0)
+            async def operation() -> object:
+                entity = await self._client.get_entity(chat_id)
+                return await self._client(
+                    functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0)
+                )
+
+            result = await _run_with_reconnect(
+                self._client, operation, f"latest_scheduled_at chat={chat_id}"
             )
         except Exception as exc:
             logger.warning(
@@ -155,9 +231,15 @@ class TelethonDestinationPublisher:
             TelegramPublishError: When the Telethon send fails.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
             scheduled_at = self._as_utc(scheduled_at) or datetime.now(timezone.utc)
-            message = await self._send_post(entity, post, schedule=scheduled_at)
+
+            async def operation() -> object:
+                entity = await self._client.get_entity(chat_id)
+                return await self._send_post(entity, post, schedule=scheduled_at)
+
+            message = await _run_with_reconnect(
+                self._client, operation, f"schedule_post post={post.post_id} chat={chat_id}"
+            )
             return int(getattr(message, "id", 0) or 0)
         except TelegramPublishError:
             raise
@@ -178,12 +260,19 @@ class TelethonDestinationPublisher:
             TelegramPublishError: When Telegram rejects deletion.
         """
         try:
-            entity = await self._client.get_entity(chat_id)
-            await self._client(
-                functions.messages.DeleteScheduledMessagesRequest(
-                    peer=entity,
-                    id=[message_id],
+            async def operation() -> None:
+                entity = await self._client.get_entity(chat_id)
+                await self._client(
+                    functions.messages.DeleteScheduledMessagesRequest(
+                        peer=entity,
+                        id=[message_id],
+                    )
                 )
+
+            await _run_with_reconnect(
+                self._client,
+                operation,
+                f"delete_scheduled_message chat={chat_id} message={message_id}",
             )
         except Exception as exc:
             raise TelegramPublishError(
@@ -316,8 +405,15 @@ class TelethonSourceMetadataRefresher:
             Refreshed metrics, or ``None`` when unavailable.
         """
         try:
-            entity = await self._client.get_entity(source_chat_id)
-            message = await self._client.get_messages(entity, ids=source_message_id)
+            async def operation() -> object:
+                entity = await self._client.get_entity(source_chat_id)
+                return await self._client.get_messages(entity, ids=source_message_id)
+
+            message = await _run_with_reconnect(
+                self._client,
+                operation,
+                f"refresh_metrics chat={source_chat_id} msg={source_message_id}",
+            )
         except Exception as exc:
             logger.warning(
                 "Source message metadata fetch failed chat=%s msg=%s error=%s",

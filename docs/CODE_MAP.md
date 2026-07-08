@@ -138,8 +138,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
   approved posts immediately and uploads native scheduled messages through
   a Telethon user session, preserving stored custom emoji entities via
   `formatting_entities`. It also deletes immediate/scheduled messages for
-  approval toggles. `TelethonSourceMetadataRefresher` refreshes
-  views/forwards/replies/reactions before quality scoring.
+  approval toggles. It reconnects the user session before MTProto requests
+  and retries once after transient disconnects. `TelethonSourceMetadataRefresher`
+  refreshes views/forwards/replies/reactions before quality scoring using
+  the same reconnect guard.
 - `vpn/worker_client.py` — `IranWorkerVpnTester`: HTTP client for the Iran
   worker API (bearer token auth).
 - `vpn/xray_tester.py` — `XrayVpnTester`: spawns xray with a temp config,
@@ -376,6 +378,11 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-08 — Hardened Telethon destination publishing and source metadata
+refresh against transient user-session disconnects, and made approval
+keyboard refresh treat Telegram's `message is not modified` response as a
+harmless no-op in callback handlers.
 
 2026-07-06 — Made approval preview dispatch restart-idempotent:
 `approval_requests` now records reserved/sent/failed dispatch state, and

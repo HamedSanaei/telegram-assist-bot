@@ -25,9 +25,25 @@ class FakeTelethonClient:
         self.sent_messages: list[dict[str, Any]] = []
         self.sent_files: list[dict[str, Any]] = []
         self.deleted: list[tuple[int, list[int]]] = []
+        self.connected = True
+        self.connect_calls = 0
+        self.fail_next_entity_with_disconnect = False
+
+    def is_connected(self) -> bool:
+        """Return the fake connection state."""
+        return self.connected
+
+    async def connect(self) -> None:
+        """Mark the fake client as reconnected."""
+        self.connected = True
+        self.connect_calls += 1
 
     async def get_entity(self, chat_id: int) -> int:
         """Return the chat id as the resolved fake entity."""
+        if self.fail_next_entity_with_disconnect:
+            self.fail_next_entity_with_disconnect = False
+            self.connected = False
+            raise ConnectionError("Cannot send requests while disconnected")
         return chat_id
 
     async def send_message(self, entity: int, text: str, **kwargs: Any) -> FakeMessage:
@@ -100,3 +116,14 @@ class TestTelethonDestinationPublisher:
         await publisher.delete_message(-100200, 55)
 
         assert client.deleted == [(-100200, [55])]
+
+    async def test_publish_post_reconnects_after_disconnect(self) -> None:
+        client = FakeTelethonClient()
+        client.fail_next_entity_with_disconnect = True
+        publisher = TelethonDestinationPublisher(client)  # type: ignore[arg-type]
+
+        message_id = await publisher.publish_post(-100200, _post())
+
+        assert message_id == 101
+        assert client.connect_calls == 1
+        assert client.sent_messages[0]["entity"] == -100200
