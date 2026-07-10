@@ -1,0 +1,1 @@
+"""Administrator-facing presentation adapters."""

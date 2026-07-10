@@ -1,0 +1,90 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Install locked development environment
+        run: uv sync --locked --group dev
+
+      - name: Run tests with branch coverage
+        run: >-
+          uv run pytest -m "not live"
+          --cov=telegram_assist_bot
+          --cov-branch
+          --cov-report=term-missing
+          --cov-fail-under=90
+
+      - name: Run lint checks
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Run static type checks
+        run: uv run mypy src tests scripts
+
+      - name: Check all repository text
+        run: uv run python scripts/check_text_integrity.py --all
+
+      - name: Check secret-detection baseline
+        run: >-
+          git ls-files -z |
+          xargs -0 uv run detect-secrets-hook --no-verify
+          --baseline .secrets.baseline
+
+      - name: Build wheel and source distribution
+        run: uv build --no-build-isolation
+
+      - name: Check distribution contents
+        run: uv run python scripts/check_distribution.py dist
+
+      - name: Import package from a clean wheel environment
+        shell: bash
+        run: |
+          wheel_path="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          test -n "$wheel_path"
+          uv venv --clear .venv-wheel-smoke --python "${{ matrix.python-version }}"
+          uv pip install --python .venv-wheel-smoke/bin/python --no-deps "$wheel_path"
+          .venv-wheel-smoke/bin/python -I -c "import telegram_assist_bot"
+
+      - name: Check patch whitespace
+        run: git diff --check
