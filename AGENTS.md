@@ -1,102 +1,249 @@
 # AGENTS.md
 
-## Project Overview
+## 1. Purpose
 
-This project is a Python-based Telegram channel administration and publishing system.
+This file defines the mandatory working rules for developers and AI coding
+agents, including Codex, working on this repository.
 
-The application is designed to collect posts from source Telegram channels, classify and deduplicate them using AI providers, test VPN configurations when needed, store posts temporarily, request administrator approval, and publish approved posts to configured destination channels.
+This is a long-running, multi-session project. Repository files are the source
+of truth. Do not rely on chat history as persistent project memory.
 
-The project must always be implemented in **Python**.
+The complete product requirements belong in:
 
-The system supports multiple types of Telegram channels, including:
+```text
+docs/REQUIREMENTS.md
+```
 
-* General news channels
-* Breaking news channels
-* Technology-related channels
-* VPN-related channels
-* Channels that publish `vmess` and `vless` VPN configurations
+Do not duplicate the full requirements in this file. This file defines how the
+project must be implemented and how work must continue safely across multiple
+sessions.
 
-The system must be designed for long-term maintainability, clean separation of responsibilities, and easy future extension.
+All developers and AI agents working on this repository must follow these
+instructions.
 
 ---
 
-## Mandatory Language and Encoding Rules
+## 2. Project Overview
 
-All source files, documentation files, configuration templates, JSON files, Markdown files, and text resources must be saved using:
+This project is a Python-based Telegram channel administration assistant.
 
-```text
-UTF-8 encoding
-```
+Its responsibilities include:
 
-Persian text must never become Mojibake.
+- Collecting posts from configured public Telegram source channels.
+- Persisting posts and media metadata in MongoDB.
+- Preventing duplicate collection and duplicate publication.
+- Processing posts through configurable content pipelines.
+- Preserving Telegram entities, Premium Emoji, Custom Emoji, Persian text, and
+  media groups.
+- Sending candidate posts to authorized administrators for approval.
+- Publishing approved posts immediately or through a persistent schedule.
+- Using multiple configurable AI providers through retry and fallback pipelines.
+- Supporting future growth without rewriting the domain and application core.
 
-Examples of broken Mojibake that must be avoided:
+The project must be implemented entirely in Python.
 
-```text
-Ø³ÙØ§Ù
-ÙØªÙ
-Ú©Ø§Ø±Ø¨Ø±
-```
-
-Correct Persian text must remain readable:
-
-```text
-سلام
-متن
-کاربر
-```
-
-Rules:
-
-* Always read and write files using UTF-8.
-* Never use Windows-1252, ISO-8859-1, or any legacy encoding.
-* When opening text files in Python, explicitly use `encoding="utf-8"`.
-* JSON files must be written with `ensure_ascii=False` when Persian text is stored.
-* Markdown files must be UTF-8.
-* Logs containing Persian text must be UTF-8-safe.
-* Telegram messages containing Persian text must be preserved exactly.
-
-Example:
-
-```python
-from pathlib import Path
-
-content = Path("message.txt").read_text(encoding="utf-8")
-Path("output.txt").write_text(content, encoding="utf-8")
-```
-
-For JSON:
-
-```python
-import json
-from pathlib import Path
-
-data = {"message": "سلام"}
-Path("data.json").write_text(
-    json.dumps(data, ensure_ascii=False, indent=2),
-    encoding="utf-8",
-)
-```
+MongoDB is the primary database unless an approved architectural decision says
+otherwise.
 
 ---
 
-## Documentation Language Rule
+## 3. Repository Documentation as Project Memory
 
-All code comments, docstrings, documentation files, architecture notes, README files, code maps, configuration explanations, and developer-facing explanations must be written in **English**.
+The repository must contain the following project-memory files:
 
-Persian text may appear only when it is actual application content, Telegram message content, test sample content, or user-facing localized content.
+```text
+AGENTS.md
+docs/REQUIREMENTS.md
+docs/ARCHITECTURE.md
+docs/ROADMAP.md
+docs/STATUS.md
+docs/CODE_MAP.md
+docs/DECISIONS.md
+docs/tasks/
+```
+
+Their responsibilities are:
+
+### `docs/REQUIREMENTS.md`
+
+Contains product behavior, business requirements, acceptance criteria, and
+phase definitions.
+
+It describes what the application must do.
+
+### `docs/ARCHITECTURE.md`
+
+Describes the architecture that is currently implemented or explicitly planned
+for the active milestone.
+
+It must include:
+
+- Layer boundaries.
+- Dependency direction.
+- Main domain models.
+- Application use cases.
+- Ports and interfaces.
+- Infrastructure adapters.
+- MongoDB persistence.
+- Telegram User API responsibilities.
+- Telegram Bot API responsibilities.
+- Scheduling and worker design.
+- AI provider pipeline design.
+- Testing strategy.
+
+Do not let this file describe an imaginary architecture that no longer matches
+the code.
+
+### `docs/ROADMAP.md`
+
+Contains the ordered milestones and implementation tasks.
+
+Every task must have a unique task ID, for example:
+
+```text
+T001
+T002
+T101
+T102
+```
+
+Completed tasks must be marked clearly.
+
+### `docs/STATUS.md`
+
+Contains only the current project state.
+
+It must remain concise and include:
+
+- Current milestone.
+- Active task.
+- Last completed task.
+- Known blockers.
+- Known failing tests.
+- Last verified commit when available.
+- Next recommended action.
+
+Do not turn `STATUS.md` into a historical changelog.
+
+### `docs/CODE_MAP.md`
+
+Provides a concise map of the actual repository.
+
+It must help a new developer or AI agent locate:
+
+- Main entry points.
+- Domain models.
+- Application use cases.
+- Repository interfaces and implementations.
+- Telegram clients and handlers.
+- AI providers and orchestration.
+- Background workers.
+- Configuration models.
+- Tests.
+- Deployment files.
+
+Update it whenever important files, modules, responsibilities, or data flows
+change.
+
+### `docs/DECISIONS.md`
+
+Records significant architectural decisions and their consequences.
+
+Do not add routine implementation details. Add an entry only when a decision is
+important enough that a future developer may otherwise reverse or misunderstand
+it.
+
+### `docs/tasks/`
+
+Contains one Markdown file for each implementation task.
+
+Each task file must define:
+
+1. Task ID and title.
+2. Status.
+3. Goal.
+4. Requirement references.
+5. Dependencies.
+6. Scope.
+7. Explicit out-of-scope items.
+8. Expected files or modules.
+9. Implementation notes.
+10. Objective acceptance criteria.
+11. Required unit tests.
+12. Required integration tests.
+13. Verification commands.
+14. Required documentation updates.
+15. Definition of done.
 
 ---
 
-## Required Architecture
+## 4. Required Reading Order
 
-The project must follow **Clean Architecture**.
+Before starting any implementation task:
 
-The codebase must be organized so that business rules are independent from frameworks, databases, Telegram libraries, external AI providers, and infrastructure details.
+1. Read this `AGENTS.md`.
+2. Read `docs/STATUS.md`.
+3. Read the active task file referenced by `docs/STATUS.md`.
+4. Read only the relevant sections of `docs/REQUIREMENTS.md`.
+5. Read the relevant sections of `docs/ARCHITECTURE.md`.
+6. Inspect the existing code and tests related to the active task.
+7. Check `docs/DECISIONS.md` for decisions that affect the task.
+8. Check the actual project commands in `pyproject.toml`, scripts, CI files, or
+   existing documentation before inventing commands.
 
-The architecture must make future features easy to add without rewriting existing modules.
+Do not read, redesign, or refactor the entire project unless the active task
+explicitly requires it.
 
-Required layers:
+---
+
+## 5. Incremental Development Workflow
+
+Work on exactly one active task from `docs/tasks/` at a time.
+
+### Task boundaries
+
+- Respect the task's scope, out-of-scope items, dependencies, and acceptance
+  criteria.
+- Do not implement later roadmap tasks opportunistically.
+- Do not add speculative abstractions for features that are not required by the
+  active task.
+- Do not perform unrelated cleanup or broad refactoring.
+- A small prerequisite fix is allowed only when it is necessary to complete the
+  active task and is documented in the final response.
+- If the active task is too large to complete and verify in one session, split
+  it into smaller task files before implementing it.
+- Prefer vertical slices that produce working, testable behavior.
+- Keep the project runnable at the end of every completed task.
+
+### Missing dependencies
+
+Do not begin implementation when a required task dependency is incomplete.
+
+Record the blocker in `docs/STATUS.md` and report it clearly.
+
+### Before editing
+
+Before making changes:
+
+1. Inspect the relevant code and tests.
+2. Confirm that task dependencies are complete.
+3. Produce a short implementation plan.
+4. Identify the expected files to change.
+5. Identify the tests required to prove the behavior.
+6. Identify migration, configuration, compatibility, concurrency, and security
+   risks.
+7. Confirm that the task can be completed without implementing out-of-scope
+   features.
+
+---
+
+## 6. Architecture Rules
+
+The project must follow Clean Architecture principles.
+
+Dependencies must point inward toward the domain and application core.
+
+A recommended structure is:
 
 ```text
 src/
@@ -107,904 +254,614 @@ src/
   workers/
   shared/
 tests/
+  unit/
+  integration/
 docs/
 config/
 deploy/
 ```
 
-Recommended responsibilities:
+The exact folder structure may evolve through an explicit architectural
+decision, but separation of concerns is mandatory.
 
-```text
-domain/
-  Core entities, value objects, enums, domain rules, and interfaces.
-  This layer must not depend on Telegram, MongoDB, SQLite, AI APIs, or external libraries.
+### Domain layer
 
-application/
-  Use cases and orchestration logic.
-  This layer coordinates domain logic through interfaces.
-  It must not directly call Telegram, MongoDB, SQLite, or external AI APIs.
+The domain layer contains:
 
-infrastructure/
-  Implementations of repositories, AI providers, Telegram clients, MongoDB, SQLite,
-  file storage, VPN testing adapters, and external services.
+- Entities.
+- Value objects.
+- Enums.
+- Domain rules.
+- Domain exceptions.
+- Pure domain services when required.
 
-presentation/
-  Telegram bot handlers, callback handlers, command handlers, and admin approval UI.
+The domain layer must not import or depend on:
 
-workers/
-  Background workers for collecting posts, processing queues, testing VPN configs,
-  scheduled price publishing, and cleanup tasks.
+- Telegram libraries.
+- MongoDB drivers.
+- AI provider SDKs.
+- HTTP clients.
+- Filesystem implementations.
+- Scheduling frameworks.
+- Presentation handlers.
+- Infrastructure modules.
 
-shared/
-  Common utilities, constants, logging, configuration loading, encoding helpers,
-  validation helpers, and error types.
-```
+### Application layer
 
-Dependencies must point inward:
+The application layer contains:
 
-```text
-presentation -> application -> domain
-workers      -> application -> domain
-infrastructure -> application/domain interfaces
-```
+- Use cases.
+- Application services.
+- Commands and queries when appropriate.
+- Data transfer models.
+- Ports, protocols, and interfaces for external systems.
+- Transaction and workflow orchestration.
 
-The `domain` layer must never import from:
+It may depend on the domain layer.
 
-```text
-infrastructure
-presentation
-workers
-aiogram
-telethon
-pymongo
-sqlite3
-requests
-httpx
-```
+It must not directly depend on concrete Telegram, MongoDB, AI, filesystem, or
+scheduler implementations.
 
----
+### Infrastructure layer
 
-## Main Application Responsibilities
+The infrastructure layer contains concrete adapters for:
 
-The application must support the following features:
+- MongoDB repositories.
+- Telegram User API clients.
+- Telegram Bot API clients.
+- AI providers.
+- HTTP services.
+- Media storage.
+- Persistent job storage.
+- Logging and monitoring integrations.
 
-1. Collect new posts from configured source Telegram channels.
-2. Store collected posts temporarily for up to 14 days.
-3. Store unstructured post content and media metadata in MongoDB.
-4. Store general application data in SQLite.
-5. Store API tokens and sensitive settings in `configuration.json`.
-6. Detect duplicate or near-duplicate posts using AI.
-7. Use z.ai as the primary AI provider.
-8. Use DeepSeek as the fallback AI provider if z.ai is unavailable.
-9. Classify posts using AI into categories such as:
+Provider-specific request and response models must not leak into the domain
+layer.
 
-   * General news
-   * Breaking news
-   * Technology
-   * VPN
-   * VPN configuration
-   * Irrelevant
-10. Extract `vmess` and `vless` configurations from VPN-related posts.
-11. Test VPN configurations from an Iran-based worker server.
-12. Mark VPN configs as eligible only if they work from the Iran server.
-13. Send new eligible posts to an approval assistant bot.
-14. Show callback buttons under approval messages for each destination channel.
-15. Require final admin confirmation before publishing.
-16. Publish approved posts to selected Telegram channels.
-17. Update callback buttons with a success mark after successful publishing.
-18. Fetch and publish USD price updates twice per day.
-19. Show USD price change compared to the previous recorded price.
-20. Remove expired post data after 14 days.
+### Presentation layer
 
----
+The presentation layer contains:
 
-## Database Rules
+- Telegram bot command handlers.
+- Callback handlers.
+- Administrator-facing messages.
+- Request validation.
+- Input and output mapping.
 
-### SQLite
+Presentation handlers must remain thin and delegate business work to application
+use cases.
 
-SQLite must be used for structured application data such as:
+### Workers
 
-* Source channels
-* Destination channels
-* Admin users
-* Approval states
-* Publishing logs
-* Queue states
-* Scheduled job states
-* Dollar price history
-* Application settings
-* Worker registration
-* Error logs
+Workers execute long-running or scheduled operations, including:
 
-SQLite migrations must be versioned and repeatable.
+- Source-channel collection.
+- AI processing jobs.
+- Media processing.
+- Delayed scoring.
+- Scheduled publication.
+- Cleanup and expiration handling.
+- Retryable synchronization operations.
 
-Do not store large Telegram media files directly in SQLite.
-
-### MongoDB
-
-MongoDB must be used for unstructured or semi-structured post data such as:
-
-* Raw Telegram post text
-* Raw Telegram metadata
-* Media metadata
-* Extracted links
-* Extracted VPN configs
-* AI classification results
-* AI duplicate detection results
-* Temporary post snapshots
-
-MongoDB documents that should expire after 14 days must use an `expires_at` field and a TTL index.
-
-Example MongoDB TTL requirement:
-
-```text
-Collection: posts
-Field: expires_at
-TTL: expire after the configured date
-```
+Workers must call application use cases rather than contain core business logic.
 
 ---
 
-## Configuration Rules
+## 7. Core Implementation Rules
 
-Sensitive values must be stored in:
+- Use Python type hints for all new and materially changed functions, methods,
+  and public attributes.
+- Public modules, classes, functions, and methods must include useful English
+  documentation.
+- Prefer small, focused modules and services.
+- Avoid large functions and classes with unrelated responsibilities.
+- Use explicit input and output models.
+- Keep side effects isolated.
+- Use dependency injection or explicit dependency construction.
+- Avoid hidden global state.
+- Do not hardcode Telegram channel IDs, administrator IDs, provider names,
+  secrets, or production URLs in business logic.
+- Preserve backward compatibility unless the active task explicitly permits a
+  breaking change.
+- Do not rename public contracts, configuration keys, database fields, or
+  callback formats without documenting migration and compatibility impact.
+- Do not add a new dependency unless it is required by the active task and its
+  purpose is documented.
+- Do not weaken, remove, skip, or rewrite existing tests merely to make a task
+  pass.
+- Do not silently ignore errors.
+- Do not claim success based only on code generation; verify behavior.
 
-```text
-config/configuration.json
+---
+
+## 8. Mandatory Text Encoding and Persian Content Rules
+
+All text files must use UTF-8.
+
+This includes:
+
+- Python files.
+- Markdown files.
+- JSON files.
+- YAML files.
+- TOML files.
+- Configuration templates.
+- Log files.
+- Shell scripts.
+- Service files.
+- Test fixtures.
+- Telegram message templates.
+
+### Python file operations
+
+Python file operations must explicitly use:
+
+```python
+encoding="utf-8"
 ```
 
-The real `configuration.json` file must not be committed to GitHub.
+Example:
 
-A public empty template must always be committed:
+```python
+from pathlib import Path
+
+content = Path("message.txt").read_text(encoding="utf-8")
+Path("output.txt").write_text(content, encoding="utf-8")
+```
+
+When using `open`, specify the encoding explicitly:
+
+```python
+with open("message.txt", "r", encoding="utf-8") as file:
+    content = file.read()
+```
+
+### JSON containing Persian text
+
+JSON containing Persian text must use:
+
+```python
+ensure_ascii=False
+```
+
+Example:
+
+```python
+import json
+from pathlib import Path
+
+data = {"message": "سلام"}
+
+Path("data.json").write_text(
+    json.dumps(data, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+```
+
+### Persian Telegram content
+
+Persian Telegram content must be preserved exactly.
+
+Do not unintentionally change:
+
+- Persian letters.
+- Arabic and Persian variants of characters.
+- Zero-width non-joiners.
+- Spacing.
+- Line breaks.
+- Punctuation.
+- Emoji.
+- Custom Emoji entities.
+- Premium Emoji entities.
+- Telegram entity offsets and lengths.
+- Text casing in usernames or identifiers where casing is meaningful.
+
+Normalization must be explicit, limited to the requirement being implemented,
+and covered by tests.
+
+### Mojibake prevention
+
+Mojibake is not acceptable.
+
+Examples of corrupted content include:
+
+```text
+Ø³ÙØ§Ù
+ÙØªÙ
+Ú©Ø§Ø±Ø¨Ø±
+```
+
+Correct content must remain readable:
+
+```text
+سلام
+متن
+کاربر
+```
+
+When a task touches Persian, RTL, emoji, or Telegram text:
+
+1. Review the human-readable diff.
+2. Search touched text files for suspicious corruption markers such as:
+   `Ø`, `Ù`, `Û`, `Ã`, `Â`, `�`, and unexpected `????`.
+3. Verify representative Persian text manually.
+4. Run encoding-specific tests when available.
+5. Do not treat passing Python syntax, lint, or unit tests as sufficient proof
+   that Persian text is intact.
+
+---
+
+## 9. Telegram Rules
+
+- Use the Telegram User API for source-channel crawling and final publication
+  where preserving Premium Emoji or account-specific entities requires it.
+- Use the Telegram Bot API for administrator interaction, commands, and callback
+  controls.
+- Keep User API and Bot API responsibilities separate.
+- Store Telegram sessions securely.
+- Never commit generated session files.
+- Treat source channel ID and source message ID as the idempotency identity for a
+  collected message.
+- Preserve original post content separately from destination-specific rewritten
+  content.
+- Process media groups as one logical post.
+- Validate every administrator callback against:
+  - Administrator identity.
+  - Administrator active status and permission.
+  - Post existence.
+  - Current post state.
+  - Destination-channel permission.
+  - Duplicate-publication state.
+- Callback operations must be safe under concurrent administrator actions.
+- Publishing must be idempotent per post and destination channel.
+- Final publication must not accidentally include administrator-only metadata
+  headers.
+
+---
+
+## 10. MongoDB and Persistence Rules
+
+MongoDB is the primary database.
+
+- Define repository ports outside the infrastructure layer.
+- Keep MongoDB-specific models, indexes, queries, and driver usage in
+  infrastructure.
+- Use a unique compound index for source channel ID and source message ID.
+- Use TTL indexes for records that expire automatically.
+- Temporary post data must use an `expires_at` field compatible with a MongoDB
+  TTL index.
+- Persistent jobs must survive application restarts.
+- Job acquisition must be atomic.
+- Use a lease, lock expiration, or equivalent approach so multiple workers do
+  not process the same job concurrently.
+- Do not store large binary media in MongoDB unless an explicit decision permits
+  it.
+- Store enough media metadata to retrieve, validate, expire, and republish the
+  media safely.
+- Database changes and index changes must be covered by integration tests when
+  practical.
+- Never assume that checking before insertion is sufficient for uniqueness;
+  enforce uniqueness in MongoDB.
+
+---
+
+## 11. AI Provider Pipeline Rules
+
+AI providers must be accessed through application-layer ports or protocols.
+
+The domain and application logic must not depend on a specific provider SDK or
+response structure.
+
+The AI pipeline must be configuration-driven.
+
+For each AI task:
+
+1. Select enabled providers and models that support the task.
+2. Order them by configured priority.
+3. Skip providers that are disabled, rate-limited, in cooldown, or have an open
+   circuit breaker.
+4. Call the first eligible provider with a bounded timeout.
+5. Validate the response against the task schema.
+6. Apply only bounded retries appropriate for the failure type.
+7. Fall back to the next configured model or provider when necessary.
+8. Stop after the first valid result.
+9. Record failure details when all providers fail.
+10. Never invent or label a fabricated result as an AI result.
+
+Additional rules:
+
+- Invalid JSON, empty responses, schema violations, timeouts, provider errors,
+  and rate limits may trigger fallback.
+- Authentication failures and permanently unavailable models should not be
+  retried repeatedly.
+- Retry and fallback are different operations and must be represented
+  separately.
+- Free-provider quotas and rate limits must be respected.
+- AI jobs must be persistent and restart-safe when the active task requires
+  asynchronous processing.
+- Cache keys must include the task type, normalized input hash, prompt version,
+  schema version, and relevant language information.
+- Prompt versions must be stored with AI results.
+- Provider-specific results must be converted into application-owned result
+  models.
+- API keys must never be stored in source code or logs.
+
+---
+
+## 12. Configuration and Secrets
+
+The repository must contain a safe configuration template, such as:
 
 ```text
 config/configuration.example.json
 ```
 
-The template must show users which API keys and values are required.
+The real local configuration must not be committed.
 
-The project must include a `.gitignore` rule like this:
+Configuration rules:
 
-```gitignore
-config/configuration.json
-```
-
-The `configuration.example.json` file must always stay updated when new configuration keys are added.
-
-Required configuration template:
-
-```json
-{
-  "telegram": {
-    "bot_token": "",
-    "approval_bot_token": "",
-    "api_id": "",
-    "api_hash": "",
-    "source_channels": [],
-    "destination_channels": []
-  },
-  "ai": {
-    "primary_provider": "zai",
-    "fallback_provider": "deepseek",
-    "zai_api_key": "",
-    "deepseek_api_key": "",
-    "deduplication_model": "",
-    "classification_model": ""
-  },
-  "database": {
-    "sqlite_path": "data/app.db",
-    "mongodb_connection_string": "",
-    "mongodb_database": "telegram_admin_bot"
-  },
-  "storage": {
-    "media_directory": "data/media"
-  },
-  "vpn_testing": {
-    "iran_worker_enabled": true,
-    "worker_api_url": "",
-    "worker_api_token": "",
-    "test_timeout_seconds": 30
-  },
-  "scheduler": {
-    "usd_price_publish_times": [
-      "09:00",
-      "21:00"
-    ],
-    "timezone": "Asia/Tehran"
-  },
-  "logging": {
-    "level": "INFO",
-    "file": "logs/app.log"
-  }
-}
-```
+- Validate required configuration during startup.
+- Fail with a clear configuration error when required values are missing or
+  invalid.
+- Keep configuration access centralized.
+- Keep configuration models typed.
+- Update the example configuration whenever keys change.
+- Use environment variables or an approved secret-management mechanism for real
+  secrets.
+- Do not include real:
+  - Telegram bot tokens.
+  - Telegram API hashes.
+  - Telegram session files.
+  - AI API keys.
+  - MongoDB passwords.
+  - Worker tokens.
+  - Private production URLs.
+- Verify `.gitignore` when adding secret-bearing or generated files.
 
 ---
 
-## Code Documentation Requirements
+## 13. Reliability, Concurrency, and Error Handling
 
-Every class, function, method, and public module must be fully documented in English.
+Every external operation must have a bounded timeout.
 
-Documentation must explain:
+Retry behavior must be:
 
-* Purpose
-* Parameters
-* Return value
-* Exceptions or failure cases
-* Side effects
-* Example usage when useful
+- Limited.
+- Failure-type aware.
+- Observable in logs.
+- Safe against duplicate side effects.
+- Implemented with backoff when appropriate.
 
-Every Python function must include type hints.
+Operations that may be delivered more than once must be idempotent.
 
-Required function style:
+This includes:
 
-```python
-def classify_post(post_text: str, language_hint: str | None = None) -> PostCategory:
-    """
-    Classify a Telegram post into one of the supported post categories.
+- Telegram update handling.
+- Initial crawling and live-listener overlap.
+- MongoDB inserts.
+- AI jobs.
+- Callback actions.
+- Scheduled publications.
+- Immediate publications.
+- Message edits.
+- Cleanup jobs.
 
-    Args:
-        post_text:
-            The raw text content of the Telegram post.
-        language_hint:
-            Optional language hint such as "fa" or "en". If omitted, the
-            classifier should infer the language automatically.
+Use explicit exceptions or result types for expected failures.
 
-    Returns:
-        The detected post category.
+Distinguish between:
 
-    Raises:
-        AiProviderError:
-            Raised when all configured AI providers fail.
-        InvalidPostError:
-            Raised when the provided post text is empty or invalid.
+- Validation failures.
+- Permanent configuration failures.
+- Permission failures.
+- Temporary network failures.
+- Rate limits.
+- Timeouts.
+- Provider failures.
+- Conflict or concurrency failures.
+- Already-completed idempotent operations.
 
-    Example:
-        category = classify_post("Breaking news: ...", language_hint="en")
-    """
-```
+Do not silently swallow exceptions.
 
-Every class must include a class-level docstring:
-
-```python
-class PostApprovalService:
-    """
-    Coordinates the approval workflow for collected Telegram posts.
-
-    This service sends posts to the approval bot, tracks admin decisions,
-    and dispatches approved posts to the publishing service.
-
-    Example:
-        service = PostApprovalService(repository, publisher)
-        await service.request_approval(post_id)
-    """
-```
+Do not expose sensitive exception details to administrators.
 
 ---
 
-## Testing Requirements
+## 14. Logging and Observability
 
-Unit tests are mandatory for all major parts of the application.
+Use structured logging.
 
-Every new feature must include tests before it is considered complete.
+Logs should include relevant non-sensitive context such as:
 
-Use `pytest` as the default test framework.
+- Correlation ID.
+- Task or job ID.
+- Post ID.
+- Source channel ID.
+- Source message ID.
+- Destination channel ID.
+- Administrator ID where appropriate.
+- Provider and model name.
+- Retry attempt.
+- Fallback count.
+- Processing state.
+- Error category.
 
-Recommended test structure:
+Never log:
 
-```text
-tests/
-  unit/
-    domain/
-    application/
-    infrastructure/
-    presentation/
-  integration/
-    mongodb/
-    sqlite/
-    telegram/
-    ai/
-    vpn_worker/
-```
+- API keys.
+- Tokens.
+- Session content.
+- Passwords.
+- Authorization headers.
+- Full secret-bearing URLs.
+- Private credentials.
 
-Required test coverage areas:
-
-* Post collection normalization
-* Persian UTF-8 handling
-* Mojibake prevention
-* AI duplicate detection service
-* AI fallback from z.ai to DeepSeek
-* AI post classification
-* VPN config extraction
-* `vmess` parsing
-* `vless` parsing
-* Iran worker test request handling
-* Approval callback logic
-* Publishing state changes
-* SQLite repositories
-* MongoDB repositories
-* 14-day expiration logic
-* USD price history comparison
-* Configuration loading and validation
-
-When adding or changing functionality, update or add tests in the same change.
+Persian log content must remain UTF-8-safe.
 
 ---
 
-## AI Provider Rules
+## 15. Testing Rules
 
-The application must support multiple AI providers through interfaces.
+Use `pytest` unless the repository has an explicitly approved alternative.
 
-Do not hardcode z.ai or DeepSeek directly inside business logic.
+Every behavior change must include appropriate tests.
 
-Use an interface such as:
+### Unit tests
 
-```python
-class AiProvider(Protocol):
-    """
-    Defines the interface for AI providers used for classification and
-    duplicate detection.
-    """
+Unit tests should cover pure domain and application behavior, including:
 
-    async def classify_post(self, text: str) -> AiClassificationResult:
-        """
-        Classify a Telegram post.
+- State transitions.
+- Idempotency decisions.
+- Callback toggle logic.
+- Schedule calculation.
+- Text pruning and replacement.
+- Entity offset reconstruction.
+- Provider selection.
+- Retry and fallback decisions.
+- Response validation.
+- Cache key generation.
+- Configuration validation.
+- Persian and UTF-8 preservation.
 
-        Args:
-            text:
-                Raw post text.
+### Integration tests
 
-        Returns:
-            The AI classification result.
-        """
+Integration tests should cover infrastructure behavior, including:
 
-    async def is_duplicate(self, new_text: str, existing_texts: list[str]) -> DuplicateCheckResult:
-        """
-        Check whether a new post is duplicate or near-duplicate.
+- MongoDB repositories.
+- Unique indexes.
+- TTL indexes.
+- Atomic job acquisition.
+- Restart-safe scheduling.
+- AI adapter request and response mapping.
+- Telegram adapters when testable through fakes or approved test environments.
+- Media storage lifecycle.
 
-        Args:
-            new_text:
-                New post text.
-            existing_texts:
-                Existing post texts to compare against.
+### Test quality
 
-        Returns:
-            Duplicate check result.
-        """
-```
-
-The primary AI provider must be z.ai.
-
-If z.ai fails, times out, or returns an invalid response, the application must automatically use DeepSeek as fallback.
-
-AI provider errors must be logged clearly.
+- Tests must assert behavior, not implementation trivia.
+- Tests must be deterministic.
+- Tests must not use production credentials or real private channels.
+- Do not make uncontrolled live API requests in the default test suite.
+- Do not delete an existing test simply because a new implementation breaks it.
+- If a test cannot be run, report the exact reason.
+- Never claim that an unexecuted test passed.
 
 ---
 
-## VPN Configuration Testing Rules
+## 16. Verification Before Completion
 
-The system must detect and extract VPN configs from Telegram posts.
+Before declaring a task complete:
 
-Supported config types:
+1. Run the verification commands listed in the task file.
+2. Run relevant unit tests.
+3. Run relevant integration tests.
+4. Run the project lint command.
+5. Run formatting checks.
+6. Run static type checking.
+7. Run configuration or migration checks when relevant.
+8. Review the final diff for unrelated changes.
+9. Review touched Persian, RTL, emoji, and Telegram text manually.
+10. Check touched files for mojibake markers.
+11. Verify that no secret, local configuration, generated session file, private
+    media, or credential was added.
+12. Verify that every objective acceptance criterion is satisfied.
+13. Verify that repository documentation matches the implementation.
 
-```text
-vmess
-vless
-```
+A task must not be marked complete while required verification fails.
 
-VPN configuration testing must not run inside the main Telegram bot process.
-
-VPN testing must be handled by a separate worker that can run on an Iran-based server.
-
-The main application sends a test request to the Iran worker.
-
-The Iran worker tests whether the config works from the Iran network.
-
-If the config works, the post becomes eligible for VPN channel publishing.
-
-If the config does not work, the post must not be published automatically to VPN channels.
-
-The worker must expose a secure API protected by a token from `configuration.json`.
-
----
-
-## Approval Bot Rules
-
-The approval bot must receive new eligible posts and show inline callback buttons.
-
-Each approval message must include buttons like:
-
-```text
-Send to Channel A
-Send to Channel B
-Send to Channel C
-```
-
-After an admin clicks a channel button, the bot must ask for final confirmation.
-
-After successful publishing, the related button must be updated with:
-
-```text
-✅
-```
-
-Publishing state must be saved in SQLite.
-
-The system must prevent duplicate publishing to the same channel.
-
-The system must support publishing one post to multiple destination channels.
+When a check cannot be executed, keep the task incomplete unless the task file
+explicitly permits that limitation. Report the limitation accurately.
 
 ---
 
-## USD Price Publishing Rules
+## 17. Required Documentation Updates
 
-The application must publish USD price updates twice per day.
+At the end of every completed task:
 
-USD price sources must be configurable.
+- Mark the task completed in `docs/ROADMAP.md`.
+- Update `docs/STATUS.md`.
+- Update the active task file with its final status and verification results.
+- Update `docs/CODE_MAP.md` when files, modules, responsibilities, or data flows
+  changed.
+- Update `docs/ARCHITECTURE.md` when the implemented architecture changed.
+- Add an entry to `docs/DECISIONS.md` only for significant decisions.
+- Update `docs/REQUIREMENTS.md` only when the product requirement itself was
+  intentionally changed.
+- Update configuration and running documentation when commands, settings, or
+  deployment behavior changed.
 
-Each fetched price must be stored in SQLite.
+Keep documentation concise.
 
-Each new published price message must include the change compared to the previous stored price.
-
-The price publishing job must be documented in the run instructions.
-
-The scheduled times must be configurable in `configuration.json`.
-
----
-
-## Code Map Requirement
-
-The project must always include a code map file:
-
-```text
-docs/CODE_MAP.md
-```
-
-This file must explain the full structure of the codebase.
-
-It must be updated after every meaningful code change.
-
-The code map must help future AI agents and developers understand the project quickly.
-
-The code map must include:
-
-* Project purpose
-* Main architecture
-* Folder structure
-* Important modules
-* Main classes and services
-* Data flow
-* Background workers
-* Telegram bots
-* Database usage
-* Configuration files
-* Test structure
-* Deployment files
-* How to add a new feature
-
-Required minimum structure:
-
-```markdown
-# Code Map
-
-## Project Purpose
-
-## Architecture Overview
-
-## Folder Structure
-
-## Domain Layer
-
-## Application Layer
-
-## Infrastructure Layer
-
-## Presentation Layer
-
-## Workers
-
-## Databases
-
-## Configuration
-
-## Telegram Bots
-
-## VPN Testing Worker
-
-## Scheduled Jobs
-
-## Tests
-
-## Deployment
-
-## How to Add a New Feature
-
-## Last Updated
-```
-
-The `Last Updated` section must be updated whenever the file is changed.
+Remove obsolete information instead of repeatedly appending conflicting notes.
 
 ---
 
-## Run Instructions Requirement
+## 18. Definition of Done
 
-The project must always include an English run guide:
+A task is complete only when all applicable conditions below are true:
 
-```text
-docs/RUNNING.md
-```
+1. The task dependencies were complete.
+2. Work remained within the active task scope.
+3. All objective acceptance criteria were satisfied.
+4. Clean Architecture boundaries were preserved.
+5. New code has appropriate type hints and English documentation.
+6. Required unit tests were added or updated.
+7. Required integration tests were added or updated.
+8. All required verification commands passed.
+9. Idempotency and concurrency behavior were considered where applicable.
+10. External calls have bounded timeouts.
+11. Retry behavior is bounded.
+12. No secrets or generated session files were committed.
+13. All text files use UTF-8.
+14. Python file operations explicitly use `encoding="utf-8"`.
+15. JSON containing Persian text uses `ensure_ascii=False`.
+16. Persian Telegram content was preserved exactly.
+17. No Mojibake was introduced.
+18. Relevant documentation was updated.
+19. The final diff contains no unrelated changes.
+20. A suitable Git commit message was suggested.
 
-This file must explain how to install, configure, run, and deploy the project.
-
-It must always be updated when the application behavior, commands, configuration keys, worker setup, or deployment process changes.
-
-The file must include:
-
-* Requirements
-* Python version
-* Virtual environment setup
-* Dependency installation
-* Configuration setup
-* MongoDB setup
-* SQLite setup
-* Running migrations
-* Running the main bot
-* Running the approval bot
-* Running the collector
-* Running the scheduler
-* Running the Iran VPN testing worker
-* Installing the Iran worker on Ubuntu
-* Enabling the Iran worker as a systemd service
-* Testing `vmess` configs
-* Testing `vless` configs
-* Common troubleshooting steps
-
-Required minimum structure:
-
-```markdown
-# Running the Telegram Admin Bot
-
-## Requirements
-
-## Installation
-
-## Configuration
-
-## Database Setup
-
-## Running the Application
-
-## Running the Iran VPN Testing Worker
-
-## Testing VLESS Configurations
-
-## Testing VMESS Configurations
-
-## Ubuntu systemd Service
-
-## Troubleshooting
-```
+Do not claim that a task is complete unless its acceptance criteria and required
+verification have been checked.
 
 ---
 
-## Ubuntu Service File Requirement
-
-The project must always include a systemd service file template for Ubuntu:
-
-```text
-deploy/telegram-admin-bot.service
-```
-
-If the service changes, this file must be updated.
-
-Required template:
-
-```ini
-[Unit]
-Description=Telegram Admin Bot
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/telegram-admin-bot
-ExecStart=/opt/telegram-admin-bot/.venv/bin/python -m src.main
-Restart=always
-RestartSec=5
-User=telegrambot
-Group=telegrambot
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONIOENCODING=utf-8
-
-[Install]
-WantedBy=multi-user.target
-```
-
-The project must also include a worker service template:
-
-```text
-deploy/iran-vpn-worker.service
-```
-
-Required template:
-
-```ini
-[Unit]
-Description=Iran VPN Testing Worker
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/telegram-admin-bot
-ExecStart=/opt/telegram-admin-bot/.venv/bin/python -m src.workers.iran_vpn_worker
-Restart=always
-RestartSec=5
-User=telegrambot
-Group=telegrambot
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONIOENCODING=utf-8
-
-[Install]
-WantedBy=multi-user.target
-```
+## 19. End-of-Task Response
 
-The service files must be documented in `docs/RUNNING.md`.
+After completing a task, every final response must include the following exact
+sections:
 
----
+### Changed files
 
-## Extensibility Rules
+List every changed file with a brief explanation.
 
-The code must be written so that future features can be added easily.
+### Implementation summary
 
-Required practices:
+Explain what was implemented and the most important design decisions.
 
-* Use interfaces and dependency injection.
-* Avoid hardcoded provider names.
-* Avoid hardcoded Telegram channel IDs in business logic.
-* Avoid hardcoded API keys.
-* Avoid mixing Telegram handlers with business logic.
-* Avoid mixing database logic with use cases.
-* Avoid large classes.
-* Avoid long functions.
-* Prefer small focused services.
-* Prefer explicit data models.
-* Prefer clear input and output types.
-* Keep side effects isolated in infrastructure services.
-* Use repository interfaces for persistence.
-* Use provider interfaces for external APIs.
-* Use separate services for classification, deduplication, approval, publishing, scheduling, and VPN testing.
-
-When adding a new feature:
+### Tests executed
 
-1. Add or update domain models if needed.
-2. Add or update application use cases.
-3. Add infrastructure implementations.
-4. Add Telegram handlers or worker entrypoints only at the edge.
-5. Add or update configuration template.
-6. Add or update unit tests.
-7. Add or update integration tests if required.
-8. Update `docs/CODE_MAP.md`.
-9. Update `docs/RUNNING.md`.
-10. Update service files if execution commands changed.
-
----
-
-## Logging Rules
+List every test, lint, formatting, type-checking, migration, or verification
+command that was actually run, together with its result.
 
-The application must use structured logging.
+If a check was not run, state that clearly and explain why.
 
-Logs must be UTF-8-safe.
+### Known limitations
 
-Logs must include enough context to debug issues, such as:
+List unresolved limitations, assumptions, blockers, deferred behavior, or areas
+that still require manual review.
 
-* Post ID
-* Source channel ID
-* Destination channel ID
-* AI provider name
-* Worker name
-* Job name
-* Error message
-* Retry attempt
-* Publishing status
+Use `None` only when there are genuinely no known limitations.
 
-Do not log sensitive values such as:
+### Suggested Git commit message
 
-* Telegram bot tokens
-* Telegram API hash
-* z.ai API key
-* DeepSeek API key
-* Worker API token
-* MongoDB password
+Provide one short English Git commit message that accurately describes the
+completed task.
 
----
+When relevant, also include:
 
-## Error Handling Rules
+- Verification results.
+- Important architectural decisions.
+- Source-text safety checks.
+- The next recommended task.
 
-The application must use explicit custom exceptions for expected failure cases.
-
-Examples:
-
-```text
-ConfigurationError
-AiProviderError
-DuplicateDetectionError
-PostClassificationError
-TelegramPublishError
-VpnConfigParseError
-VpnConnectivityTestError
-RepositoryError
-ApprovalStateError
-```
-
-Do not silently ignore errors.
-
-All recoverable errors must be logged.
-
-External API calls must have timeouts.
-
-Fallback logic must be tested.
-
----
-
-## Queue and Background Job Rules
-
-Redis is not required for this project.
-
-Queue state can be stored in SQLite.
-
-The application may use SQLite tables for:
-
-* Pending collection tasks
-* Pending AI classification tasks
-* Pending VPN test tasks
-* Pending approval tasks
-* Pending publishing tasks
-* Failed retryable tasks
-* Completed tasks
-
-Each queued item must have:
-
-```text
-id
-type
-status
-attempts
-last_error
-scheduled_at
-created_at
-updated_at
-```
-
-Recommended statuses:
-
-```text
-pending
-processing
-waiting_approval
-approved
-published
-failed
-skipped
-duplicate
-expired
-```
-
-Workers must be safe to restart.
-
-Workers must not process the same item twice at the same time.
-
----
-
-## Security Rules
-
-Never commit real secrets.
-
-Never print real secrets in logs.
-
-Never expose approval actions to unauthorized users.
-
-Only configured admin Telegram user IDs may approve posts.
-
-The Iran VPN testing worker must require authentication.
-
-All external HTTP calls must use timeouts.
-
-All callback actions must validate:
-
-* Admin identity
-* Post existence
-* Current approval state
-* Destination channel permission
-* Duplicate publishing state
-
----
-
-## GitHub Readiness Rules
-
-The GitHub version of the project must include:
-
-```text
-AGENTS.md
-README.md
-docs/CODE_MAP.md
-docs/RUNNING.md
-config/configuration.example.json
-deploy/telegram-admin-bot.service
-deploy/iran-vpn-worker.service
-tests/
-.gitignore
-```
-
-The GitHub version must not include:
-
-```text
-config/configuration.json
-API keys
-Telegram bot tokens
-Telegram API hash
-MongoDB passwords
-Real production logs
-Downloaded private Telegram media
-```
-
-The README must briefly explain:
-
-* What the project does
-* Main features
-* Architecture
-* Requirements
-* Quick start
-* Configuration
-* Testing
-* Deployment documentation link
----
-
-## Commit Message Suggestion Rule
-
-After every prompt, instruction, or task given to Codex or Claude Code that results in code edits, file changes, documentation updates, configuration changes, tests, or any other meaningful repository modification, the assistant must provide a suggested Git commit message for the completed change.
-
-The suggested commit message must be:
-
-* Written in English.
-* Short, clear, and suitable for GitHub.
-* Specific to the actual change that was made.
-* Provided after the edit summary, so the user can copy it directly.
-
-Recommended format:
-
-```text
-Suggested commit message: Add approval workflow persistence
-```
-
-For larger changes, use a conventional commit style when helpful:
-
-```text
-feat: add Telegram approval workflow
-fix: prevent Persian text mojibake
-docs: update running guide for VPN worker
-test: add unit tests for AI provider fallback
-```
-
-The assistant must not invent a commit message before understanding the actual completed change.
-
-
----
-
-## Definition of Done
-
-A task is not complete until all of the following are true:
-
-1. The code follows Clean Architecture.
-2. The code is written in Python.
-3. All text files are UTF-8.
-4. Persian text does not contain Mojibake.
-5. Public classes and functions have English docstrings.
-6. Function parameters and return values are documented.
-7. Usage examples are included where helpful.
-8. Unit tests are added or updated.
-9. `config/configuration.example.json` is updated if configuration changed.
-10. `docs/CODE_MAP.md` is updated.
-11. `docs/RUNNING.md` is updated.
-12. systemd service files are added or updated if execution commands changed.
-13. No secrets are committed.
-14. The code remains easy to extend.
-15. A suggested English Git commit message is provided after every completed Codex or Claude Code edit.
+Never invent successful test results or claim completion without verification.
