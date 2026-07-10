@@ -15,7 +15,7 @@
 - **Status:** Accepted
 - **Context:** Postها، وضعیت‌های پردازش و Jobهای پایدار ساختار Document-oriented و Atomic update می‌خواهند.
 - **Decision:** MongoDB منبع حقیقت اصلی Post، Publication، Schedule، AI Job و Advertisement Job است.
-- **Reason:** الزام `REQUIREMENTS.md` و پشتیبانی از Unique/TTL Index و Claim اتمیک.
+- **Reason:** الزام `docs/REQUIREMENTS.md` و پشتیبانی از Unique/TTL Index و Claim اتمیک.
 - **Consequences:** Index setup و Schema evolution باید صریح باشند؛ TTL حذف دقیق در لحظه را تضمین نمی‌کند؛ Query و Mapperها پشت Port می‌مانند.
 
 ## ADR-003 — مرزهای Clean Architecture

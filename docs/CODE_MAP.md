@@ -9,12 +9,12 @@
 ```text
 .
 ├── AGENTS.md
-├── REQUIREMENTS.md
 ├── pyproject.toml
 ├── config/
 │   └── configuration.example.json
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── REQUIREMENTS.md
 │   ├── ROADMAP.md
 │   ├── STATUS.md
 │   ├── CODE_MAP.md
