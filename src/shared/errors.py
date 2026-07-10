@@ -13,6 +13,14 @@ class ConfigurationError(AppError):
     """Raised when configuration is missing, malformed, or invalid."""
 
 
+class ApplicationAlreadyRunningError(AppError):
+    """Raised when another runtime instance already owns a required lease."""
+
+
+class RuntimeLeaseLostError(AppError):
+    """Raised when a running component can no longer renew its runtime lease."""
+
+
 class AiProviderError(AppError):
     """Raised when a single AI provider call fails or returns invalid data."""
 

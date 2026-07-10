@@ -117,12 +117,48 @@ class TestMigrations:
 
         applied = await apply_migrations(database)
 
-        assert applied == 5
+        assert applied == 9
         row = await database.fetchone(
             "SELECT 1 FROM schema_migrations WHERE version = 4"
         )
         assert row is not None
         await database.close()
+
+    async def test_legacy_preview_rows_are_marked_unknown(self, db: Database) -> None:
+        """Migration 12 must not relabel previews created after migration 10."""
+        applied = await db.fetchone(
+            "SELECT applied_at FROM schema_migrations WHERE version = 10"
+        )
+        assert applied is not None
+        await db.execute("DELETE FROM schema_migrations WHERE version = 12")
+        await db.execute(
+            """
+            INSERT INTO approval_messages
+                (post_id, admin_user_id, chat_id, message_id, delivery_mode,
+                 preview_kind, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 's', 'text', 1, ?, ?)
+            """,
+            ("legacy", 1, 1, 10, "2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00"),
+        )
+        await db.execute(
+            """
+            INSERT INTO approval_messages
+                (post_id, admin_user_id, chat_id, message_id, delivery_mode,
+                 preview_kind, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 's', 'text', 1, ?, ?)
+            """,
+            ("current", 1, 1, 11, "2999-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00"),
+        )
+
+        assert await apply_migrations(db) == 1
+        rows = await db.fetchall(
+            "SELECT post_id, preview_kind FROM approval_messages ORDER BY post_id"
+        )
+
+        assert [(row["post_id"], row["preview_kind"]) for row in rows] == [
+            ("current", "text"),
+            ("legacy", "unknown"),
+        ]
 
 
 class TestQueueRepository:
@@ -506,6 +542,10 @@ class TestApprovalMessageRepository:
         await repo.set_delivery_mode("p1", 42, 10, "i")
         refs = await repo.list_active("p1")
         assert refs[0].delivery_mode == "i"
+
+        await repo.set_preview_kind(refs[0].id, "caption")
+        refs = await repo.list_active("p1")
+        assert refs[0].preview_kind == "caption"
 
         await repo.deactivate(refs[0].id)
         assert await repo.list_active("p1") == []

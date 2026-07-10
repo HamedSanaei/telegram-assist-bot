@@ -21,8 +21,14 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from src import main as main_app
+from src.application.runtime_lease_service import RuntimeLeaseService
+from src.composition import create_runtime_lease_store
 from src.shared.config import load_configuration
-from src.shared.errors import ConfigurationError
+from src.shared.errors import (
+    ApplicationAlreadyRunningError,
+    ConfigurationError,
+    RuntimeLeaseLostError,
+)
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers import collector
 
@@ -70,9 +76,9 @@ async def supervise(
             )
         except asyncio.CancelledError:
             raise
-        except ConfigurationError as exc:
+        except (ConfigurationError, ApplicationAlreadyRunningError) as exc:
             logger.error(
-                "Component '%s' has invalid configuration, not restarting: %s",
+                "Component '%s' cannot start, not restarting: %s",
                 name,
                 exc,
             )
@@ -105,11 +111,56 @@ async def run() -> None:
         color_console=config.logging.color_console,
         entrypoint_name="run_all",
     )
-    logger.info("Starting all main-server components in one process")
-    await asyncio.gather(
-        supervise("main-app", lambda: main_app.run(configure_logging=False)),
-        supervise("collector", lambda: collector.run(configure_logging=False)),
+    lease_client, lease_repository = create_runtime_lease_store(config)
+    bot_lease = RuntimeLeaseService(
+        lease_repository,
+        "bot-polling",
+        (
+            config.telegram.bot_token,
+            config.telegram.approval_bot_token,
+        ),
     )
+    collector_lease = RuntimeLeaseService(
+        lease_repository,
+        "collector",
+        (
+            str(config.telegram.api_id),
+            config.telegram.collector_session,
+        ),
+    )
+    try:
+        await bot_lease.acquire()
+        await collector_lease.acquire()
+        logger.info("Starting all main-server components in one process")
+
+        async def run_components() -> None:
+            """Run supervised components under leases owned by this entrypoint."""
+            await asyncio.gather(
+                supervise(
+                    "main-app",
+                    lambda: main_app.run(
+                        configure_logging=False,
+                        runtime_lease=bot_lease,
+                        config=config,
+                    ),
+                ),
+                supervise(
+                    "collector",
+                    lambda: collector.run(
+                        config=config,
+                        configure_logging=False,
+                        runtime_lease=collector_lease,
+                    ),
+                ),
+            )
+
+        await bot_lease.run_with_heartbeat(
+            collector_lease.run_with_heartbeat(run_components())
+        )
+    finally:
+        await collector_lease.release()
+        await bot_lease.release()
+        lease_client.close()
     logger.error("All components stopped; exiting")
 
 
@@ -119,6 +170,10 @@ def main() -> None:
         asyncio.run(run())
     except KeyboardInterrupt:
         logger.info("Shutdown requested; all components stopped")
+    except ApplicationAlreadyRunningError as exc:
+        logger.error("Startup refused: %s", exc)
+    except RuntimeLeaseLostError as exc:
+        logger.error("Runtime stopped after lease loss: %s", exc)
 
 
 if __name__ == "__main__":

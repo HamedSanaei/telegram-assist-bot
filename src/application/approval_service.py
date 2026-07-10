@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
@@ -149,29 +150,23 @@ class ApprovalService:
 
     async def repair_orphaned_approval_requests(self) -> int:
         """
-        Report previously requested approval previews without resending them.
+        Report aggregate approval idempotency state without resending posts.
 
         Returns:
             Always ``0``. Approval resend is intentionally disabled because
             ``approval_requests`` is the idempotency boundary.
 
         Side effects:
-            Logs approval requests that no longer have active tracked
-            messages, so operators can inspect them manually if needed.
+            Emits one summary log instead of scanning and logging every
+            historical approval request separately.
         """
-        if (
-            self._approval_requests is None
-            or self._approval_messages is None
-            or self._notifier is None
-        ):
+        if self._approval_requests is None:
             return 0
-        for post_id in await self._approval_requests.list_requested_post_ids():
-            if await self._approval_messages.list_active(post_id):
-                continue
-            logger.info(
-                "Skipping approval resend; approval already requested post=%s",
-                post_id,
-            )
+        requested = await self._approval_requests.list_requested_post_ids()
+        logger.info(
+            "Approval resend diagnostic requested=%d automatic_resend=disabled",
+            len(requested),
+        )
         return 0
 
     async def active_approval_messages(self, post_id: str) -> list[ApprovalMessageRef]:
@@ -220,9 +215,21 @@ class ApprovalService:
         )
 
     async def repair_recent_approval_previews(
-        self, hours: int = 24, limit: int = 500
+        self,
+        hours: int = 24,
+        limit: int = 500,
+        delay_seconds: float = 0.0,
     ) -> ApprovalPreviewRefreshResult:
-        """Best-effort repair recent inactive refs without resending approvals."""
+        """Best-effort repair recent inactive refs without resending approvals.
+
+        Args:
+            hours: Age window for inactive references.
+            limit: Maximum references inspected in one repair pass.
+            delay_seconds: Optional throttle between post groups.
+
+        Returns:
+            Aggregated in-place edit result.
+        """
         if self._approval_messages is None or self._notifier is None:
             return ApprovalPreviewRefreshResult()
         since = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
@@ -230,7 +237,8 @@ class ApprovalService:
         for ref in await self._approval_messages.list_recent_inactive(since, limit):
             grouped.setdefault(ref.post_id, []).append(ref)
         totals = ApprovalPreviewRefreshResult()
-        for post_id, refs in grouped.items():
+        grouped_items = list(grouped.items())
+        for index, (post_id, refs) in enumerate(grouped_items):
             try:
                 result = await self.refresh_approval_previews(post_id, refs)
             except ApprovalStateError:
@@ -244,6 +252,8 @@ class ApprovalService:
                     totals.permanent_failures + result.permanent_failures
                 ),
             )
+            if delay_seconds > 0 and index + 1 < len(grouped_items):
+                await asyncio.sleep(delay_seconds)
         if grouped:
             logger.info(
                 "Approval preview startup repair refs=%d updated=%d retryable=%d permanent=%d",

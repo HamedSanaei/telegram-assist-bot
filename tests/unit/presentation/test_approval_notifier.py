@@ -100,6 +100,18 @@ class FailingPreviewEditBot(PreviewEditBot):
         raise RuntimeError(self.error)
 
 
+class CaptionFailingPreviewEditBot(PreviewEditBot):
+    """Preview bot fake whose caption edit raises a scripted error."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__()
+        self.error = error
+
+    async def edit_message_caption(self, **kwargs: object) -> None:
+        """Raise the configured Telegram-like caption edit error."""
+        raise RuntimeError(self.error)
+
+
 class FakeApprovalMessageRepository:
     """Minimal active approval-message repository for edit tests."""
 
@@ -117,6 +129,12 @@ class FakeApprovalMessageRepository:
         """Record reactivation of a repaired reference."""
         if message_ref_id in self.deactivated:
             self.deactivated.remove(message_ref_id)
+
+    async def set_preview_kind(self, message_ref_id: int, preview_kind: str) -> None:
+        """Persist the detected preview kind in the matching test reference."""
+        for ref in self.refs:
+            if ref.id == message_ref_id:
+                ref.preview_kind = preview_kind
 
 
 class TestApprovalPreview:
@@ -314,6 +332,83 @@ class TestApprovalPreview:
         assert "90/100" in str(bot.caption_edits[0]["caption"])
         assert bot.caption_edits[0]["reply_markup"] is not None
         assert len(str(bot.caption_edits[0]["caption"])) <= 1024
+
+    async def test_unknown_legacy_media_preview_is_detected_as_caption(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy unknown rows infer caption when the original preview had media."""
+        media_path = tmp_path / "photo.jpg"
+        media_path.write_bytes(b"preview")
+        post = Post(
+            "p1",
+            -100,
+            1,
+            "خبر تصویری",
+            "hash",
+            media=[MediaItem(MediaKind.PHOTO, str(media_path))],
+        )
+        ref = ApprovalMessageRef(
+            "p1", 42, 42, 100, preview_kind="unknown", id=1, active=False
+        )
+        repository = FakeApprovalMessageRepository([ref])
+        bot = PreviewEditBot()
+        notifier = AiogramApprovalNotifier(
+            bot=bot,
+            admins=FakeAdminRepository([42]),
+            approval_messages=repository,
+        )
+
+        result = await notifier.refresh_approval_request(
+            post, [], set(), set(), False, refs=[ref]
+        )
+
+        assert result.updated == 1
+        assert ref.preview_kind == "caption"
+        assert bot.caption_edits[0]["reply_markup"] is not None
+
+    async def test_text_kind_mismatch_falls_back_to_caption(self) -> None:
+        """Telegram's no-text error corrects a stale text reference."""
+        post = Post("p1", -100, 1, "خبر", "hash")
+        ref = ApprovalMessageRef("p1", 42, 42, 100, preview_kind="text", id=1)
+        repository = FakeApprovalMessageRepository([ref])
+        bot = FailingPreviewEditBot(
+            "Bad Request: there is no text in the message to edit"
+        )
+        notifier = AiogramApprovalNotifier(
+            bot=bot,
+            admins=FakeAdminRepository([42]),
+            approval_messages=repository,
+        )
+
+        result = await notifier.refresh_approval_request(
+            post, [], set(), set(), False
+        )
+
+        assert result.updated == 1
+        assert ref.preview_kind == "caption"
+        assert bot.caption_edits[0]["reply_markup"] is not None
+
+    async def test_caption_kind_mismatch_falls_back_to_text(self) -> None:
+        """Telegram's no-caption error corrects a stale caption reference."""
+        post = Post("p1", -100, 1, "خبر", "hash")
+        ref = ApprovalMessageRef("p1", 42, 42, 100, preview_kind="caption", id=1)
+        repository = FakeApprovalMessageRepository([ref])
+        bot = CaptionFailingPreviewEditBot(
+            "Bad Request: there is no caption in the message to edit"
+        )
+        notifier = AiogramApprovalNotifier(
+            bot=bot,
+            admins=FakeAdminRepository([42]),
+            approval_messages=repository,
+        )
+
+        result = await notifier.refresh_approval_request(
+            post, [], set(), set(), False
+        )
+
+        assert result.updated == 1
+        assert ref.preview_kind == "text"
+        assert bot.text_edits[0]["reply_markup"] is not None
 
     async def test_transient_preview_error_keeps_reference_active(self) -> None:
         """A disconnect is retryable and must not discard the message ref."""

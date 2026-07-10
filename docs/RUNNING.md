@@ -112,6 +112,16 @@ supervisor: if one crashes it is restarted after a short delay without
 taking the other down. A component with broken configuration is stopped
 permanently (and logged) while the rest keep running.
 
+Before any polling, backfill, or approval repair starts, `src.run_all`
+acquires two distributed MongoDB leases: `bot-polling` and `collector`.
+Starting the same suite on another terminal, Windows host, or Ubuntu server
+with the same Telegram identities is refused with `Startup refused: Another
+instance already owns runtime role ...`. The running instance remains
+untouched. Leases renew every 15 seconds, expire after 60 seconds, and are
+released during graceful shutdown. Standalone `src.main` and collector
+entrypoints use the same role leases, so do not run them alongside
+`src.run_all` except for the one-time interactive login described below.
+
 Do the first collector and scheduler logins separately
 (`python -m src.workers.collector` and `python -m src.main`) before using
 this entrypoint as a background service, because the interactive Telethon
@@ -220,8 +230,16 @@ At startup, `src.main` never resends posts that already have an
 `approval_requests` row. That row is the idempotency boundary for approval
 previews: if an approval message was previously delivered, deleted, or later
 marked inactive because Telegram could not edit it, restart still does not
-create a duplicate preview. Missing approval-message refs are logged for
-manual inspection instead of being resent automatically.
+create a duplicate preview. Missing approval-message refs remain untouched
+and are never recreated automatically.
+
+Recent inactive approval references are repaired only after polling and the
+queue worker have started. This background pass edits at most 500 references
+from the last 24 hours with a short throttle and never sends a new approval.
+SQLite migration 12 marks pre-migration preview references as `unknown`;
+the notifier then detects whether Telegram expects message text or a media
+caption, retries the alternate edit shape once, preserves `reply_markup`,
+and stores the corrected type for future refreshes.
 
 Important: Bot API cannot create native scheduled channel messages and is
 not reliable for preserving premium custom emoji in destination posts. The
@@ -543,6 +561,20 @@ the Telethon session file exists.
     reference active and retry the queue item. Only permanent missing-message
     or blocked-user errors deactivate it. Startup repairs recent inactive
     references by editing existing messages; it never resends the post.
+  - `Correcting legacy approval preview kind ...` — a pre-migration message
+    was recorded as text although Telegram stores its editable body as a
+    media caption (or the reverse). The bot retries the correct edit method
+    once and persists the detected type; this is expected during the first
+    startup after migration 12.
+  - `Startup refused: Another instance already owns runtime role ...` — an
+    existing Windows/Ubuntu process already owns the bot or collector lease.
+    Leave that process running or stop it cleanly before starting this copy.
+    After first deploying lease support, stop every older build once because
+    old builds do not participate in lease coordination.
+  - `Runtime stopped after lease loss ...` — MongoDB ownership could not be
+    renewed safely or another owner replaced the lease. The component stops
+    to prevent duplicate Telegram polling; restore MongoDB connectivity and
+    start one instance again.
   - `Source race resolved using stored winner ...` — live/backfill or another
     collector process reached the same source message concurrently. Mongo's
     unique identity selected one winner without creating duplicate approval.

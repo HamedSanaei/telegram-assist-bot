@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from src.run_all import supervise
-from src.shared.errors import ConfigurationError
+from src.shared.errors import ApplicationAlreadyRunningError, ConfigurationError
 
 
 class TestSupervise:
@@ -22,6 +22,19 @@ class TestSupervise:
             raise ConfigurationError("api_id missing")
 
         await supervise("collector", broken_component, restart_delay_seconds=0.001)
+        assert calls == 1
+
+    async def test_existing_instance_error_is_not_restarted(self) -> None:
+        """A duplicate component must fail once instead of entering restart loops."""
+        calls = 0
+
+        async def duplicate_component() -> None:
+            nonlocal calls
+            calls += 1
+            raise ApplicationAlreadyRunningError("lease held")
+
+        await supervise("main-app", duplicate_component, restart_delay_seconds=0.001)
+
         assert calls == 1
 
     async def test_crashing_component_is_restarted(self) -> None:

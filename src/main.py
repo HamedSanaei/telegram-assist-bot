@@ -22,12 +22,14 @@ from src.application.cleanup_service import CleanupService
 from src.application.management_service import ManagementService
 from src.application.price_service import UsdPriceService
 from src.application.quality_score_service import QualityScoreService
+from src.application.runtime_lease_service import RuntimeLeaseService
 from src.application.vpn_test_service import VpnTestService
 from src.composition import (
     create_ai_service,
     create_mongo,
     create_price_source,
     create_repositories,
+    create_runtime_lease_store,
     create_sqlite,
     sync_config_to_sqlite,
 )
@@ -45,11 +47,17 @@ from src.presentation.approval_bot.panel import create_panel_router
 from src.presentation.approval_bot.propagation import refresh_all_approval_keyboards
 from src.presentation.main_bot.handlers import create_main_router
 from src.shared.config import (
+    AppConfig,
     load_configuration,
     log_startup_summary,
     validate_main_app_config,
 )
-from src.shared.errors import ApprovalStateError, TelegramPublishError
+from src.shared.errors import (
+    ApplicationAlreadyRunningError,
+    ApprovalStateError,
+    RuntimeLeaseLostError,
+    TelegramPublishError,
+)
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers.queue_worker import QueueWorker
 from src.workers.recurring_forward import RecurringForwardWorker
@@ -80,14 +88,29 @@ def _prompt_scheduler_phone() -> str:
         print("telegram.scheduler_phone cannot be empty for first scheduler login.")
 
 
-async def run(configure_logging: bool = True) -> None:
+async def run(
+    configure_logging: bool = True,
+    runtime_lease: RuntimeLeaseService | None = None,
+    config: AppConfig | None = None,
+) -> None:
     """
-    Build the dependency graph and run all main-process services.
+    Configure and run all main-process services under a runtime lease.
+
+    Args:
+        configure_logging: Whether this standalone entrypoint configures the
+            process-wide logger.
+        runtime_lease: Lease already acquired and heartbeated by
+            :mod:`src.run_all`. When omitted, this entrypoint owns its own
+            bot-polling lease.
+        config: Optional configuration preloaded by :mod:`src.run_all`.
 
     Raises:
         ConfigurationError: When required configuration is missing.
+        ApplicationAlreadyRunningError: Another process owns the same bot
+            polling identity.
+        RuntimeLeaseLostError: Lease renewal becomes unsafe while running.
     """
-    config = load_configuration()
+    config = config or load_configuration()
     if configure_logging:
         setup_logging(
             config.logging.level,
@@ -97,6 +120,37 @@ async def run(configure_logging: bool = True) -> None:
         )
     log_startup_summary(config)
     validate_main_app_config(config)
+
+    if runtime_lease is not None:
+        if not runtime_lease.is_acquired:
+            raise RuntimeError("Externally managed bot-polling lease is not acquired")
+        await _run_application(config)
+        return
+
+    lease_client, lease_repository = create_runtime_lease_store(config)
+    owned_lease = RuntimeLeaseService(
+        lease_repository,
+        "bot-polling",
+        (
+            config.telegram.bot_token,
+            config.telegram.approval_bot_token,
+        ),
+    )
+    try:
+        await owned_lease.acquire()
+        await owned_lease.run_with_heartbeat(_run_application(config))
+    finally:
+        await owned_lease.release()
+        lease_client.close()
+
+
+async def _run_application(config: AppConfig) -> None:
+    """
+    Build the dependency graph and run the main process after lease acquisition.
+
+    Args:
+        config: Validated application configuration.
+    """
 
     db = await create_sqlite(config)
     await sync_config_to_sqlite(config, db)
@@ -285,9 +339,16 @@ async def run(configure_logging: bool = True) -> None:
         create_main_router(config, repos["admins"], repos["channels"])
     )
 
+    async def repair_recent_previews_in_background() -> None:
+        """Repair existing approval keyboards without delaying bot startup."""
+        try:
+            await approval.repair_recent_approval_previews(delay_seconds=0.15)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Background approval preview repair failed")
+
     scheduler.start()
-    await approval.repair_orphaned_approval_requests()
-    await approval.repair_recent_approval_previews()
     logger.info("Main application started")
     try:
         await asyncio.gather(
@@ -296,6 +357,7 @@ async def run(configure_logging: bool = True) -> None:
             worker.run(),
             config_sync.run(),
             recurring_forwards.run(),
+            repair_recent_previews_in_background(),
         )
     finally:
         worker.stop()
@@ -312,7 +374,12 @@ async def run(configure_logging: bool = True) -> None:
 
 def main() -> None:
     """Synchronous entrypoint for ``python -m src.main``."""
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except ApplicationAlreadyRunningError as exc:
+        logger.error("Startup refused: %s", exc)
+    except RuntimeLeaseLostError as exc:
+        logger.error("Runtime stopped after lease loss: %s", exc)
 
 
 if __name__ == "__main__":

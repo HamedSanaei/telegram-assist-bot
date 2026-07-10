@@ -14,6 +14,9 @@ from src.domain.entities import AdminUser, DestinationChannel
 from src.domain.enums import ChannelKind
 from src.infrastructure.ai.openai_compatible import OpenAiCompatibleProvider
 from src.infrastructure.db.mongo.post_repository import MongoPostRepository
+from src.infrastructure.db.mongo.runtime_lease_repository import (
+    MongoRuntimeLeaseRepository,
+)
 from src.infrastructure.db.sqlite.connection import Database
 from src.infrastructure.db.sqlite.migrations import apply_migrations
 from src.infrastructure.price.http_price_source import HttpJsonPriceSource
@@ -72,6 +75,26 @@ def create_mongo(config: AppConfig) -> tuple[AsyncIOMotorClient, MongoPostReposi
     client = AsyncIOMotorClient(config.database.mongodb_connection_string)
     repo = MongoPostRepository(client[config.database.mongodb_database])
     return client, repo
+
+
+def create_runtime_lease_store(
+    config: AppConfig,
+) -> tuple[AsyncIOMotorClient, MongoRuntimeLeaseRepository]:
+    """
+    Create an independent Mongo client and runtime lease repository.
+
+    Args:
+        config: Loaded application configuration.
+
+    Returns:
+        Tuple of Motor client and distributed runtime lease repository. The
+        caller owns and must close the returned client.
+    """
+    client = AsyncIOMotorClient(config.database.mongodb_connection_string)
+    repository = MongoRuntimeLeaseRepository(
+        client[config.database.mongodb_database]
+    )
+    return client, repository
 
 
 def create_ai_service(config: AppConfig) -> AiService:

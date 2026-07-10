@@ -343,31 +343,20 @@ class AiogramApprovalNotifier:
             target_refs = await self._approval_messages.list_active(post.post_id)
         for ref in target_refs:
             try:
-                if ref.preview_kind == "caption":
-                    await self._bot.edit_message_caption(
-                        chat_id=ref.chat_id,
-                        message_id=ref.message_id,
-                        caption=caption_text,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                    )
-                else:
-                    await self._bot.edit_message_text(
-                        chat_id=ref.chat_id,
-                        message_id=ref.message_id,
-                        text=text,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                    )
+                actual_kind = await self._edit_reference(
+                    ref,
+                    post,
+                    text,
+                    caption_text,
+                    keyboard,
+                )
                 updated += 1
+                if ref.id is not None and ref.preview_kind != actual_kind:
+                    await self._approval_messages.set_preview_kind(ref.id, actual_kind)
+                    ref.preview_kind = actual_kind
                 if not ref.active and ref.id is not None:
                     await self._approval_messages.activate(ref.id)
             except Exception as exc:
-                if "message is not modified" in str(exc).lower():
-                    updated += 1
-                    if not ref.active and ref.id is not None:
-                        await self._approval_messages.activate(ref.id)
-                    continue
                 logger.warning(
                     "Approval preview update failed post=%s chat=%s message=%s error=%s",
                     post.post_id,
@@ -388,6 +377,129 @@ class AiogramApprovalNotifier:
             updated=updated,
             retryable_failures=retryable_failures,
             permanent_failures=permanent_failures,
+        )
+
+    async def _edit_reference(
+        self,
+        ref: ApprovalMessageRef,
+        post: Post,
+        text: str,
+        caption_text: str,
+        keyboard: object,
+    ) -> str:
+        """
+        Edit one tracked preview and recover legacy text/caption mismatches.
+
+        Args:
+            ref: Stored approval-message reference.
+            post: Current post used to infer legacy preview type.
+            text: Full text-message preview.
+            caption_text: Caption-sized preview.
+            keyboard: Current callback keyboard.
+
+        Returns:
+            The actual Telegram body type successfully edited.
+
+        Raises:
+            Exception: The final Telegram edit error when neither body type
+                can be edited.
+        """
+        preferred = self._preferred_preview_kind(ref, post, text)
+        try:
+            await self._edit_as(
+                preferred,
+                ref,
+                text,
+                caption_text,
+                keyboard,
+            )
+            return preferred
+        except Exception as exc:
+            if self._is_not_modified_error(exc):
+                return preferred
+            if not self._is_kind_mismatch_error(preferred, exc):
+                raise
+            alternate = "caption" if preferred == "text" else "text"
+            logger.info(
+                "Correcting legacy approval preview kind post=%s chat=%s "
+                "message=%s from=%s to=%s",
+                post.post_id,
+                ref.chat_id,
+                ref.message_id,
+                preferred,
+                alternate,
+            )
+            try:
+                await self._edit_as(
+                    alternate,
+                    ref,
+                    text,
+                    caption_text,
+                    keyboard,
+                )
+            except Exception as alternate_exc:
+                if self._is_not_modified_error(alternate_exc):
+                    return alternate
+                raise
+            return alternate
+
+    async def _edit_as(
+        self,
+        preview_kind: str,
+        ref: ApprovalMessageRef,
+        text: str,
+        caption_text: str,
+        keyboard: object,
+    ) -> None:
+        """Edit one Telegram message using the requested body type."""
+        if preview_kind == "caption":
+            await self._send_with_retry(
+                self._bot.edit_message_caption,
+                chat_id=ref.chat_id,
+                message_id=ref.message_id,
+                caption=caption_text,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            return
+        await self._send_with_retry(
+            self._bot.edit_message_text,
+            chat_id=ref.chat_id,
+            message_id=ref.message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+    @staticmethod
+    def _preferred_preview_kind(
+        ref: ApprovalMessageRef, post: Post, text: str
+    ) -> str:
+        """Return the stored or inferred Telegram preview body type."""
+        if ref.preview_kind in {"text", "caption"}:
+            return ref.preview_kind
+        if _first_existing_media(post) is not None and len(text) <= _CAPTION_LIMIT:
+            return "caption"
+        return "text"
+
+    @staticmethod
+    def _is_not_modified_error(exc: Exception) -> bool:
+        """Return whether Telegram reports that the desired state already exists."""
+        return "message is not modified" in str(exc).lower()
+
+    @staticmethod
+    def _is_kind_mismatch_error(preview_kind: str, exc: Exception) -> bool:
+        """Return whether Telegram rejected an edit because its body type is wrong."""
+        message = str(exc).lower()
+        if preview_kind == "text":
+            return "there is no text in the message to edit" in message
+        return any(
+            marker in message
+            for marker in (
+                "there is no caption in the message to edit",
+                "message has no caption",
+                "message is not a media message",
+            )
         )
 
     async def refresh_post(self, post: Post) -> int:

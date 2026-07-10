@@ -18,11 +18,13 @@ from telethon import TelegramClient, events
 from telethon.utils import get_peer_id
 
 from src.application.collect_post import CollectedMessage, CollectPostUseCase
+from src.application.runtime_lease_service import RuntimeLeaseService
 from src.application.source_metrics_service import SourceMetricsService
 from src.composition import (
     create_ai_service,
     create_mongo,
     create_repositories,
+    create_runtime_lease_store,
     create_sqlite,
     sync_config_to_sqlite,
 )
@@ -36,7 +38,11 @@ from src.shared.config import (
     log_startup_summary,
     validate_collector_config,
 )
-from src.shared.errors import AppError
+from src.shared.errors import (
+    AppError,
+    ApplicationAlreadyRunningError,
+    RuntimeLeaseLostError,
+)
 from src.shared.logging_setup import get_logger, setup_logging
 from src.infrastructure.telegram.telethon_publish import TelethonSourceMetadataRefresher
 from src.workers.config_sync import ConfigSyncWorker
@@ -886,7 +892,11 @@ class Collector:
         return total if found else None
 
 
-async def run(config: AppConfig | None = None, configure_logging: bool = True) -> None:
+async def run(
+    config: AppConfig | None = None,
+    configure_logging: bool = True,
+    runtime_lease: RuntimeLeaseService | None = None,
+) -> None:
     """
     Build dependencies and run the collector until disconnect.
 
@@ -895,6 +905,9 @@ async def run(config: AppConfig | None = None, configure_logging: bool = True) -
         configure_logging: Whether this entrypoint should configure root
             logging. ``src.run_all`` sets this to ``False`` so one process-wide
             run log captures every component.
+        runtime_lease: Lease already acquired and heartbeated by
+            :mod:`src.run_all`. When omitted, this entrypoint owns its own
+            collector lease.
 
     Raises:
         ConfigurationError: When collector configuration is incomplete.
@@ -909,6 +922,37 @@ async def run(config: AppConfig | None = None, configure_logging: bool = True) -
         )
     log_startup_summary(config)
     validate_collector_config(config)
+
+    if runtime_lease is not None:
+        if not runtime_lease.is_acquired:
+            raise RuntimeError("Externally managed collector lease is not acquired")
+        await _run_collector_application(config)
+        return
+
+    lease_client, lease_repository = create_runtime_lease_store(config)
+    owned_lease = RuntimeLeaseService(
+        lease_repository,
+        "collector",
+        (
+            str(config.telegram.api_id),
+            config.telegram.collector_session,
+        ),
+    )
+    try:
+        await owned_lease.acquire()
+        await owned_lease.run_with_heartbeat(_run_collector_application(config))
+    finally:
+        await owned_lease.release()
+        lease_client.close()
+
+
+async def _run_collector_application(config: AppConfig) -> None:
+    """
+    Build and run collector dependencies after lease acquisition.
+
+    Args:
+        config: Validated application configuration.
+    """
 
     db = await create_sqlite(config)
     await sync_config_to_sqlite(config, db)
@@ -1047,7 +1091,12 @@ def _ordered_unique_sources(
 
 def main() -> None:
     """Synchronous entrypoint for ``python -m src.workers.collector``."""
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except ApplicationAlreadyRunningError as exc:
+        logger.error("Collector startup refused: %s", exc)
+    except RuntimeLeaseLostError as exc:
+        logger.error("Collector stopped after lease loss: %s", exc)
 
 
 if __name__ == "__main__":

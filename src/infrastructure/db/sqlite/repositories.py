@@ -715,6 +715,17 @@ class SqliteApprovalMessageRepository:
             (delivery_mode, _utcnow_iso(), post_id, chat_id, message_id),
         )
 
+    async def set_preview_kind(self, message_ref_id: int, preview_kind: str) -> None:
+        """Persist the detected text/caption type for a tracked message."""
+        await self._db.execute(
+            """
+            UPDATE approval_messages
+            SET preview_kind = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (preview_kind, _utcnow_iso(), message_ref_id),
+        )
+
     async def deactivate(self, message_ref_id: int) -> None:
         """Mark one approval message as inactive."""
         await self._db.execute(

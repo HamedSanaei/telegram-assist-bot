@@ -380,6 +380,12 @@ class FakeApprovalMessageRepository:
             ):
                 ref.delivery_mode = delivery_mode
 
+    async def set_preview_kind(self, message_ref_id: int, preview_kind: str) -> None:
+        """Update one ref's detected Telegram body type."""
+        for ref in self.refs:
+            if ref.id == message_ref_id:
+                ref.preview_kind = preview_kind
+
     async def deactivate(self, message_ref_id: int) -> None:
         """Deactivate one ref by id."""
         self.deactivated.add(message_ref_id)

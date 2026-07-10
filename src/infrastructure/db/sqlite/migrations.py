@@ -227,6 +227,18 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        12,
+        """
+        UPDATE approval_messages
+        SET preview_kind = 'unknown'
+        WHERE preview_kind = 'text'
+          AND created_at <= COALESCE(
+              (SELECT applied_at FROM schema_migrations WHERE version = 10),
+              created_at
+          );
+        """,
+    ),
 ]
 
 
@@ -404,6 +416,9 @@ async def _apply_migration(db: Database, version: int) -> None:
         return
     if version == 11:
         await db.executescript(MIGRATIONS[10][1])
+        return
+    if version == 12:
+        await db.executescript(MIGRATIONS[11][1])
         return
     raise ValueError(f"Unknown migration version: {version}")
 

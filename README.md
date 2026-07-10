@@ -46,6 +46,8 @@ price updates twice per day with the change compared to the previous record.
   when approved posts are sent through the Telethon destination user session.
 - USD price publishing twice per day with change vs. the previous price.
 - 14-day retention: MongoDB TTL index plus a daily cleanup job.
+- Distributed MongoDB runtime leases prevent duplicate bot polling and
+  collector sessions across Windows, Ubuntu, and repeated local starts.
 
 ## Architecture
 

@@ -95,6 +95,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `source_metrics_service.py` — collector-side delayed metrics refresh using
   the source-reading Telethon session; it hands refreshed or stored metrics
   to the main quality queue.
+- `runtime_lease_service.py` — cross-host runtime ownership for the
+  `bot-polling` and `collector` roles. Lease identities are one-way hashes of
+  Telegram configuration values; a heartbeat stops the guarded component if
+  ownership or Mongo connectivity becomes unsafe.
 - `quality_score_service.py` — idempotent background advisory scoring stage.
   It asks AI for a 0-to-100 score and the approval service edits existing
   previews with their current keyboards, without gating or resending them.
@@ -133,6 +137,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
   identity index on `source_chat_id + source_message_id + grouped_id`.
   `insert_if_absent` converts cross-process identity races into a benign
   stored-winner result.
+- `db/mongo/runtime_lease_repository.py` — atomic Mongo-backed runtime lease
+  acquisition, owner-scoped heartbeat/release, and TTL cleanup of expired
+  leases. It prevents Windows, Ubuntu, and standalone entrypoints from
+  polling the same bots or collecting with the same session concurrently.
 - `ai/openai_compatible.py` — shared OpenAI-compatible chat-completions
   client with strict JSON prompts for combined analysis (classification,
   duplicate, advertisement), classification, duplicate checks, and
@@ -183,7 +191,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   inline keyboard, obeys Telegram retry-after responses, and retries video
   previews as documents when Bot API rejects `send_video`. Score/VPN refresh
   edits always include the current inline keyboard; transient failures retry
-  without deactivating the tracked message.
+  without deactivating the tracked message. Legacy references use
+  `preview_kind=unknown`; the notifier infers text/caption, falls back once
+  on Telegram body-type mismatch, and persists the corrected type.
 - `approval_bot/propagation.py` — best-effort keyboard refresh helpers used
   after publish/schedule callbacks and runtime config reloads. Telegram's
   harmless `message is not modified` response is treated as a successful
@@ -258,6 +268,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
   `src.main.run` and the collector concurrently in one event loop, each
   under `supervise()` which restarts a crashed component after a delay and
   permanently stops (only) a component whose configuration is invalid.
+  Before either component starts, it atomically acquires both distributed
+  runtime leases; a second instance exits without polling or backfill.
 - `iran_vpn_worker.py` — FastAPI app on the Iran server. `POST /api/test`
   (bearer token) receives `{"raw": "<vmess|vless URI>"}` and returns
   `{"working", "latency_ms", "error"}`. `GET /api/health` is a liveness probe.
@@ -276,6 +288,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   metadata, source identity, AI results, duplicate/skipped state, source
   metrics, quality-score status, ingestion mode, VPN fingerprints/configs, `collected_at`,
   `expires_at` (TTL index deletes after 14 days).
+- **MongoDB** (`runtime_leases` collection): short-lived ownership records
+  for bot polling and collector roles. No Telegram token or API hash is
+  stored; only hashed lease ids and operational owner metadata are persisted.
 
 ## Configuration
 
@@ -416,6 +431,14 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-10 — Added Mongo-backed distributed runtime leases for bot polling
+and collector ownership. Startup now refuses a second instance before
+polling/backfill, heartbeats leases every 15 seconds, and stops safely after
+lease loss. Approval preview repair now runs after application startup in the
+background, migrates legacy preview references to `unknown`, detects
+text/caption shape, preserves callback keyboards, and never resends an old
+approval.
 
 2026-07-10 — Added the approval-bot `/panel`, atomic config persistence,
 daily recurring source-post campaigns in Telegram's native schedule,

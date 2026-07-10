@@ -314,6 +314,8 @@ class ApprovalMessageRef:
         chat_id: Chat id where the approval message was sent.
         message_id: Telegram message id that owns the inline keyboard.
         delivery_mode: Current per-message delivery mode (``"s"`` or ``"i"``).
+        preview_kind: Telegram body type: ``"text"``, ``"caption"``, or
+            ``"unknown"`` for legacy rows that require one-time detection.
         active: Whether the message can still be edited.
         id: Optional SQLite row id.
     """

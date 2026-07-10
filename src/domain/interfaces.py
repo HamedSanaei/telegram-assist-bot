@@ -498,6 +498,10 @@ class ApprovalMessageRepository(Protocol):
         """Persist a per-message delivery mode change."""
         ...
 
+    async def set_preview_kind(self, message_ref_id: int, preview_kind: str) -> None:
+        """Persist the detected Telegram body type for one tracked message."""
+        ...
+
     async def deactivate(self, message_ref_id: int) -> None:
         """Mark an approval message as inactive after edit failure."""
         ...
@@ -518,6 +522,35 @@ class ApprovalMessageRepository(Protocol):
 
     async def deactivate_admins_except(self, admin_user_ids: set[int]) -> int:
         """Deactivate approval messages belonging to removed admins."""
+        ...
+
+
+class RuntimeLeaseRepository(Protocol):
+    """Persistence port for distributed runtime component ownership."""
+
+    async def ensure_indexes(self) -> None:
+        """Create indexes required by the runtime lease collection."""
+        ...
+
+    async def try_acquire(
+        self,
+        lease_id: str,
+        owner_id: str,
+        now: datetime,
+        expires_at: datetime,
+        metadata: dict[str, object],
+    ) -> bool:
+        """Atomically acquire an absent, expired, or already-owned lease."""
+        ...
+
+    async def renew(
+        self, lease_id: str, owner_id: str, expires_at: datetime
+    ) -> bool:
+        """Extend a lease only when it is still owned by ``owner_id``."""
+        ...
+
+    async def release(self, lease_id: str, owner_id: str) -> None:
+        """Release a lease only when it is still owned by ``owner_id``."""
         ...
 
 
