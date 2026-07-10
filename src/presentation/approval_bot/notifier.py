@@ -13,8 +13,12 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import FSInputFile
 
 from src.domain.entities import ApprovalMessageRef, DestinationChannel, Post
-from src.domain.enums import MediaKind, PostCategory
-from src.domain.interfaces import AdminRepository, ChannelRepository
+from src.domain.enums import MediaKind, PostCategory, QualityScoreStatus
+from src.domain.interfaces import (
+    AdminRepository,
+    ApprovalMessageRepository,
+    ChannelRepository,
+)
 from src.presentation.approval_bot.keyboards import build_channel_keyboard
 from src.shared.errors import TelegramPublishError
 from src.shared.logging_setup import get_logger
@@ -40,6 +44,7 @@ def build_preview_text(
     post: Post,
     source_label: str | None = None,
     timezone_name: str = _DEFAULT_TIMEZONE,
+    body_limit: int = _PREVIEW_TEXT_LIMIT,
 ) -> str:
     """
     Build the Persian preview message shown to admins for approval.
@@ -68,13 +73,23 @@ def build_preview_text(
             "⭐ امتیاز پیشنهادی: "
             f"{post.quality_score.score:.0f}/100 — {post.quality_score.reason}"
         )
+    elif post.quality_score_status == QualityScoreStatus.PENDING:
+        header_lines.append("⭐ امتیاز: در انتظار آمار ۲۰ دقیقه‌ای")
+    elif post.quality_score_status == QualityScoreStatus.UNAVAILABLE:
+        header_lines.append("⭐ امتیاز: در دسترس نیست")
     if post.media:
         header_lines.append(f"📎 دارای {len(post.media)} پیوست رسانه‌ای")
     if post.vpn_configs:
         working = sum(1 for c in post.vpn_configs if c.test_status.value == "working")
-        header_lines.append(f"🔐 کانفیگ‌ها: {len(post.vpn_configs)} (سالم از ایران: {working})")
+        unsupported = sum(
+            1 for c in post.vpn_configs if c.test_status.value == "unsupported"
+        )
+        suffix = f"، تست پشتیبانی‌نشده: {unsupported}" if unsupported else ""
+        header_lines.append(
+            f"🔐 کانفیگ‌ها: {len(post.vpn_configs)} (سالم از ایران: {working}{suffix})"
+        )
     header = "\n".join(f"<i>{escape(line)}</i>" for line in header_lines)
-    body = escape(post.text[:_PREVIEW_TEXT_LIMIT] if post.text else "(بدون متن)")
+    body = escape(post.text[:body_limit] if post.text else "(بدون متن)")
     return f"{header}\n\n{body}"
 
 
@@ -116,6 +131,7 @@ class AiogramApprovalNotifier:
         bot: Bot,
         admins: AdminRepository,
         channels: ChannelRepository | None = None,
+        approval_messages: ApprovalMessageRepository | None = None,
         timezone_name: str = _DEFAULT_TIMEZONE,
     ) -> None:
         """
@@ -124,11 +140,14 @@ class AiogramApprovalNotifier:
             admins: Admin repository providing recipient user ids.
             channels: Optional channel repository used to display source
                 channel names instead of raw numeric chat ids.
+            approval_messages: Optional message-reference store used to edit
+                already delivered previews after background scoring.
             timezone_name: IANA timezone used for source publish time display.
         """
         self._bot = bot
         self._admins = admins
         self._channels = channels
+        self._approval_messages = approval_messages
         self._timezone_name = timezone_name
 
     async def send_approval_request(
@@ -155,19 +174,28 @@ class AiogramApprovalNotifier:
             await self._source_label(post),
             timezone_name=self._timezone_name,
         )
+        caption_text = build_preview_text(
+            post,
+            await self._source_label(post),
+            timezone_name=self._timezone_name,
+            body_limit=500,
+        )
         keyboard = build_channel_keyboard(post.post_id, channels, published_chat_ids=set())
         success_count = 0
         failure_count = 0
         delivered: list[ApprovalMessageRef] = []
         for admin_id in await self._admins.list_user_ids():
             try:
-                message_id = await self._send_preview(admin_id, post, text, keyboard)
+                message_id, preview_kind = await self._send_preview(
+                    admin_id, post, text, keyboard
+                )
                 delivered.append(
                     ApprovalMessageRef(
                         post_id=post.post_id,
                         admin_user_id=admin_id,
                         chat_id=admin_id,
                         message_id=message_id,
+                        preview_kind=preview_kind,
                     )
                 )
                 success_count += 1
@@ -191,7 +219,7 @@ class AiogramApprovalNotifier:
 
     async def _send_preview(
         self, admin_id: int, post: Post, text: str, keyboard: object
-    ) -> int:
+    ) -> tuple[int, str]:
         """
         Send the approval preview, including the first media file when present.
 
@@ -213,7 +241,7 @@ class AiogramApprovalNotifier:
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
-            return self._message_id(sent)
+            return self._message_id(sent), "text"
 
         media_kind, path = media
         input_file = FSInputFile(str(path))
@@ -229,7 +257,7 @@ class AiogramApprovalNotifier:
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
-            return self._message_id(sent)
+            return self._message_id(sent), "caption"
 
         await self._send_media_with_fallback(
             sender=sender,
@@ -245,7 +273,59 @@ class AiogramApprovalNotifier:
             reply_markup=keyboard,
             parse_mode="HTML",
         )
-        return self._message_id(sent)
+        return self._message_id(sent), "text"
+
+    async def refresh_post(self, post: Post) -> int:
+        """
+        Edit all active approval preview headers after background enrichment.
+
+        Args:
+            post: Updated MongoDB post.
+
+        Returns:
+            Number of previews updated or already current.
+        """
+        if self._approval_messages is None:
+            return 0
+        text = build_preview_text(
+            post,
+            await self._source_label(post),
+            timezone_name=self._timezone_name,
+        )
+        updated = 0
+        for ref in await self._approval_messages.list_active(post.post_id):
+            try:
+                if ref.preview_kind == "caption":
+                    await self._bot.edit_message_caption(
+                        chat_id=ref.chat_id,
+                        message_id=ref.message_id,
+                        caption=caption_text,
+                        parse_mode="HTML",
+                    )
+                else:
+                    await self._bot.edit_message_text(
+                        chat_id=ref.chat_id,
+                        message_id=ref.message_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
+                updated += 1
+            except Exception as exc:
+                if "message is not modified" in str(exc).lower():
+                    updated += 1
+                    continue
+                logger.warning(
+                    "Approval preview update failed post=%s chat=%s message=%s error=%s",
+                    post.post_id,
+                    ref.chat_id,
+                    ref.message_id,
+                    exc,
+                )
+                if ref.id is not None:
+                    await self._approval_messages.deactivate(ref.id)
+        if updated:
+            logger.info("Approval previews updated post=%s count=%d", post.post_id, updated)
+        return updated
 
     @staticmethod
     def _message_id(message: object) -> int:
@@ -311,6 +391,8 @@ class AiogramApprovalNotifier:
 
     async def _source_label(self, post: Post) -> str | None:
         """Return a readable source channel label for the preview."""
+        if post.source_label.strip():
+            return post.source_label.strip()
         if self._channels is None:
             return None
         return await self._channels.get_source_label(post.source_chat_id)

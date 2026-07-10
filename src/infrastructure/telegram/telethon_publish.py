@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Awaitable, Callable, TypeVar
 
 from telethon import TelegramClient, functions, types
@@ -279,6 +280,177 @@ class TelethonDestinationPublisher:
                 "delete_scheduled_message failed "
                 f"chat={chat_id} message={message_id}: {exc}"
             ) from exc
+
+    async def schedule_from_url(
+        self,
+        source_post_url: str,
+        destination_chat_id: int,
+        show_forward_header: bool,
+        scheduled_at: datetime,
+    ) -> list[int]:
+        """
+        Schedule a source Telegram post by URL, preserving albums when possible.
+
+        Args:
+            source_post_url: Public ``t.me/name/id`` or private ``t.me/c/id/id`` URL.
+            destination_chat_id: Destination channel id.
+            show_forward_header: Use Telegram forwarding when true; copy when false.
+            scheduled_at: UTC native Telegram schedule time.
+
+        Returns:
+            All Telegram message ids created for the occurrence.
+
+        Raises:
+            TelegramPublishError: When the URL cannot be resolved or copied.
+        """
+        try:
+            source_ref, message_id = self._parse_post_url(source_post_url)
+            scheduled_at = self._as_utc(scheduled_at) or datetime.now(timezone.utc)
+
+            async def operation() -> object:
+                source = await self._client.get_entity(source_ref)
+                destination = await self._client.get_entity(destination_chat_id)
+                primary = await self._client.get_messages(source, ids=message_id)
+                if primary is None:
+                    raise TelegramPublishError(
+                        f"Source post not found url={source_post_url}"
+                    )
+                messages = await self._source_album(source, primary)
+                if show_forward_header:
+                    return await self._client.forward_messages(
+                        destination,
+                        messages,
+                        from_peer=source,
+                        schedule=scheduled_at,
+                    )
+                return await self._copy_source_messages(
+                    destination, messages, scheduled_at
+                )
+
+            result = await _run_with_reconnect(
+                self._client,
+                operation,
+                f"recurring_forward url={source_post_url} chat={destination_chat_id}",
+            )
+            values = result if isinstance(result, (list, tuple)) else [result]
+            ids = [int(getattr(value, "id", 0) or 0) for value in values]
+            return [message_id for message_id in ids if message_id]
+        except TelegramPublishError:
+            raise
+        except Exception as exc:
+            raise TelegramPublishError(
+                "Recurring forward failed "
+                f"url={source_post_url} chat={destination_chat_id}: {exc}"
+            ) from exc
+
+    async def delete_scheduled_messages(
+        self, destination_chat_id: int, message_ids: list[int]
+    ) -> None:
+        """Delete all Telegram scheduled messages belonging to an occurrence."""
+        if not message_ids:
+            return
+        try:
+            async def operation() -> None:
+                entity = await self._client.get_entity(destination_chat_id)
+                await self._client(
+                    functions.messages.DeleteScheduledMessagesRequest(
+                        peer=entity,
+                        id=message_ids,
+                    )
+                )
+
+            await _run_with_reconnect(
+                self._client,
+                operation,
+                f"delete_recurring chat={destination_chat_id} messages={len(message_ids)}",
+            )
+        except Exception as exc:
+            raise TelegramPublishError(
+                f"Recurring schedule deletion failed chat={destination_chat_id}: {exc}"
+            ) from exc
+
+    async def _source_album(self, source: object, primary: object) -> list[object]:
+        """Return the complete source album or a one-message list."""
+        grouped_id = getattr(primary, "grouped_id", None)
+        if grouped_id is None:
+            return [primary]
+        primary_id = int(getattr(primary, "id", 0) or 0)
+        nearby = await self._client.get_messages(
+            source,
+            limit=30,
+            min_id=max(0, primary_id - 20),
+            max_id=primary_id + 20,
+        )
+        album = [
+            message
+            for message in nearby
+            if getattr(message, "grouped_id", None) == grouped_id
+        ]
+        return sorted(album or [primary], key=lambda message: int(getattr(message, "id", 0)))
+
+    async def _copy_source_messages(
+        self, destination: object, messages: list[object], scheduled_at: datetime
+    ) -> object:
+        """Copy source messages without Telegram's forwarded-from header."""
+        if len(messages) > 1 and all(getattr(message, "media", None) for message in messages):
+            captions = [str(getattr(message, "raw_text", "") or "") for message in messages]
+            album_entities = next(
+                (
+                    list(getattr(message, "entities", None) or [])
+                    for message in messages
+                    if getattr(message, "entities", None)
+                ),
+                [],
+            )
+            kwargs: dict[str, object] = {"schedule": scheduled_at}
+            if album_entities:
+                kwargs["formatting_entities"] = album_entities
+            return await self._client.send_file(
+                destination,
+                [getattr(message, "media") for message in messages],
+                caption=captions,
+                **kwargs,
+            )
+        sent: list[object] = []
+        for message in messages:
+            text = str(getattr(message, "raw_text", "") or "")
+            entities = list(getattr(message, "entities", None) or [])
+            media = getattr(message, "media", None)
+            if media is not None:
+                kwargs: dict[str, object] = {"schedule": scheduled_at}
+                if entities and text:
+                    kwargs["formatting_entities"] = entities
+                sent.append(
+                    await self._client.send_file(
+                        destination,
+                        media,
+                        caption=text or None,
+                        **kwargs,
+                    )
+                )
+            elif text:
+                kwargs = {"schedule": scheduled_at}
+                if entities:
+                    kwargs["formatting_entities"] = entities
+                sent.append(await self._client.send_message(destination, text, **kwargs))
+        if not sent:
+            raise TelegramPublishError("Source post has no copyable content")
+        return sent
+
+    @staticmethod
+    def _parse_post_url(source_post_url: str) -> tuple[str | int, int]:
+        """Parse public and private Telegram post links."""
+        match = re.fullmatch(
+            r"https?://t\.me/(?:(c)/(\d+)|([A-Za-z0-9_]+))/(\d+)(?:\?.*)?",
+            source_post_url.strip(),
+        )
+        if match is None:
+            raise TelegramPublishError(f"Unsupported Telegram post URL: {source_post_url}")
+        is_private, private_id, username, message_id = match.groups()
+        source: str | int = (
+            int(f"-100{private_id}") if is_private else str(username)
+        )
+        return source, int(message_id)
 
     async def _send_post(
         self, entity: object, post: Post, schedule: datetime | None

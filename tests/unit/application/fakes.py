@@ -19,6 +19,7 @@ from src.domain.enums import PostCategory, QueueItemType, QueueStatus
 from src.domain.interfaces import (
     AiClassificationResult,
     AiPostAnalysisResult,
+    AiTextCleanupResult,
     DuplicateCheckResult,
     QualityScoreResult,
     VpnTestResult,
@@ -49,6 +50,7 @@ class FakeAiProvider:
         self.classify_calls = 0
         self.duplicate_calls = 0
         self.score_calls = 0
+        self.cleanup_calls = 0
         self.last_existing_texts: list[str] = []
 
     async def classify_post(self, text: str) -> AiClassificationResult:
@@ -99,6 +101,13 @@ class FakeAiProvider:
             raw_metrics=dict(metrics),
         )
 
+    async def clean_vpn_post(self, text: str) -> AiTextCleanupResult:
+        """Return protected text unchanged for discovery tests."""
+        self.cleanup_calls += 1
+        if self._fail:
+            raise AiProviderError(self._fail_message or f"{self.name} is down")
+        return AiTextCleanupResult(text=text, provider=self.name)
+
 
 class FakePostRepository:
     """Dict-backed post repository."""
@@ -140,6 +149,15 @@ class FakePostRepository:
             if p.text and not p.is_duplicate and not p.skipped_reason
         ]
         return texts[-limit:]
+
+    async def find_seen_vpn_fingerprints(self, fingerprints: list[str]) -> set[str]:
+        """Return requested fingerprints already stored by fake posts."""
+        known = {
+            fingerprint
+            for post in self.posts.values()
+            for fingerprint in post.vpn_fingerprints
+        }
+        return known.intersection(fingerprints)
 
     async def update_vpn_configs(self, post_id: str, configs: list[VpnConfig]) -> None:
         self.posts[post_id].vpn_configs = configs
@@ -560,6 +578,14 @@ class FakePublishLogRepository:
 
     async def last_published_at(self, channel_chat_id: int) -> datetime | None:
         return self.published_times.get(channel_chat_id)
+
+    async def list_history(self, post_id: str) -> list[PublishLogEntry]:
+        """Return all fake publish rows for a post."""
+        return [
+            record
+            for (pid, _), record in self.records.items()
+            if pid == post_id
+        ]
 
 
 class FakePriceHistoryRepository:

@@ -8,7 +8,13 @@ from datetime import datetime, timedelta, timezone
 from src.application.channel_mention_rewriter import (
     rewrite_source_channel_mentions_with_entities,
 )
-from src.domain.entities import ApprovalMessageRef, DestinationChannel, Post
+from src.domain.entities import (
+    ApprovalMessageRef,
+    DestinationChannel,
+    Post,
+    PublishLogEntry,
+)
+from src.domain.enums import ChannelKind, IngestionMode
 from src.domain.interfaces import (
     AdminRepository,
     ApprovalMessageRepository,
@@ -128,6 +134,12 @@ class ApprovalService:
                 )
                 return
         channels = await self._channels.list_destinations()
+        if post.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY:
+            channels = [channel for channel in channels if channel.kind == ChannelKind.VPN]
+            if not channels:
+                raise ApprovalStateError(
+                    "No enabled VPN destination exists for dialog discovery post"
+                )
         try:
             message_refs = await self._notifier.send_approval_request(post, channels)
         except Exception as exc:
@@ -329,6 +341,10 @@ class ApprovalService:
         """Return chat ids with an active native scheduled publish."""
         return await self._publish_log.scheduled_channels(post_id)
 
+    async def delivery_history(self, post_id: str) -> list[PublishLogEntry]:
+        """Return persisted delivery history for one approval post."""
+        return await self._publish_log.list_history(post_id)
+
     async def schedule_publish(
         self, post_id: str, chat_id: int, admin_user_id: int
     ) -> datetime:
@@ -513,9 +529,16 @@ class ApprovalService:
             identifiers,
             channel.public_id,
         )
+        rewritten_text = rewritten.text
+        if (
+            post.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY
+            and channel.public_id.strip().lower() not in rewritten_text.lower()
+        ):
+            rewritten_text = f"{rewritten_text.rstrip()}\n\n{channel.public_id.strip()}"
         if rewritten.text == post.text and rewritten.entities == post.text_entities:
-            return post
+            if rewritten_text == post.text:
+                return post
         logger.info(
             "Rewrote source mentions post=%s channel=%s", post.post_id, channel.chat_id
         )
-        return replace(post, text=rewritten.text, text_entities=rewritten.entities)
+        return replace(post, text=rewritten_text, text_entities=rewritten.entities)

@@ -19,17 +19,23 @@ price updates twice per day with the change compared to the previous record.
 - AI classification, duplicate detection, advertisement pruning, and
   0-to-100 quality scoring through the configured Google AI Studio → Groq
   → OpenRouter → DeepSeek chain.
-- Approval waits for quality scoring; fresh posts are scored after they are
-  at least 15 minutes old so views/forwards metadata is more useful.
+- Approval is immediate; 20 minutes after source publication the bot refreshes
+  engagement metrics, calculates the score, and edits the same admin preview.
 - vmess/vless config extraction and connectivity testing on an Iran server
   through a token-protected worker API (xray-core based).
-- Main management bot for admin status/source/destination commands.
+- Main management commands plus an admin-only `/panel` in the approval bot
+  for persistent source, destination, and recurring campaign management.
 - Admin approval bot with text/photo/video previews, readable source labels,
   per-channel immediate/native-scheduled toggle buttons, and ✅ marks after
   successful publishing or scheduling. A second click deletes the published
   message or removes the native scheduled message; duplicate publishing is
   blocked. Restart never resends a post that already entered the approval
   stage, even if old approval-bot message refs are inactive.
+- Daily source-post campaigns are copied or forwarded into Telegram's native
+  channel schedule with restart-safe occurrence tracking.
+- All joined channel/group dialogs are scanned for common free proxy config
+  schemes; configured sources/destinations are excluded and URI-level dedup
+  prevents repeated suggestions.
 - Source-channel `@...` / `t.me/...` mentions are replaced with the selected
   destination channel `public_id`; all other Telegram handles/links are
   removed before publishing.
@@ -48,7 +54,8 @@ workers      -> application -> domain
 infrastructure -> application/domain interfaces
 ```
 
-- **SQLite** — channels, admins, queue, publish log, price history, settings.
+- **SQLite** — channels, admins, queue, publish log, recurring campaign and
+  occurrence state, price history, and settings.
 - **MongoDB** — raw posts, media metadata, AI results, extracted configs
   (TTL-expired after 14 days).
 - **configuration.json** — all secrets and tunables (never committed).

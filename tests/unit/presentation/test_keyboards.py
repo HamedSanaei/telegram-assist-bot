@@ -58,3 +58,16 @@ class TestChannelKeyboard:
         )
         for button in _flat_buttons(markup):
             assert len(button.callback_data.encode("utf-8")) <= 64
+
+    def test_delivery_history_row_is_rendered_above_channels(self) -> None:
+        """Posts with prior delivery state show one prominent history row."""
+        markup = build_channel_keyboard(
+            POST_ID,
+            [NEWS],
+            published_chat_ids={NEWS.chat_id},
+            has_delivery_history=True,
+        )
+
+        assert len(markup.inline_keyboard[0]) == 1
+        assert "قبلاً ارسال" in markup.inline_keyboard[0][0].text
+        assert markup.inline_keyboard[0][0].callback_data == f"apv:history:{POST_ID}"

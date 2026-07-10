@@ -48,6 +48,7 @@ async def refresh_approval_keyboards(
     channels = await approval.list_channels()
     published = await approval.published_channels(post_id)
     scheduled = await approval.scheduled_channels(post_id)
+    history = await approval.delivery_history(post_id)
     refreshed = 0
     for ref in refs:
         immediate = ref.delivery_mode == MODE_IMMEDIATE
@@ -61,6 +62,7 @@ async def refresh_approval_keyboards(
                     published,
                     scheduled,
                     immediate=immediate,
+                    has_delivery_history=bool(history),
                 ),
             )
             refreshed += 1

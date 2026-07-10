@@ -19,7 +19,14 @@ from src.domain.entities import (
     TextEntity,
     VpnConfig,
 )
-from src.domain.enums import MediaKind, PostCategory, VpnProtocol, VpnTestStatus
+from src.domain.enums import (
+    IngestionMode,
+    MediaKind,
+    PostCategory,
+    QualityScoreStatus,
+    VpnProtocol,
+    VpnTestStatus,
+)
 from src.shared.errors import RepositoryError
 
 _COLLECTION = "posts"
@@ -169,6 +176,7 @@ class MongoPostRepository:
         """
         await self._collection.create_index("expires_at", expireAfterSeconds=0)
         await self._collection.create_index("content_hash")
+        await self._collection.create_index("vpn_fingerprints")
         await self._collection.create_index([("collected_at", -1)])
         await self._collection.create_index(
             [
@@ -186,10 +194,14 @@ class MongoPostRepository:
             "_id": post.post_id,
             "source_chat_id": post.source_chat_id,
             "source_message_id": post.source_message_id,
+            "source_label": post.source_label,
             "grouped_id": post.grouped_id,
             "text": post.text,
             "text_entities": [_entity_to_doc(entity) for entity in post.text_entities],
             "content_hash": post.content_hash,
+            "ingestion_mode": post.ingestion_mode.value,
+            "quality_score_status": post.quality_score_status.value,
+            "vpn_fingerprints": list(post.vpn_fingerprints),
             "media": [
                 {
                     "kind": m.kind.value,
@@ -268,6 +280,20 @@ class MongoPostRepository:
         )
         return [doc["text"] async for doc in cursor]
 
+    async def find_seen_vpn_fingerprints(self, fingerprints: list[str]) -> set[str]:
+        """Return VPN URI fingerprints already stored in any post document."""
+        if not fingerprints:
+            return set()
+        cursor = self._collection.find(
+            {"vpn_fingerprints": {"$in": fingerprints}},
+            {"vpn_fingerprints": 1},
+        )
+        requested = set(fingerprints)
+        seen: set[str] = set()
+        async for doc in cursor:
+            seen.update(requested.intersection(doc.get("vpn_fingerprints", [])))
+        return seen
+
     async def update_vpn_configs(self, post_id: str, configs: list[VpnConfig]) -> None:
         """Persist updated VPN config test results."""
         try:
@@ -290,8 +316,23 @@ class MongoPostRepository:
             post_id=doc["_id"],
             source_chat_id=doc["source_chat_id"],
             source_message_id=doc["source_message_id"],
+            source_label=str(doc.get("source_label", "")),
             text=doc.get("text", ""),
             content_hash=doc.get("content_hash", ""),
+            ingestion_mode=IngestionMode(
+                doc.get("ingestion_mode", IngestionMode.CONFIGURED_SOURCE.value)
+            ),
+            quality_score_status=QualityScoreStatus(
+                doc.get(
+                    "quality_score_status",
+                    (
+                        QualityScoreStatus.SCORED.value
+                        if doc.get("quality_score")
+                        else QualityScoreStatus.PENDING.value
+                    ),
+                )
+            ),
+            vpn_fingerprints=list(doc.get("vpn_fingerprints", [])),
             text_entities=[
                 _doc_to_entity(entity) for entity in doc.get("text_entities", [])
             ],

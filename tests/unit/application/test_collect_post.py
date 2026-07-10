@@ -10,7 +10,13 @@ from pathlib import Path
 from src.application.ai_service import AiService
 from src.application.collect_post import CollectedMessage, CollectPostUseCase
 from src.domain.entities import MediaItem, Post, PostSourceMetrics
-from src.domain.enums import MediaKind, PostCategory, QueueItemType
+from src.domain.enums import (
+    IngestionMode,
+    MediaKind,
+    PostCategory,
+    QualityScoreStatus,
+    QueueItemType,
+)
 from src.domain.services.text_normalizer import content_hash
 from tests.unit.application.fakes import (
     FakeAiProvider,
@@ -47,7 +53,7 @@ def _use_case(
 class TestCollectPost:
     """Tests for :class:`CollectPostUseCase`."""
 
-    async def test_stores_news_post_and_queues_quality_score_first(self) -> None:
+    async def test_stores_news_post_and_queues_approval_before_score_update(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
         use_case = _use_case(posts, queue)
         post = await use_case.handle_new_message(
@@ -56,8 +62,10 @@ class TestCollectPost:
         assert post is not None
         assert post.category == PostCategory.GENERAL_NEWS
         assert posts.posts[post.post_id].text == "خبر مهم امروز"
-        assert len(queue.items) == 1
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+        ]
 
     async def test_expiry_is_fourteen_days(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -71,7 +79,7 @@ class TestCollectPost:
         assert post.expires_at is not None
         assert abs((post.expires_at - expected).total_seconds()) < 60
 
-    async def test_fresh_post_quality_score_waits_until_fifteen_minutes_old(
+    async def test_fresh_post_quality_score_waits_until_twenty_minutes_old(
         self,
     ) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -86,9 +94,9 @@ class TestCollectPost:
             )
         )
 
-        scheduled_at = queue.items[0].scheduled_at
+        scheduled_at = queue.items[1].scheduled_at
         assert scheduled_at is not None
-        assert scheduled_at >= published_at + timedelta(minutes=15)
+        assert scheduled_at >= published_at + timedelta(minutes=20)
 
     async def test_old_backfill_post_quality_score_is_due_immediately(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -105,7 +113,7 @@ class TestCollectPost:
             )
         )
 
-        scheduled_at = queue.items[0].scheduled_at
+        scheduled_at = queue.items[1].scheduled_at
         assert scheduled_at is not None
         assert scheduled_at <= datetime.now(timezone.utc) + timedelta(seconds=2)
 
@@ -205,7 +213,10 @@ class TestCollectPost:
         assert second.duplicate_of == first.post_id
         assert second.skipped_reason == "duplicate"
         assert len(posts.posts) == 2
-        assert [item.type for item in queue.items] == [QueueItemType.QUALITY_SCORE]
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+        ]
 
     async def test_ai_detected_duplicate_is_stored_as_skipped(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -221,7 +232,10 @@ class TestCollectPost:
         assert second.is_duplicate is True
         assert second.skipped_reason == "duplicate"
         assert len(posts.posts) == 2
-        assert [item.type for item in queue.items] == [QueueItemType.QUALITY_SCORE]
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+        ]
 
     async def test_local_fuzzy_duplicate_skips_ai_and_scoring(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -247,7 +261,7 @@ class TestCollectPost:
         assert second.skipped_reason == "duplicate"
         assert second.duplicate_provider == "local_fuzzy"
         assert provider.classify_calls == 1
-        assert len(queue.items) == 1
+        assert len(queue.items) == 2
 
     async def test_ai_receives_only_local_duplicate_candidates(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -307,7 +321,11 @@ class TestCollectPost:
         assert result is not None
         assert result.skipped_reason is None
         assert result.category == PostCategory.VPN_CONFIG
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.VPN_TEST,
+        ]
 
     async def test_vpn_config_post_queues_vpn_test(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -319,7 +337,11 @@ class TestCollectPost:
         )
         assert post is not None
         assert len(post.vpn_configs) == 1
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.VPN_TEST,
+        ]
 
     async def test_config_in_news_text_forces_vpn_config_category(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -332,7 +354,7 @@ class TestCollectPost:
         assert post is not None
         assert post.category == PostCategory.VPN_CONFIG
 
-    async def test_vpn_testing_disabled_still_scores_before_approval(self) -> None:
+    async def test_vpn_testing_disabled_still_approves_before_score_update(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
         use_case = _use_case(
             posts, queue, category=PostCategory.VPN_CONFIG, vpn_testing_enabled=False
@@ -340,7 +362,10 @@ class TestCollectPost:
         await use_case.handle_new_message(
             CollectedMessage(source_chat_id=-100, message_id=11, text=VMESS_URI)
         )
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+        ]
 
     async def test_ai_classification_failure_still_stores_for_manual_approval(
         self,
@@ -358,7 +383,7 @@ class TestCollectPost:
         assert post.category == PostCategory.GENERAL_NEWS
         assert post.ai_provider == "unavailable"
         assert posts.posts[post.post_id].text == "متن خبر"
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert queue.items[0].type == QueueItemType.APPROVAL_REQUEST
 
     async def test_stored_source_without_pipeline_is_requeued(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -381,11 +406,13 @@ class TestCollectPost:
         )
 
         assert result is existing
-        assert len(queue.items) == 1
-        assert queue.items[0].type == QueueItemType.QUALITY_SCORE
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.QUALITY_SCORE_UPDATE,
+        ]
         assert queue.items[0].payload == {"post_id": "stored"}
 
-    async def test_stored_source_with_active_pipeline_is_not_requeued(self) -> None:
+    async def test_stored_source_with_legacy_score_is_repaired_to_approval(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
         existing = Post(
             post_id="stored",
@@ -402,8 +429,11 @@ class TestCollectPost:
             CollectedMessage(source_chat_id=-100, message_id=16, text=existing.text)
         )
 
-        assert result is None
-        assert len(queue.items) == 1
+        assert result is existing
+        assert [item.type for item in queue.items] == [
+            QueueItemType.QUALITY_SCORE,
+            QueueItemType.APPROVAL_REQUEST,
+        ]
 
     async def test_has_seen_source_message_uses_grouped_identity(self) -> None:
         posts, queue = FakePostRepository(), FakeQueueRepository()
@@ -420,3 +450,41 @@ class TestCollectPost:
 
         assert await use_case.has_seen_source_message(-100, 20, 555) is True
         assert await use_case.has_seen_source_message(-100, 20, 556) is False
+
+    async def test_dialog_vpn_discovery_is_immediate_and_not_scored(self) -> None:
+        """Discovery posts enqueue approval immediately and skip quality scoring."""
+        posts, queue = FakePostRepository(), FakeQueueRepository()
+        use_case = _use_case(posts, queue)
+
+        post = await use_case.handle_vpn_discovery_message(
+            CollectedMessage(
+                source_chat_id=-300,
+                message_id=1,
+                source_label="VPN Group",
+                text=f"تبلیغ کانال\n{VMESS_URI}",
+            )
+        )
+
+        assert post is not None
+        assert post.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY
+        assert post.quality_score_status == QualityScoreStatus.NOT_REQUIRED
+        assert [item.type for item in queue.items] == [
+            QueueItemType.APPROVAL_REQUEST,
+            QueueItemType.VPN_TEST,
+        ]
+
+    async def test_dialog_vpn_discovery_deduplicates_config_across_chats(self) -> None:
+        """A repeated URI is stored as skipped and never proposed twice."""
+        posts, queue = FakePostRepository(), FakeQueueRepository()
+        use_case = _use_case(posts, queue)
+        first = await use_case.handle_vpn_discovery_message(
+            CollectedMessage(source_chat_id=-300, message_id=1, text=VMESS_URI)
+        )
+        second = await use_case.handle_vpn_discovery_message(
+            CollectedMessage(source_chat_id=-400, message_id=2, text=VMESS_URI)
+        )
+
+        assert first is not None
+        assert second is not None
+        assert second.skipped_reason == "duplicate_vpn_configs"
+        assert len(queue.items) == 2

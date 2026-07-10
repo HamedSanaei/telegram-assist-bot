@@ -1,4 +1,4 @@
-"""Pure parsing and extraction of vmess/vless configurations.
+"""Pure parsing and extraction of common proxy configuration URIs.
 
 This module uses only the Python standard library so it can live in the
 domain layer. It extracts configuration URIs from arbitrary post text
@@ -17,8 +17,9 @@ from src.domain.entities import VpnConfig
 from src.domain.enums import VpnProtocol
 from src.shared.errors import VpnConfigParseError
 
-_VMESS_RE = re.compile(r"vmess://[A-Za-z0-9+/=_-]+")
-_VLESS_RE = re.compile(r"vless://[^\s'\"<>`]+")
+_CONFIG_RE = re.compile(
+    r"(?i)\b(?:vmess|vless|ssr|ss|trojan|hysteria2|hy2|tuic)://[^\s'\"<>`]+"
+)
 
 
 def parse_vmess(raw: str) -> VpnConfig:
@@ -123,6 +124,128 @@ def parse_vless(raw: str) -> VpnConfig:
     )
 
 
+def _parse_standard_uri(raw: str, protocol: VpnProtocol) -> VpnConfig:
+    """Parse a username/password style proxy URI into the common domain model."""
+    parts = urlsplit(raw)
+    host = parts.hostname or ""
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise VpnConfigParseError(f"{protocol.value} port is invalid") from exc
+    credential = unquote(parts.username or parts.password or "")
+    if not host or port is None or not credential:
+        raise VpnConfigParseError(
+            f"{protocol.value} URI is missing credential, host, or port"
+        )
+    query = {key: values[0] for key, values in parse_qs(parts.query).items() if values}
+    if parts.password:
+        query["password"] = unquote(parts.password)
+    return VpnConfig(
+        protocol=protocol,
+        raw=raw,
+        host=host,
+        port=port,
+        user_id=credential,
+        transport=query.get("type") or query.get("network"),
+        security=query.get("security"),
+        remark=unquote(parts.fragment) if parts.fragment else None,
+        extra=query,
+    )
+
+
+def parse_shadowsocks(raw: str) -> VpnConfig:
+    """Parse SIP002 and legacy ``ss://`` configuration forms."""
+    if not raw.lower().startswith("ss://"):
+        raise VpnConfigParseError("Not an ss URI")
+    body, _, fragment = raw[5:].partition("#")
+    if "@" in body:
+        credentials_raw, endpoint = body.rsplit("@", maxsplit=1)
+        try:
+            credentials = base64.urlsafe_b64decode(
+                credentials_raw + "=" * (-len(credentials_raw) % 4)
+            ).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            credentials = unquote(credentials_raw)
+        decoded = f"{credentials}@{endpoint}"
+    else:
+        try:
+            decoded = base64.urlsafe_b64decode(
+                body + "=" * (-len(body) % 4)
+            ).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise VpnConfigParseError(f"Invalid ss payload: {exc}") from exc
+    match = re.fullmatch(r"([^:]+):(.+)@([^:]+):(\d+)", decoded)
+    if match is None:
+        raise VpnConfigParseError("Invalid ss credential or endpoint")
+    method, password, host, port = match.groups()
+    return VpnConfig(
+        protocol=VpnProtocol.SHADOWSOCKS,
+        raw=raw,
+        host=host,
+        port=int(port),
+        user_id=password,
+        security=method,
+        remark=unquote(fragment) if fragment else None,
+        extra={"method": method, "password": password},
+    )
+
+
+def parse_shadowsocks_r(raw: str) -> VpnConfig:
+    """Parse a best-effort ``ssr://`` configuration payload."""
+    if not raw.lower().startswith("ssr://"):
+        raise VpnConfigParseError("Not an ssr URI")
+    payload = raw[6:].split("#", maxsplit=1)[0]
+    try:
+        decoded = base64.urlsafe_b64decode(
+            payload + "=" * (-len(payload) % 4)
+        ).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as exc:
+        raise VpnConfigParseError(f"Invalid ssr payload: {exc}") from exc
+    main = decoded.split("/?", maxsplit=1)[0]
+    parts = main.split(":")
+    if len(parts) < 6:
+        raise VpnConfigParseError("Invalid ssr payload fields")
+    host, port, protocol_name, method, obfs, password_raw = parts[:6]
+    try:
+        password = base64.urlsafe_b64decode(
+            password_raw + "=" * (-len(password_raw) % 4)
+        ).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        password = password_raw
+    return VpnConfig(
+        protocol=VpnProtocol.SHADOWSOCKS_R,
+        raw=raw,
+        host=host,
+        port=int(port),
+        user_id=password,
+        security=method,
+        extra={"protocol": protocol_name, "method": method, "obfs": obfs},
+    )
+
+
+def parse_proxy_config(raw: str) -> VpnConfig:
+    """Parse one supported proxy URI by its scheme."""
+    scheme = raw.split(":", maxsplit=1)[0].lower()
+    if scheme == "vmess":
+        return parse_vmess(raw)
+    if scheme == "vless":
+        return parse_vless(raw)
+    if scheme == "ss":
+        return parse_shadowsocks(raw)
+    if scheme == "ssr":
+        return parse_shadowsocks_r(raw)
+    protocol_map = {
+        "trojan": VpnProtocol.TROJAN,
+        "hysteria2": VpnProtocol.HYSTERIA2,
+        "hy2": VpnProtocol.HYSTERIA2,
+        "tuic": VpnProtocol.TUIC,
+    }
+    protocol = protocol_map.get(scheme)
+    if protocol is None:
+        raise VpnConfigParseError(f"Unsupported proxy scheme: {scheme}")
+    return _parse_standard_uri(raw, protocol)
+
+
 def extract_vpn_configs(text: str) -> list[VpnConfig]:
     """
     Extract all valid vmess/vless configurations from free-form text.
@@ -140,14 +263,10 @@ def extract_vpn_configs(text: str) -> list[VpnConfig]:
         configs = extract_vpn_configs("کانفیگ جدید:\\nvless://...")
     """
     configs: list[VpnConfig] = []
-    for match in _VMESS_RE.finditer(text):
+    for match in _CONFIG_RE.finditer(text):
+        raw = match.group(0).rstrip(".,،؛!?)]}")
         try:
-            configs.append(parse_vmess(match.group(0)))
-        except VpnConfigParseError:
-            continue
-    for match in _VLESS_RE.finditer(text):
-        try:
-            configs.append(parse_vless(match.group(0)))
+            configs.append(parse_proxy_config(raw))
         except VpnConfigParseError:
             continue
     return configs

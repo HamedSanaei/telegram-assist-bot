@@ -18,11 +18,12 @@ logger = get_logger(__name__)
 
 class ConfigSyncWorker:
     """
-    Watches ``configuration.json`` and mirrors channel/admin lists to SQLite.
+    Watches ``configuration.json`` and mirrors runtime-safe lists to SQLite.
 
-    Only runtime-safe lists are applied during hot reload: source channels,
-    destination channels, and admin user ids. Secrets, API clients, database
-    paths, AI provider chains, and Telegram sessions remain restart-only.
+    Runtime-safe lists include source channels, destination channels, admin
+    user ids, and recurring-forward campaign definitions. Secrets, API
+    clients, database paths, AI provider chains, and Telegram sessions remain
+    restart-only.
 
     Example:
         worker = ConfigSyncWorker(db)

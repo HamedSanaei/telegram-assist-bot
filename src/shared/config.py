@@ -141,12 +141,26 @@ class VpnTestingConfig:
 
 
 @dataclass(frozen=True)
+class RecurringForwardConfig:
+    """One daily recurring Telegram post-forward campaign."""
+
+    id: str
+    source_post_url: str
+    destination_chat_ids: list[int]
+    times: list[str]
+    enabled: bool = True
+    show_forward_header: bool = False
+
+
+@dataclass(frozen=True)
 class SchedulerConfig:
     """Scheduled job times, expressed in the configured timezone."""
 
     usd_price_publish_times: list[str] = field(default_factory=lambda: ["09:00", "21:00"])
     timezone: str = "Asia/Tehran"
     cleanup_time: str = "04:30"
+    recurring_forward_lookahead_hours: int = 24
+    recurring_forwards: list[RecurringForwardConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -291,6 +305,57 @@ def _string_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _parse_recurring_forwards(raw: object) -> list[RecurringForwardConfig]:
+    """Parse and validate recurring-forward campaign configuration."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigurationError("scheduler.recurring_forwards must be an array")
+    campaigns: list[RecurringForwardConfig] = []
+    seen_ids: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ConfigurationError("Each recurring forward must be an object")
+        campaign_id = str(entry.get("id", "")).strip()
+        source_url = str(entry.get("source_post_url", "")).strip()
+        destinations = [int(value) for value in entry.get("destination_chat_ids", [])]
+        times = _string_list(entry.get("times", []))
+        if not campaign_id or campaign_id in seen_ids:
+            raise ConfigurationError("Recurring forward ids must be non-empty and unique")
+        if not source_url.startswith(("https://t.me/", "http://t.me/")):
+            raise ConfigurationError(
+                f"Recurring forward '{campaign_id}' has an invalid source_post_url"
+            )
+        if not destinations or not times:
+            raise ConfigurationError(
+                f"Recurring forward '{campaign_id}' requires destinations and times"
+            )
+        for time_value in times:
+            try:
+                hour_raw, minute_raw = time_value.split(":", maxsplit=1)
+                hour, minute = int(hour_raw), int(minute_raw)
+            except ValueError as exc:
+                raise ConfigurationError(
+                    f"Recurring forward '{campaign_id}' has invalid time '{time_value}'"
+                ) from exc
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ConfigurationError(
+                    f"Recurring forward '{campaign_id}' time out of range: '{time_value}'"
+                )
+        seen_ids.add(campaign_id)
+        campaigns.append(
+            RecurringForwardConfig(
+                id=campaign_id,
+                source_post_url=source_url,
+                destination_chat_ids=list(dict.fromkeys(destinations)),
+                times=list(dict.fromkeys(times)),
+                enabled=bool(entry.get("enabled", True)),
+                show_forward_header=bool(entry.get("show_forward_header", False)),
+            )
+        )
+    return campaigns
+
+
 def load_configuration(path: str | Path | None = None) -> AppConfig:
     """
     Load and parse the application configuration file.
@@ -403,6 +468,12 @@ def load_configuration(path: str | Path | None = None) -> AppConfig:
                 ],
                 timezone=str(sched.get("timezone", "Asia/Tehran")),
                 cleanup_time=str(sched.get("cleanup_time", "04:30")),
+                recurring_forward_lookahead_hours=max(
+                    1, int(sched.get("recurring_forward_lookahead_hours", 24))
+                ),
+                recurring_forwards=_parse_recurring_forwards(
+                    sched.get("recurring_forwards", [])
+                ),
             ),
             usd_price=UsdPriceConfig(
                 provider=str(usd.get("provider", "nobitex")),
@@ -479,8 +550,6 @@ def validate_collector_config(config: AppConfig) -> None:
         config.database.mongodb_connection_string,
         "database.mongodb_connection_string",
     )
-    if not config.telegram.source_channels:
-        raise ConfigurationError("telegram.source_channels must not be empty")
     if config.telegram.collector_daily_backfill_max_messages < 0:
         raise ConfigurationError(
             "telegram.collector_daily_backfill_max_messages must be >= 0"
@@ -551,7 +620,8 @@ def log_startup_summary(config: AppConfig) -> None:
         "  collector: daily_backfill_max_messages=%d source_refresh_seconds=%d timezone=%s\n"
         "  mongodb: host=%s db=%s | sqlite: %s\n"
         "  vpn_testing: enabled=%s worker_url %s\n"
-        "  usd_price: provider=%s publish_times=%s",
+        "  usd_price: provider=%s publish_times=%s\n"
+        "  recurring_forwards: total=%d active=%d lookahead_hours=%d",
         len(config.telegram.source_channels),
         len(config.telegram.destination_channels),
         len(config.telegram.admin_user_ids),
@@ -572,4 +642,7 @@ def log_startup_summary(config: AppConfig) -> None:
         set_or_not(config.vpn_testing.worker_api_url),
         config.usd_price.provider,
         config.scheduler.usd_price_publish_times,
+        len(config.scheduler.recurring_forwards),
+        sum(1 for item in config.scheduler.recurring_forwards if item.enabled),
+        config.scheduler.recurring_forward_lookahead_hours,
     )

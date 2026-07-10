@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from src.application.ai_service import AiService
 from src.application.quality_score_service import QualityScoreService
 from src.domain.entities import Post, PostSourceMetrics
-from src.domain.enums import PostCategory, QueueItemType
+from src.domain.enums import PostCategory, QualityScoreStatus, QueueItemType
 from tests.unit.application.fakes import (
     FakeAiProvider,
     FakeMetadataRefresher,
@@ -64,7 +64,7 @@ class TestQualityScoreService:
         assert next_step == QueueItemType.APPROVAL_REQUEST
         assert posts.posts["p1"].quality_score is not None
 
-    async def test_fallback_score_is_stored_when_ai_fails(self) -> None:
+    async def test_unavailable_status_is_stored_when_ai_fails(self) -> None:
         posts = FakePostRepository()
         await posts.save(
             Post(
@@ -80,8 +80,8 @@ class TestQualityScoreService:
         next_step = await service.score_post("p1")
 
         assert next_step == QueueItemType.APPROVAL_REQUEST
-        assert posts.posts["p1"].quality_score.provider == "unavailable"
-        assert posts.posts["p1"].quality_score.score == 50.0
+        assert posts.posts["p1"].quality_score is None
+        assert posts.posts["p1"].quality_score_status == QualityScoreStatus.UNAVAILABLE
 
     async def test_refreshes_metrics_before_scoring(self) -> None:
         posts = FakePostRepository()

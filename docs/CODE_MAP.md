@@ -3,11 +3,11 @@
 ## Project Purpose
 
 A Telegram channel administration and publishing system. It collects posts
-from source channels, deduplicates and classifies them with a
-configurable AI provider chain, tests vmess/vless VPN configs from an
-Iran-based worker, routes posts through an admin approval bot, publishes
-approved posts to destination channels, and posts USD price updates twice
-per day.
+from configured sources, discovers proxy configs across joined dialogs,
+deduplicates and classifies content with a configurable AI provider chain,
+tests vmess/vless configs from an Iran-based worker, routes posts through
+an admin approval bot, manages recurring native-schedule campaigns, publishes
+approved posts to destination channels, and posts USD price updates twice per day.
 
 ## Architecture Overview
 
@@ -70,14 +70,14 @@ build/             GENERATED PyInstaller work files (git-ignored).
   cheap exact deduplication (original text is never altered).
 - `services/text_fingerprint.py` — local token/shingle similarity used to
   preselect near-duplicate candidates and reduce AI prompt size.
-- `services/vpn_parser.py` — `parse_vmess`, `parse_vless`,
-  `extract_vpn_configs` (pure stdlib parsing of config URIs).
+- `services/vpn_parser.py` — pure stdlib parsing/extraction for `vmess`,
+  `vless`, `ss`, `ssr`, `trojan`, `hysteria2`/`hy2`, and `tuic` URIs.
 
 ## Application Layer
 
 - `ai_service.py` — `AiService`: runs combined classification,
-  advertisement pruning, duplicate analysis, standalone duplicate checks,
-  and required quality scoring through configured providers in priority
+  advertisement pruning, VPN discovery text cleanup, duplicate analysis,
+  standalone duplicate checks, and advisory quality scoring through configured providers in priority
   order. Providers that return quota/rate/payment/temporary failures
   (`429`, `402`, `403`, `5xx`, timeout) are put into cooldown so backfill
   bursts immediately move to the next provider.
@@ -85,13 +85,17 @@ build/             GENERATED PyInstaller work files (git-ignored).
   identity repair → exact hash dedup → local fuzzy duplicate filtering →
   combined AI classification/ad pruning with at most five local duplicate
   candidates → VPN config extraction → store with 14-day expiry and source
-  metrics → enqueue required `quality_score`. Duplicate, advertisement, and
+  metrics → enqueue immediate `approval_request`, independent
+  `quality_score_update` at source time +20 minutes, and optional VPN test.
+  Duplicate, advertisement, and
   irrelevant posts are stored with `skipped_reason` so restarts do not keep
   redownloading or reprocessing them.
-- `quality_score_service.py` — required scoring stage. It refreshes
+- `quality_score_service.py` — background advisory scoring stage. It refreshes
   Telegram source metrics when possible, asks AI for a 0-to-100 repost
-  score, stores the score in MongoDB, then returns the next stage:
-  `vpn_test` for VPN posts or `approval_request` for normal posts.
+  score/status in MongoDB, then the notifier edits existing approval
+  previews without gating or resending them.
+- `management_service.py` — application boundary for approval-bot panel
+  edits, persisting live channels and recurring campaign configuration.
 - `vpn_test_service.py` — `VpnTestService`: tests each config via the
   tester port; post is eligible when at least one config works from Iran.
 - `approval_service.py` — `ApprovalService`: approval requests, admin
@@ -116,7 +120,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   `SqliteQueueRepository` (atomic claim via conditional
   `UPDATE ... RETURNING`), `SqliteApprovalRequestRepository`,
   `SqliteApprovalMessageRepository`, `SqlitePublishLogRepository`,
-  `SqlitePriceHistoryRepository`.
+  `SqliteRecurringForwardOccurrenceRepository`, `SqlitePriceHistoryRepository`.
+- `configuration/atomic_editor.py` — locked UTF-8 JSON updates through a
+  temporary sibling and atomic replace, preserving secrets and unknown keys.
 - `db/mongo/post_repository.py` — `MongoPostRepository` (Motor); TTL index
   on `expires_at`, lookup index on `content_hash`, and unique source
   identity index on `source_chat_id + source_message_id + grouped_id`.
@@ -141,7 +147,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
   approval toggles. It reconnects the user session before MTProto requests
   and retries once after transient disconnects. `TelethonSourceMetadataRefresher`
   refreshes views/forwards/replies/reactions before quality scoring using
-  the same reconnect guard.
+  the same reconnect guard. The destination adapter also copies or forwards
+  source-post URLs into native Telegram schedules for recurring campaigns.
 - `vpn/worker_client.py` — `IranWorkerVpnTester`: HTTP client for the Iran
   worker API (bearer token auth).
 - `vpn/xray_tester.py` — `XrayVpnTester`: spawns xray with a temp config,
@@ -172,6 +179,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   harmless `message is not modified` response is treated as a successful
   no-op; stale or deleted approval messages are marked inactive instead of
   failing callbacks.
+- `approval_bot/panel.py` — admin-only `/panel` callback UI with paged
+  source/destination lists and recurring campaign add/edit/toggle/delete
+  wizards. Every action revalidates the admin id.
 - `main_bot/handlers.py` — admin-only management commands for the main bot:
   reports (`/start`, `/status`, `/sources`, `/destinations`) and channel
   management (`/addsource`, `/delsource`, `/adddest`, `/deldest`,
@@ -182,7 +192,7 @@ build/             GENERATED PyInstaller work files (git-ignored).
 ## Workers
 
 - `queue_worker.py` — `QueueWorker`: polls SQLite queue, claims atomically,
-  dispatches by `QueueItemType` (`quality_score`, `vpn_test`,
+  dispatches by `QueueItemType` (`quality_score_update`, legacy `quality_score`, `vpn_test`,
   `approval_request`, legacy `scheduled_publish`), retries with linear backoff up to `max_attempts`,
   then marks failed. Safe to restart at any time.
   Native scheduled approval actions upload immediately to Telegram's own
@@ -190,6 +200,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   published post for that destination.
 - `scheduler.py` — APScheduler cron jobs: USD price at configured times
   (default 09:00 and 21:00 Asia/Tehran) and daily cleanup.
+- `recurring_forward.py` — rolling native Telegram schedule reconciler. It
+  fills the lookahead window idempotently and removes future occurrences
+  made obsolete by campaign disable, deletion, or editing.
 - `config_sync.py` — watches `configuration.json` mtime and hot-reloads
   only runtime-safe lists (`source_channels`, `destination_channels`,
   `admin_user_ids`) into SQLite. Invalid/half-written config files are
@@ -209,7 +222,7 @@ build/             GENERATED PyInstaller work files (git-ignored).
   media. Already complete source messages are not downloaded again, but
   text-only stored posts can repair missing video/photo attachments on the
   next same-day backfill. Stored posts still pass through the use case so
-  missing `quality_score`, `vpn_test`, or `approval_request` queue stages
+  missing `quality_score_update`, `vpn_test`, or `approval_request` queue stages
   can be repaired.
   Media downloads are bounded by `storage.media_download_timeout_seconds`;
   a stalled Telegram DC download is logged and skipped so the text post
@@ -223,6 +236,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
   emoji text entities. Runs as its own process
   (`python -m src.workers.collector`) or inside the all-in-one entrypoint.
   Note: only the first media file of a post is republished currently.
+  It also discovers config-bearing posts across all joined channel/group
+  dialogs except configured sources/destinations. The discovery path uses
+  local URI prefiltering and config fingerprints, AI ad cleanup with
+  protected placeholders, immediate VPN-only approval, and no quality score.
 - `src/run_all.py` — all-in-one entrypoint (`python -m src.run_all`): runs
   `src.main.run` and the collector concurrently in one event loop, each
   under `supervise()` which restarts a crashed component after a delay and
@@ -237,10 +254,13 @@ build/             GENERATED PyInstaller work files (git-ignored).
   (including resolved title/username/chat id), `admins`, `queue_items`,
   `approval_requests`, `approval_messages`, `publish_log` (UNIQUE
   post/channel pair plus reservation status),
+  `recurring_forward_campaigns`, `recurring_forward_campaign_times`,
+  `recurring_forward_campaign_destinations`,
+  `recurring_forward_occurrences`, `recurring_forward_messages`,
   `price_history`, `settings`, `error_log`, `schema_migrations`.
 - **MongoDB** (`posts` collection): full post documents with text, media
   metadata, source identity, AI results, duplicate/skipped state, source
-  metrics, required quality score, extracted configs, `collected_at`,
+  metrics, quality-score status, ingestion mode, VPN fingerprints/configs, `collected_at`,
   `expires_at` (TTL index deletes after 14 days).
 
 ## Configuration
@@ -271,12 +291,14 @@ as a disabled entry. Providers with `enabled: false`, missing keys, missing
 models, or missing base URLs are skipped. OpenRouter-specific
 `fallback_models` are sent as OpenRouter's `models` routing list.
 
-Channel and admin lists in the config file are **authoritative at runtime**:
+Channel, admin, and recurring campaign lists in the config file are
+**authoritative at runtime**:
 `sync_config_to_sqlite` upserts configured rows, disables missing channels,
-and replaces admins. `ConfigSyncWorker` repeats that sync whenever the file
-mtime changes, so adding/removing configured channels does not require a
-restart. Secrets, AI providers, DB paths, Telegram sessions, scheduler
-phone, and price settings remain restart-only.
+replaces admins, and atomically mirrors normalized campaign definitions.
+`ConfigSyncWorker` repeats that sync whenever the file mtime changes, so
+adding/removing configured channels or campaigns does not require a restart.
+Secrets, AI providers, DB paths, Telegram sessions, scheduler phone, and
+price settings remain restart-only.
 `post_interval_minutes` is retained for compatibility, but native scheduled
 post slots are currently paced every five minutes by product requirement.
 
@@ -303,12 +325,14 @@ Main server enqueues `vpn_test` → `QueueWorker` calls `VpnTestService` →
 `IranWorkerVpnTester` POSTs the raw URI to the Iran worker → the worker
 parses it and runs `XrayVpnTester` → result is stored per-config in MongoDB.
 Eligible posts (≥1 working config) continue to the approval queue; others
-are marked `skipped`.
+retain their test result. Approval is no longer blocked by this background
+test; unsupported discovery protocols are marked `unsupported`.
 
 ## Scheduled Jobs
 
 Configured in `scheduler` section: `usd_price_publish_times` (twice daily),
-`cleanup_time` (daily), all in `scheduler.timezone` (default Asia/Tehran).
+`cleanup_time` (daily), `recurring_forward_lookahead_hours`, and
+`recurring_forwards`, all in `scheduler.timezone` (default Asia/Tehran).
 The USD price source is selected by `usd_price.provider` via
 `create_price_source()` in `src/composition.py`: `"nobitex"` (default,
 `src/infrastructure/price/nobitex_price_source.py`, public USDT/RLS
@@ -378,6 +402,13 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-10 — Added the approval-bot `/panel`, atomic config persistence,
+daily recurring source-post campaigns in Telegram's native schedule,
+normalized recurring campaign/time/destination mirrors in SQLite,
+immediate approval with 20-minute in-place score updates, shared delivery
+history buttons, and all-dialog VPN config discovery for common proxy
+protocols with URI-level deduplication and AI advertisement cleanup.
 
 2026-07-08 — Hardened Telethon destination publishing and source metadata
 refresh against transient user-session disconnects, and made approval

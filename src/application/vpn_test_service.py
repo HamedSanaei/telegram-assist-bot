@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.domain.enums import VpnTestStatus
+from src.domain.enums import VpnProtocol, VpnTestStatus
 from src.domain.interfaces import PostRepository, VpnConnectivityTester
 from src.shared.errors import VpnConnectivityTestError
 from src.shared.logging_setup import get_logger
@@ -53,6 +53,14 @@ class VpnTestService:
 
         any_working = False
         for config in post.vpn_configs:
+            if config.protocol not in {VpnProtocol.VMESS, VpnProtocol.VLESS}:
+                config.test_status = VpnTestStatus.UNSUPPORTED
+                logger.info(
+                    "VPN test unsupported post=%s protocol=%s",
+                    post_id,
+                    config.protocol.value,
+                )
+                continue
             try:
                 result = await self._tester.test(config)
             except VpnConnectivityTestError as exc:

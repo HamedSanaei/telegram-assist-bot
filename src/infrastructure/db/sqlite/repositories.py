@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from src.domain.entities import (
     AdminUser,
@@ -17,9 +18,11 @@ from src.domain.entities import (
     DollarPrice,
     PublishLogEntry,
     QueueItem,
+    RecurringForwardOccurrence,
 )
 from src.domain.enums import ChannelKind, QueueItemType, QueueStatus
 from src.infrastructure.db.sqlite.connection import Database
+from src.shared.config import RecurringForwardConfig
 
 
 def _utcnow_iso() -> str:
@@ -606,11 +609,12 @@ class SqliteApprovalMessageRepository:
                 """
                 INSERT INTO approval_messages
                     (post_id, admin_user_id, chat_id, message_id, delivery_mode,
-                     active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     preview_kind, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(post_id, admin_user_id, message_id) DO UPDATE SET
                     chat_id = excluded.chat_id,
                     delivery_mode = excluded.delivery_mode,
+                    preview_kind = excluded.preview_kind,
                     active = 1,
                     updated_at = excluded.updated_at
                 """,
@@ -620,6 +624,7 @@ class SqliteApprovalMessageRepository:
                     ref.chat_id,
                     ref.message_id,
                     ref.delivery_mode,
+                    ref.preview_kind,
                     int(ref.active),
                     now,
                     now,
@@ -708,6 +713,7 @@ class SqliteApprovalMessageRepository:
             chat_id=row["chat_id"],
             message_id=row["message_id"],
             delivery_mode=row["delivery_mode"],
+            preview_kind=row["preview_kind"],
             active=bool(row["active"]),
         )
 
@@ -908,6 +914,18 @@ class SqlitePublishLogRepository:
         )
         return _parse_dt(row["latest"]) if row is not None else None
 
+    async def list_history(self, post_id: str) -> list[PublishLogEntry]:
+        """Return every persisted destination state for one post."""
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM publish_log
+            WHERE post_id = ?
+            ORDER BY channel_chat_id
+            """,
+            (post_id,),
+        )
+        return [self._row_to_publish_entry(row) for row in rows]
+
     @staticmethod
     def _row_to_publish_entry(row: object) -> PublishLogEntry:
         """Map a database row to :class:`PublishLogEntry`."""
@@ -920,6 +938,253 @@ class SqlitePublishLogRepository:
             published_at=_parse_dt(row["published_at"]),
             scheduled_at=_parse_dt(row["scheduled_at"]),
             removed_at=_parse_dt(row["removed_at"]),
+        )
+
+
+class SqliteRecurringForwardCampaignRepository:
+    """SQLite mirror of recurring campaign definitions from configuration."""
+
+    def __init__(self, db: Database) -> None:
+        """Args: db: Connected database wrapper."""
+        self._db = db
+
+    async def replace_all(self, campaigns: list[RecurringForwardConfig]) -> None:
+        """Atomically replace the campaign mirror with authoritative config."""
+        connection = self._db.connection
+        await connection.execute("BEGIN IMMEDIATE")
+        try:
+            await connection.execute("DELETE FROM recurring_forward_campaigns")
+            for campaign in campaigns:
+                await self._write_campaign(connection, campaign)
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise
+
+    async def upsert(self, campaign: RecurringForwardConfig) -> None:
+        """Atomically insert or update one campaign and its child rows."""
+        connection = self._db.connection
+        await connection.execute("BEGIN IMMEDIATE")
+        try:
+            await self._write_campaign(connection, campaign)
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise
+
+    async def delete(self, campaign_id: str) -> None:
+        """Delete one mirrored campaign and cascade its times/destinations."""
+        await self._db.execute(
+            "DELETE FROM recurring_forward_campaigns WHERE id = ?",
+            (campaign_id,),
+        )
+
+    async def set_enabled(self, campaign_id: str, enabled: bool) -> None:
+        """Update one mirrored campaign's enabled state."""
+        await self._db.execute(
+            """
+            UPDATE recurring_forward_campaigns
+            SET enabled = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (int(enabled), _utcnow_iso(), campaign_id),
+        )
+
+    async def list_all(self) -> list[RecurringForwardConfig]:
+        """Return all mirrored campaigns with ordered times and destinations."""
+        rows = await self._db.fetchall(
+            "SELECT * FROM recurring_forward_campaigns ORDER BY id"
+        )
+        campaigns: list[RecurringForwardConfig] = []
+        for row in rows:
+            time_rows = await self._db.fetchall(
+                """
+                SELECT time_of_day FROM recurring_forward_campaign_times
+                WHERE campaign_id = ? ORDER BY position, time_of_day
+                """,
+                (row["id"],),
+            )
+            destination_rows = await self._db.fetchall(
+                """
+                SELECT destination_chat_id
+                FROM recurring_forward_campaign_destinations
+                WHERE campaign_id = ? ORDER BY position, destination_chat_id
+                """,
+                (row["id"],),
+            )
+            campaigns.append(
+                RecurringForwardConfig(
+                    id=row["id"],
+                    enabled=bool(row["enabled"]),
+                    source_post_url=row["source_post_url"],
+                    show_forward_header=bool(row["show_forward_header"]),
+                    times=[item["time_of_day"] for item in time_rows],
+                    destination_chat_ids=[
+                        item["destination_chat_id"] for item in destination_rows
+                    ],
+                )
+            )
+        return campaigns
+
+    @staticmethod
+    async def _write_campaign(
+        connection: Any, campaign: RecurringForwardConfig
+    ) -> None:
+        """Write one campaign and replace its normalized child rows."""
+        await connection.execute(
+            """
+            INSERT INTO recurring_forward_campaigns
+                (id, enabled, source_post_url, show_forward_header, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                enabled = excluded.enabled,
+                source_post_url = excluded.source_post_url,
+                show_forward_header = excluded.show_forward_header,
+                updated_at = excluded.updated_at
+            """,
+            (
+                campaign.id,
+                int(campaign.enabled),
+                campaign.source_post_url,
+                int(campaign.show_forward_header),
+                _utcnow_iso(),
+            ),
+        )
+        await connection.execute(
+            "DELETE FROM recurring_forward_campaign_times WHERE campaign_id = ?",
+            (campaign.id,),
+        )
+        await connection.execute(
+            "DELETE FROM recurring_forward_campaign_destinations WHERE campaign_id = ?",
+            (campaign.id,),
+        )
+        for position, value in enumerate(campaign.times):
+            await connection.execute(
+                """
+                INSERT INTO recurring_forward_campaign_times
+                    (campaign_id, time_of_day, position)
+                VALUES (?, ?, ?)
+                """,
+                (campaign.id, value, position),
+            )
+        for position, chat_id in enumerate(campaign.destination_chat_ids):
+            await connection.execute(
+                """
+                INSERT INTO recurring_forward_campaign_destinations
+                    (campaign_id, destination_chat_id, position)
+                VALUES (?, ?, ?)
+                """,
+                (campaign.id, chat_id, position),
+            )
+
+
+class SqliteRecurringForwardOccurrenceRepository:
+    """SQLite operational state for recurring Telegram schedule campaigns."""
+
+    def __init__(self, db: Database) -> None:
+        """Args: db: Connected database wrapper."""
+        self._db = db
+
+    async def reserve(self, occurrence: RecurringForwardOccurrence) -> int | None:
+        """Reserve a unique occurrence; return ``None`` when already known."""
+        now = _utcnow_iso()
+        cursor = await self._db.connection.execute(
+            """
+            INSERT OR IGNORE INTO recurring_forward_occurrences
+                (campaign_id, destination_chat_id, source_post_url,
+                 show_forward_header, scheduled_at, status, last_error,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'reserved', NULL, ?, ?)
+            """,
+            (
+                occurrence.campaign_id,
+                occurrence.destination_chat_id,
+                occurrence.source_post_url,
+                int(occurrence.show_forward_header),
+                occurrence.scheduled_at.isoformat(),
+                now,
+                now,
+            ),
+        )
+        await self._db.connection.commit()
+        return int(cursor.lastrowid) if cursor.rowcount == 1 else None
+
+    async def mark_scheduled(self, occurrence_id: int, message_ids: list[int]) -> None:
+        """Record successful native Telegram schedule message ids."""
+        await self._db.execute(
+            """
+            UPDATE recurring_forward_occurrences
+            SET status = 'scheduled', last_error = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (_utcnow_iso(), occurrence_id),
+        )
+        for message_id in message_ids:
+            await self._db.execute(
+                """
+                INSERT OR IGNORE INTO recurring_forward_messages
+                    (occurrence_id, message_id)
+                VALUES (?, ?)
+                """,
+                (occurrence_id, message_id),
+            )
+
+    async def mark_failed(self, occurrence_id: int, error: str) -> None:
+        """Record a failed scheduling attempt without duplicating it."""
+        await self._db.execute(
+            """
+            UPDATE recurring_forward_occurrences
+            SET status = 'failed', last_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (error[:2000], _utcnow_iso(), occurrence_id),
+        )
+
+    async def list_future_scheduled(
+        self, now: datetime
+    ) -> list[RecurringForwardOccurrence]:
+        """Return all future scheduled occurrences for reconciliation."""
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM recurring_forward_occurrences
+            WHERE status = 'scheduled' AND scheduled_at > ?
+            ORDER BY scheduled_at
+            """,
+            (now.isoformat(),),
+        )
+        result: list[RecurringForwardOccurrence] = []
+        for row in rows:
+            message_rows = await self._db.fetchall(
+                """
+                SELECT message_id FROM recurring_forward_messages
+                WHERE occurrence_id = ? ORDER BY message_id
+                """,
+                (row["id"],),
+            )
+            result.append(
+                RecurringForwardOccurrence(
+                    id=row["id"],
+                    campaign_id=row["campaign_id"],
+                    destination_chat_id=row["destination_chat_id"],
+                    source_post_url=row["source_post_url"],
+                    show_forward_header=bool(row["show_forward_header"]),
+                    scheduled_at=_parse_dt(row["scheduled_at"]) or now,
+                    status=row["status"],
+                    message_ids=tuple(item["message_id"] for item in message_rows),
+                    last_error=row["last_error"],
+                )
+            )
+        return result
+
+    async def mark_cancelled(self, occurrence_id: int) -> None:
+        """Mark one future native schedule occurrence as cancelled."""
+        await self._db.execute(
+            """
+            UPDATE recurring_forward_occurrences
+            SET status = 'cancelled', updated_at = ?
+            WHERE id = ?
+            """,
+            (_utcnow_iso(), occurrence_id),
         )
 
 

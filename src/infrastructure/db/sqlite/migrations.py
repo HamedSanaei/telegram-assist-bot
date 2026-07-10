@@ -165,6 +165,68 @@ MIGRATIONS: list[tuple[int, str]] = [
             ADD COLUMN updated_at TEXT;
         """,
     ),
+    (
+        10,
+        """
+        ALTER TABLE approval_messages
+            ADD COLUMN preview_kind TEXT NOT NULL DEFAULT 'text';
+
+        CREATE TABLE IF NOT EXISTS recurring_forward_occurrences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            destination_chat_id INTEGER NOT NULL,
+            source_post_url TEXT NOT NULL,
+            show_forward_header INTEGER NOT NULL DEFAULT 0,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (campaign_id, destination_chat_id, scheduled_at)
+        );
+
+        CREATE TABLE IF NOT EXISTS recurring_forward_messages (
+            occurrence_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            PRIMARY KEY (occurrence_id, message_id),
+            FOREIGN KEY (occurrence_id)
+                REFERENCES recurring_forward_occurrences(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_recurring_occurrence_future
+            ON recurring_forward_occurrences (status, scheduled_at);
+        """,
+    ),
+    (
+        11,
+        """
+        CREATE TABLE IF NOT EXISTS recurring_forward_campaigns (
+            id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            source_post_url TEXT NOT NULL,
+            show_forward_header INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS recurring_forward_campaign_times (
+            campaign_id TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (campaign_id, time_of_day),
+            FOREIGN KEY (campaign_id)
+                REFERENCES recurring_forward_campaigns(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS recurring_forward_campaign_destinations (
+            campaign_id TEXT NOT NULL,
+            destination_chat_id INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (campaign_id, destination_chat_id),
+            FOREIGN KEY (campaign_id)
+                REFERENCES recurring_forward_campaigns(id) ON DELETE CASCADE
+        );
+        """,
+    ),
 ]
 
 
@@ -305,6 +367,43 @@ async def _apply_migration(db: Database, version: int) -> None:
                 updated_at = COALESCE(updated_at, requested_at)
             """
         )
+        return
+    if version == 10:
+        await _ensure_column(
+            db,
+            "approval_messages",
+            "preview_kind",
+            "TEXT NOT NULL DEFAULT 'text'",
+        )
+        await db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS recurring_forward_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                destination_chat_id INTEGER NOT NULL,
+                source_post_url TEXT NOT NULL,
+                show_forward_header INTEGER NOT NULL DEFAULT 0,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'reserved',
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (campaign_id, destination_chat_id, scheduled_at)
+            );
+            CREATE TABLE IF NOT EXISTS recurring_forward_messages (
+                occurrence_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                PRIMARY KEY (occurrence_id, message_id),
+                FOREIGN KEY (occurrence_id)
+                    REFERENCES recurring_forward_occurrences(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_recurring_occurrence_future
+                ON recurring_forward_occurrences (status, scheduled_at);
+            """
+        )
+        return
+    if version == 11:
+        await db.executescript(MIGRATIONS[10][1])
         return
     raise ValueError(f"Unknown migration version: {version}")
 

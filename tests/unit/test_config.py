@@ -115,7 +115,31 @@ class TestLoadConfiguration:
         assert config.storage.retention_days == 14
         assert config.storage.media_download_timeout_seconds == 60
         assert config.scheduler.usd_price_publish_times == ["09:00", "21:00"]
+        assert config.scheduler.recurring_forward_lookahead_hours == 24
         assert config.logging.color_console is True
+
+    def test_loads_recurring_forward_campaign(self, tmp_path: Path) -> None:
+        """Daily campaign configuration is typed and validated."""
+        data = _valid_config()
+        data["scheduler"] = {
+            "timezone": "Asia/Tehran",
+            "recurring_forward_lookahead_hours": 36,
+            "recurring_forwards": [
+                {
+                    "id": "daily_ad",
+                    "enabled": True,
+                    "source_post_url": "https://t.me/source/12",
+                    "destination_chat_ids": [-1001],
+                    "show_forward_header": False,
+                    "times": ["09:00", "21:00"],
+                }
+            ],
+        }
+        config = load_configuration(_write(tmp_path, data))
+
+        assert config.scheduler.recurring_forward_lookahead_hours == 36
+        assert config.scheduler.recurring_forwards[0].id == "daily_ad"
+        assert config.scheduler.recurring_forwards[0].times == ["09:00", "21:00"]
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigurationError):
@@ -227,3 +251,9 @@ class TestValidateCollectorConfig:
         config = load_configuration(_write(tmp_path, data))
         with pytest.raises(ConfigurationError):
             validate_collector_config(config)
+
+    def test_empty_sources_allowed_for_dialog_discovery(self, tmp_path: Path) -> None:
+        """Collector can run only the all-dialog VPN discovery pipeline."""
+        data = _valid_config()
+        data["telegram"]["source_channels"] = []
+        validate_collector_config(load_configuration(_write(tmp_path, data)))

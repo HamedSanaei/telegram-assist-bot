@@ -169,6 +169,30 @@ class TestChatErrors:
         assert result.reason == "خبر ارزشمند است"
         assert result.provider == "fakeai"
 
+    async def test_vpn_cleanup_roundtrip_preserves_placeholder(self) -> None:
+        """The provider parses cleaned text without altering protected tokens."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            assert "__VPN_CONFIG_0__" in payload["messages"][1]["content"]
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"cleaned_text": "راهنما\\n__VPN_CONFIG_0__"}'
+                            }
+                        }
+                    ]
+                },
+            )
+
+        result = await _provider(handler).clean_vpn_post(
+            "تبلیغ\\n__VPN_CONFIG_0__"
+        )
+
+        assert result.text == "راهنما\n__VPN_CONFIG_0__"
+
     async def test_openrouter_payload_includes_fallback_routing(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content.decode("utf-8"))

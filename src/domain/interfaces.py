@@ -19,6 +19,7 @@ from src.domain.entities import (
     PublishLogEntry,
     PostSourceMetrics,
     QueueItem,
+    RecurringForwardOccurrence,
     VpnConfig,
 )
 from src.domain.enums import PostCategory, QueueItemType, QueueStatus
@@ -62,6 +63,14 @@ class QualityScoreResult:
     reason: str
     provider: str
     raw_metrics: dict[str, object]
+
+
+@dataclass(frozen=True)
+class AiTextCleanupResult:
+    """Result of cleaning promotional text around protected VPN placeholders."""
+
+    text: str
+    provider: str
 
 
 @dataclass(frozen=True)
@@ -151,6 +160,10 @@ class AiProvider(Protocol):
         """
         ...
 
+    async def clean_vpn_post(self, text: str) -> AiTextCleanupResult:
+        """Remove promotional content while preserving config placeholders."""
+        ...
+
 
 class PostRepository(Protocol):
     """Persistence port for collected posts (MongoDB in production)."""
@@ -175,6 +188,10 @@ class PostRepository(Protocol):
 
     async def list_recent_texts(self, limit: int) -> list[str]:
         """Return recent non-skipped, non-duplicate post texts."""
+        ...
+
+    async def find_seen_vpn_fingerprints(self, fingerprints: list[str]) -> set[str]:
+        """Return VPN URI fingerprints already present in stored posts."""
         ...
 
     async def update_vpn_configs(self, post_id: str, configs: list[VpnConfig]) -> None:
@@ -407,6 +424,10 @@ class PublishLogRepository(Protocol):
         """Return the most recent publish time on the channel, or ``None``."""
         ...
 
+    async def list_history(self, post_id: str) -> list[PublishLogEntry]:
+        """Return all destination delivery rows for an approval post."""
+        ...
+
 
 class ApprovalRequestRepository(Protocol):
     """Persistence port for approval request dispatch idempotency."""
@@ -588,6 +609,60 @@ class SourceMetadataRefresher(Protocol):
         Returns:
             Refreshed metrics, or ``None`` if the message cannot be fetched.
         """
+        ...
+
+
+class ApprovalPreviewUpdater(Protocol):
+    """Port for editing already-delivered approval preview headers."""
+
+    async def refresh_post(self, post: Post) -> int:
+        """Edit all active approval previews for a post; return update count."""
+        ...
+
+
+class RecurringForwardOccurrenceRepository(Protocol):
+    """Persistence port for recurring native Telegram schedule occurrences."""
+
+    async def reserve(self, occurrence: RecurringForwardOccurrence) -> int | None:
+        """Reserve a unique occurrence, returning its id or ``None`` if known."""
+        ...
+
+    async def mark_scheduled(self, occurrence_id: int, message_ids: list[int]) -> None:
+        """Record Telegram scheduled message ids for an occurrence."""
+        ...
+
+    async def mark_failed(self, occurrence_id: int, error: str) -> None:
+        """Record a scheduling failure."""
+        ...
+
+    async def list_future_scheduled(
+        self, now: datetime
+    ) -> list[RecurringForwardOccurrence]:
+        """Return every future native Telegram scheduled occurrence."""
+        ...
+
+    async def mark_cancelled(self, occurrence_id: int) -> None:
+        """Mark a future native schedule occurrence as cancelled."""
+        ...
+
+
+class RecurringForwardPublisher(Protocol):
+    """Port for copying or forwarding a source post into native scheduling."""
+
+    async def schedule_from_url(
+        self,
+        source_post_url: str,
+        destination_chat_id: int,
+        show_forward_header: bool,
+        scheduled_at: datetime,
+    ) -> list[int]:
+        """Schedule a source post and return all created Telegram message ids."""
+        ...
+
+    async def delete_scheduled_messages(
+        self, destination_chat_id: int, message_ids: list[int]
+    ) -> None:
+        """Delete native Telegram scheduled messages for one occurrence."""
         ...
 
 

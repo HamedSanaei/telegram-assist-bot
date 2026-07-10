@@ -125,6 +125,7 @@ class FakeUseCase:
         self.text_entities: list[list[object]] = []
         self.seen: set[tuple[int, int, int | None]] = set()
         self.media_counts: dict[tuple[int, int, int | None], int] = {}
+        self.discovery_calls: list[tuple[int, int, str]] = []
 
     async def has_seen_source_message(
         self, source_chat_id: int, message_id: int, grouped_id: int | None = None
@@ -152,6 +153,12 @@ class FakeUseCase:
         )
         self.media_kinds.append([media.kind for media in message.media])
         self.text_entities.append(list(message.text_entities))
+
+    async def handle_vpn_discovery_message(self, message) -> None:
+        """Record one normalized all-dialog VPN discovery message."""
+        self.discovery_calls.append(
+            (message.source_chat_id, message.message_id, message.text)
+        )
 
 
 class TestCollectorBackfill:
@@ -332,6 +339,27 @@ class TestCollectorBackfill:
 
         assert use_case.calls == [(-100123, 6, text)]
         assert use_case.text_entities[0][0].data["document_id"] == 987654321
+
+    async def test_dialog_discovery_prefilters_plain_text_and_accepts_trojan(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-config dialog traffic never reaches storage or AI."""
+        client = FakeClient()
+        use_case = FakeUseCase()
+        collector = Collector(client, use_case, tmp_path)
+        plain = FakeMessage(40, "گفتگوی عادی", TODAY_START)
+        config = FakeMessage(
+            41,
+            "trojan://password@server.example.com:443",
+            TODAY_START,
+        )
+
+        await collector._process_messages(-300, [plain], "vpn_discovery_live", True)
+        await collector._process_messages(-300, [config], "vpn_discovery_live", True)
+
+        assert use_case.discovery_calls == [
+            (-300, 41, "trojan://password@server.example.com:443")
+        ]
 
     async def test_startup_backfill_interleaves_sources_round_robin(
         self, tmp_path: Path, monkeypatch

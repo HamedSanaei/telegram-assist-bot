@@ -12,8 +12,10 @@ from decimal import Decimal
 
 from src.domain.enums import (
     ChannelKind,
+    IngestionMode,
     MediaKind,
     PostCategory,
+    QualityScoreStatus,
     QueueItemType,
     QueueStatus,
     VpnProtocol,
@@ -161,6 +163,10 @@ class Post:
     source_message_id: int
     text: str
     content_hash: str
+    source_label: str = ""
+    ingestion_mode: IngestionMode = IngestionMode.CONFIGURED_SOURCE
+    quality_score_status: QualityScoreStatus = QualityScoreStatus.PENDING
+    vpn_fingerprints: list[str] = field(default_factory=list)
     text_entities: list[TextEntity] = field(default_factory=list)
     grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
@@ -312,7 +318,36 @@ class ApprovalMessageRef:
     chat_id: int
     message_id: int
     delivery_mode: str = "s"
+    preview_kind: str = "text"
     active: bool = True
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class RecurringForwardOccurrence:
+    """
+    Operational state for one recurring native Telegram schedule occurrence.
+
+    Attributes:
+        campaign_id: Stable configuration campaign id.
+        destination_chat_id: Destination Telegram channel id.
+        source_post_url: Telegram source-post URL.
+        show_forward_header: Whether Telegram's forwarded-from header is kept.
+        scheduled_at: UTC occurrence time.
+        status: ``reserved``, ``scheduled``, ``failed``, or ``cancelled``.
+        message_ids: Native Telegram scheduled message ids.
+        last_error: Last scheduling or cancellation error, when present.
+        id: Optional SQLite row id.
+    """
+
+    campaign_id: str
+    destination_chat_id: int
+    source_post_url: str
+    show_forward_header: bool
+    scheduled_at: datetime
+    status: str = "reserved"
+    message_ids: tuple[int, ...] = ()
+    last_error: str | None = None
     id: int | None = None
 
 

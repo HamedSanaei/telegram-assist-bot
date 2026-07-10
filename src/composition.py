@@ -27,6 +27,8 @@ from src.infrastructure.db.sqlite.repositories import (
     SqlitePriceHistoryRepository,
     SqlitePublishLogRepository,
     SqliteQueueRepository,
+    SqliteRecurringForwardCampaignRepository,
+    SqliteRecurringForwardOccurrenceRepository,
 )
 from src.shared.config import AppConfig
 from src.shared.errors import ConfigurationError
@@ -156,6 +158,7 @@ async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:
     channels = SqliteChannelRepository(db)
     admins = SqliteAdminRepository(db)
     approval_messages = SqliteApprovalMessageRepository(db)
+    recurring_campaigns = SqliteRecurringForwardCampaignRepository(db)
     destination_chat_ids: set[int] = set()
     for entry in config.telegram.destination_channels:
         destination_chat_ids.add(entry.chat_id)
@@ -190,19 +193,21 @@ async def sync_config_to_sqlite(config: AppConfig, db: Database) -> None:
         AdminUser(telegram_user_id=user_id) for user_id in config.telegram.admin_user_ids
     ]
     await admins.replace_all(admin_users)
+    await recurring_campaigns.replace_all(config.scheduler.recurring_forwards)
     deactivated_approval_messages = await approval_messages.deactivate_admins_except(
         {admin.telegram_user_id for admin in admin_users}
     )
     logger.info(
         "Synced config into SQLite destinations=%d sources=%d admins=%d "
         "disabled_destinations=%d disabled_sources=%d "
-        "deactivated_approval_messages=%d",
+        "deactivated_approval_messages=%d recurring_campaigns=%d",
         len(config.telegram.destination_channels),
         len(config.telegram.source_channels),
         len(config.telegram.admin_user_ids),
         disabled_destinations,
         disabled_sources,
         deactivated_approval_messages,
+        len(config.scheduler.recurring_forwards),
     )
 
 
@@ -214,8 +219,8 @@ def create_repositories(db: Database) -> dict[str, object]:
         db: Connected SQLite database.
 
     Returns:
-        Mapping with keys ``channels``, ``admins``, ``queue``,
-        ``approval_requests``, ``publish_log``, and ``price_history``.
+        Mapping containing channel/admin state, queues, approvals, publish
+        history, recurring campaign/occurrence state, and price history.
     """
     return {
         "channels": SqliteChannelRepository(db),
@@ -224,5 +229,7 @@ def create_repositories(db: Database) -> dict[str, object]:
         "approval_requests": SqliteApprovalRequestRepository(db),
         "approval_messages": SqliteApprovalMessageRepository(db),
         "publish_log": SqlitePublishLogRepository(db),
+        "recurring_campaigns": SqliteRecurringForwardCampaignRepository(db),
+        "recurring_forwards": SqliteRecurringForwardOccurrenceRepository(db),
         "price_history": SqlitePriceHistoryRepository(db),
     }

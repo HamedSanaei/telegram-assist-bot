@@ -24,6 +24,7 @@ def build_channel_keyboard(
     published_chat_ids: set[int],
     scheduled_chat_ids: set[int] | None = None,
     immediate: bool = False,
+    has_delivery_history: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Build the approval keyboard with direct two-button actions per channel.
@@ -42,6 +43,15 @@ def build_channel_keyboard(
     del immediate
     scheduled_chat_ids = scheduled_chat_ids or set()
     rows: list[list[InlineKeyboardButton]] = []
+    if has_delivery_history:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📌 این پست قبلاً ارسال یا زمان‌بندی شده است",
+                    callback_data=f"{CB_PREFIX}:history:{post_id}",
+                )
+            ]
+        )
     for channel in channels:
         published = channel.chat_id in published_chat_ids
         scheduled = channel.chat_id in scheduled_chat_ids

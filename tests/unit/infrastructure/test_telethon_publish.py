@@ -12,9 +12,13 @@ from src.infrastructure.telegram.telethon_publish import TelethonDestinationPubl
 class FakeMessage:
     """Minimal Telethon-like message result."""
 
-    def __init__(self, message_id: int) -> None:
+    def __init__(self, message_id: int, text: str = "") -> None:
         """Args: message_id: Telegram message id to expose."""
         self.id = message_id
+        self.raw_text = text
+        self.entities: list[object] = []
+        self.media = None
+        self.grouped_id = None
 
 
 class FakeTelethonClient:
@@ -28,6 +32,7 @@ class FakeTelethonClient:
         self.connected = True
         self.connect_calls = 0
         self.fail_next_entity_with_disconnect = False
+        self.forwarded: list[dict[str, Any]] = []
 
     def is_connected(self) -> bool:
         """Return the fake connection state."""
@@ -38,13 +43,17 @@ class FakeTelethonClient:
         self.connected = True
         self.connect_calls += 1
 
-    async def get_entity(self, chat_id: int) -> int:
+    async def get_entity(self, chat_id: int | str) -> int | str:
         """Return the chat id as the resolved fake entity."""
         if self.fail_next_entity_with_disconnect:
             self.fail_next_entity_with_disconnect = False
             self.connected = False
             raise ConnectionError("Cannot send requests while disconnected")
         return chat_id
+
+    async def get_messages(self, entity: object, **kwargs: Any) -> FakeMessage:
+        """Return one source message for recurring-forward tests."""
+        return FakeMessage(int(kwargs.get("ids", 10)), "source text")
 
     async def send_message(self, entity: int, text: str, **kwargs: Any) -> FakeMessage:
         """Record one text send."""
@@ -59,6 +68,15 @@ class FakeTelethonClient:
     async def delete_messages(self, entity: int, ids: list[int]) -> None:
         """Record one delete request."""
         self.deleted.append((entity, ids))
+
+    async def forward_messages(
+        self, entity: object, messages: list[object], **kwargs: Any
+    ) -> FakeMessage:
+        """Record one Telegram forward operation."""
+        self.forwarded.append(
+            {"entity": entity, "messages": messages, "kwargs": kwargs}
+        )
+        return FakeMessage(103)
 
 
 def _post() -> Post:
@@ -127,3 +145,32 @@ class TestTelethonDestinationPublisher:
         assert message_id == 101
         assert client.connect_calls == 1
         assert client.sent_messages[0]["entity"] == -100200
+
+    async def test_recurring_copy_without_forward_header(self) -> None:
+        """Header-free campaigns copy source text with a native schedule date."""
+        client = FakeTelethonClient()
+        publisher = TelethonDestinationPublisher(client)  # type: ignore[arg-type]
+        scheduled_at = datetime.now(timezone.utc)
+
+        ids = await publisher.schedule_from_url(
+            "https://t.me/source/10", -100200, False, scheduled_at
+        )
+
+        assert ids == [101]
+        assert client.forwarded == []
+        assert client.sent_messages[0]["text"] == "source text"
+        assert client.sent_messages[0]["kwargs"]["schedule"] == scheduled_at
+
+    async def test_recurring_forward_keeps_forward_header(self) -> None:
+        """Header-enabled campaigns use Telegram's forwarding API."""
+        client = FakeTelethonClient()
+        publisher = TelethonDestinationPublisher(client)  # type: ignore[arg-type]
+        scheduled_at = datetime.now(timezone.utc)
+
+        ids = await publisher.schedule_from_url(
+            "https://t.me/c/12345/10", -100200, True, scheduled_at
+        )
+
+        assert ids == [103]
+        assert client.forwarded[0]["kwargs"]["schedule"] == scheduled_at
+        assert client.forwarded[0]["kwargs"]["from_peer"] == -10012345

@@ -104,7 +104,9 @@
   "scheduler": {
     "usd_price_publish_times": ["09:00", "21:00"],
     "timezone": "Asia/Tehran",
-    "cleanup_time": "04:30"
+    "cleanup_time": "04:30",
+    "recurring_forward_lookahead_hours": 24,
+    "recurring_forwards": []
   },
   "usd_price": {
     "provider": "nobitex",

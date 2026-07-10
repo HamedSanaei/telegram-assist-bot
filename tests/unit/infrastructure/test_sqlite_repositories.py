@@ -12,6 +12,7 @@ from src.domain.entities import (
     ApprovalMessageRef,
     DestinationChannel,
     DollarPrice,
+    RecurringForwardOccurrence,
 )
 from src.domain.enums import ChannelKind, QueueItemType, QueueStatus
 from src.infrastructure.db.sqlite.connection import Database
@@ -24,7 +25,10 @@ from src.infrastructure.db.sqlite.repositories import (
     SqlitePriceHistoryRepository,
     SqlitePublishLogRepository,
     SqliteQueueRepository,
+    SqliteRecurringForwardCampaignRepository,
+    SqliteRecurringForwardOccurrenceRepository,
 )
+from src.shared.config import RecurringForwardConfig
 
 
 @pytest.fixture
@@ -464,6 +468,7 @@ class TestApprovalMessageRepository:
         refs = await repo.list_active("p1")
         assert len(refs) == 1
         assert refs[0].delivery_mode == "s"
+        assert refs[0].preview_kind == "text"
 
         await repo.set_delivery_mode("p1", 42, 10, "i")
         refs = await repo.list_active("p1")
@@ -495,6 +500,68 @@ class TestApprovalMessageRepository:
 
         refs = await repo.list_active("p1")
         assert [ref.admin_user_id for ref in refs] == [2]
+
+
+class TestRecurringForwardCampaignRepository:
+    """Tests for normalized recurring campaign configuration storage."""
+
+    async def test_replace_and_update_campaign_mirror(self, db: Database) -> None:
+        """Campaign times and destinations roundtrip in configured order."""
+        repo = SqliteRecurringForwardCampaignRepository(db)
+        campaign = RecurringForwardConfig(
+            id="daily_ad",
+            enabled=True,
+            source_post_url="https://t.me/source/10",
+            destination_chat_ids=[-1002, -1001],
+            times=["09:00", "21:00"],
+            show_forward_header=False,
+        )
+
+        await repo.replace_all([campaign])
+        assert await repo.list_all() == [campaign]
+
+        updated = RecurringForwardConfig(
+            id="daily_ad",
+            enabled=False,
+            source_post_url="https://t.me/source/11",
+            destination_chat_ids=[-1001],
+            times=["15:30"],
+            show_forward_header=True,
+        )
+        await repo.upsert(updated)
+        assert await repo.list_all() == [updated]
+
+        await repo.delete("daily_ad")
+        assert await repo.list_all() == []
+
+
+class TestRecurringForwardOccurrenceRepository:
+    """Tests for recurring native Telegram schedule operational state."""
+
+    async def test_occurrence_is_unique_and_roundtrips_messages(
+        self, db: Database
+    ) -> None:
+        repo = SqliteRecurringForwardOccurrenceRepository(db)
+        scheduled_at = datetime.now(timezone.utc) + timedelta(hours=2)
+        occurrence = RecurringForwardOccurrence(
+            campaign_id="daily_ad",
+            destination_chat_id=-100,
+            source_post_url="https://t.me/source/1",
+            show_forward_header=False,
+            scheduled_at=scheduled_at,
+        )
+
+        occurrence_id = await repo.reserve(occurrence)
+        assert occurrence_id is not None
+        assert await repo.reserve(occurrence) is None
+        await repo.mark_scheduled(occurrence_id, [10, 11])
+
+        rows = await repo.list_future_scheduled(datetime.now(timezone.utc))
+        assert len(rows) == 1
+        assert rows[0].message_ids == (10, 11)
+
+        await repo.mark_cancelled(occurrence_id)
+        assert await repo.list_future_scheduled(datetime.now(timezone.utc)) == []
 
 
 class TestPriceHistoryRepository:

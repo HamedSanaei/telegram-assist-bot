@@ -111,10 +111,15 @@ def create_approval_router(
         channels = await approval.list_channels()
         published = await approval.published_channels(post_id)
         scheduled = await approval.scheduled_channels(post_id)
+        history = await approval.delivery_history(post_id)
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=build_channel_keyboard(
-                    post_id, channels, published, scheduled
+                    post_id,
+                    channels,
+                    published,
+                    scheduled,
+                    has_delivery_history=bool(history),
                 )
             )
         except Exception as exc:
@@ -134,6 +139,7 @@ def create_approval_router(
         channels = await approval.list_channels()
         published = await approval.published_channels(post_id)
         scheduled = await approval.scheduled_channels(post_id)
+        history = await approval.delivery_history(post_id)
         bot: Bot = callback.bot
         for ref in refs:
             try:
@@ -141,7 +147,11 @@ def create_approval_router(
                     chat_id=ref.chat_id,
                     message_id=ref.message_id,
                     reply_markup=build_channel_keyboard(
-                        post_id, channels, published, scheduled
+                        post_id,
+                        channels,
+                        published,
+                        scheduled,
+                        has_delivery_history=bool(history),
                     ),
                 )
             except Exception as exc:
@@ -175,6 +185,33 @@ def create_approval_router(
             await callback.answer("اول ارسال فوری همین کانال را حذف کنید.")
         else:
             await callback.answer("این دکمه فعلا فعال نیست.")
+
+    @router.callback_query(F.data.startswith(f"{CB_PREFIX}:history:"))
+    async def on_history(callback: CallbackQuery) -> None:
+        """Show persisted destination delivery history in a callback alert."""
+        post_id = (callback.data or "").split(":", maxsplit=2)[-1]
+        try:
+            await approval.ensure_admin(callback.from_user.id)
+        except ApprovalStateError:
+            await callback.answer("⛔️ دسترسی مجاز نیست.", show_alert=True)
+            return
+        channels = {item.chat_id: item.title for item in await approval.list_channels()}
+        history = await approval.delivery_history(post_id)
+        labels = {
+            "published": "ارسال فوری",
+            "scheduled": "زمان‌بندی شده",
+            "removed": "حذف شده",
+            "reserved": "در حال انجام",
+        }
+        lines = [
+            f"{channels.get(item.channel_chat_id, item.channel_chat_id)}: "
+            f"{labels.get(item.status, item.status)}"
+            for item in history
+        ]
+        await callback.answer(
+            "\n".join(lines)[:190] or "سابقه‌ای ثبت نشده است.",
+            show_alert=True,
+        )
 
     @router.callback_query(F.data.startswith(f"{CB_PREFIX}:pub:"))
     async def on_publish_toggle(callback: CallbackQuery) -> None:

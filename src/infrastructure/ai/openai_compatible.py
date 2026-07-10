@@ -17,6 +17,7 @@ from src.domain.enums import PostCategory
 from src.domain.interfaces import (
     AiClassificationResult,
     AiPostAnalysisResult,
+    AiTextCleanupResult,
     DuplicateCheckResult,
     QualityScoreResult,
 )
@@ -70,6 +71,15 @@ _QUALITY_SCORE_SYSTEM_PROMPT = (
     "newsworthiness, freshness, clarity, engagement metrics normalized by age, "
     "and whether the content is actionable. Respond ONLY with JSON: "
     '{"score": <number 0-100>, "reason": "<short Persian reason>"}'
+)
+
+_VPN_CLEANUP_SYSTEM_PROMPT = (
+    "Clean a Telegram VPN configuration post. Remove advertisements, channel "
+    "promotions, referral calls, support handles, sales text, and unrelated "
+    "marketing. Keep concise useful connection instructions. Tokens such as "
+    "__VPN_CONFIG_0__ are protected placeholders and every placeholder must "
+    "remain exactly unchanged. Respond ONLY with JSON: "
+    '{"cleaned_text": "<cleaned post>"}'
 )
 
 _MAX_COMPARE_TEXT_CHARS = 800
@@ -317,6 +327,23 @@ class OpenAiCompatibleProvider:
             provider=self.name,
             raw_metrics=dict(metrics),
         )
+
+    async def clean_vpn_post(self, text: str) -> AiTextCleanupResult:
+        """Clean promotional text while preserving protected VPN placeholders."""
+        content = await self._chat(
+            self._classification_model,
+            [
+                {"role": "system", "content": _VPN_CLEANUP_SYSTEM_PROMPT},
+                {"role": "user", "content": text[:6000]},
+            ],
+        )
+        data = self._extract_json(content)
+        cleaned = str(data.get("cleaned_text", "")).strip()
+        if not cleaned:
+            raise AiProviderError(
+                f"{self.name}: invalid VPN cleanup response: {content[:200]}"
+            )
+        return AiTextCleanupResult(text=cleaned, provider=self.name)
 
     async def _chat(self, model: str, messages: list[dict[str, str]]) -> str:
         """

@@ -3,29 +3,38 @@
 Pipeline:
     source identity check -> exact duplicate check -> AI near-duplicate
     check -> AI classification -> VPN config extraction -> MongoDB storage
-    -> required quality-score queue stage -> approval/VPN handoff.
+    -> immediate approval -> independent 20-minute score/VPN enrichment.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.application.ai_service import AiService
 from src.domain.entities import MediaItem, Post, PostSourceMetrics, TextEntity, VpnConfig
-from src.domain.enums import PostCategory, QueueItemType
+from src.domain.enums import (
+    IngestionMode,
+    PostCategory,
+    QualityScoreStatus,
+    QueueItemType,
+)
 from src.domain.interfaces import PostRepository, QueueRepository
 from src.domain.services.text_fingerprint import rank_similar_texts
 from src.domain.services.text_normalizer import content_hash
 from src.domain.services.vpn_parser import extract_vpn_configs
-from src.shared.errors import DuplicateDetectionError, PostClassificationError
+from src.shared.errors import (
+    DuplicateDetectionError,
+    PostClassificationError,
+    VpnTextCleanupError,
+)
 from src.shared.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-QUALITY_SCORE_DELAY_MINUTES = 15
+QUALITY_SCORE_DELAY_MINUTES = 20
 LOCAL_DUPLICATE_SCORE_THRESHOLD = 0.92
 LOCAL_AI_CANDIDATE_LIMIT = 5
 
@@ -48,10 +57,12 @@ class CollectedMessage:
     source_chat_id: int
     message_id: int
     text: str
+    source_label: str = ""
     grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
     text_entities: list[TextEntity] = field(default_factory=list)
     source_metrics: PostSourceMetrics = field(default_factory=PostSourceMetrics)
+    ingestion_mode: IngestionMode = IngestionMode.CONFIGURED_SOURCE
 
 
 class CollectPostUseCase:
@@ -229,6 +240,120 @@ class CollectPostUseCase:
 
         return await self._classify_and_store_new(message, post_hash, text)
 
+    async def handle_vpn_discovery_message(
+        self, message: CollectedMessage
+    ) -> Post | None:
+        """
+        Store and immediately approve a config-bearing message from any dialog.
+
+        The method performs source-message idempotency and config-level exact
+        deduplication before invoking AI only to remove surrounding promotion.
+        Quality scoring is intentionally not required for this ingestion mode.
+        """
+        existing = await self._posts.find_by_source_message(
+            message.source_chat_id, message.message_id, message.grouped_id
+        )
+        if existing is not None:
+            await self._ensure_pipeline_queued(existing)
+            return None
+        configs = extract_vpn_configs(message.text or "")
+        if not configs:
+            return None
+        fingerprint_by_raw = {
+            config.raw: self._vpn_fingerprint(config.raw) for config in configs
+        }
+        seen = await self._posts.find_seen_vpn_fingerprints(
+            list(fingerprint_by_raw.values())
+        )
+        fresh_configs: list[VpnConfig] = []
+        fresh_fingerprints: set[str] = set()
+        for config in configs:
+            fingerprint = fingerprint_by_raw[config.raw]
+            if fingerprint in seen or fingerprint in fresh_fingerprints:
+                continue
+            fresh_fingerprints.add(fingerprint)
+            fresh_configs.append(config)
+        if not fresh_configs:
+            skipped = replace(
+                message,
+                ingestion_mode=IngestionMode.DIALOG_VPN_DISCOVERY,
+            )
+            return await self._store_post(
+                message=skipped,
+                post_hash=content_hash(message.text or "vpn-duplicate"),
+                category=PostCategory.VPN_CONFIG,
+                provider="local_vpn_fingerprint",
+                skipped_reason="duplicate_vpn_configs",
+                is_duplicate=True,
+                duplicate_of=None,
+                duplicate_provider="local_vpn_fingerprint",
+                configs=configs,
+            )
+        cleaned_text, provider = await self._clean_discovery_text(
+            message.text or "", configs, fresh_configs
+        )
+        discovery = replace(
+            message,
+            text=cleaned_text,
+            text_entities=[],
+            ingestion_mode=IngestionMode.DIALOG_VPN_DISCOVERY,
+        )
+        post = await self._store_post(
+            message=discovery,
+            post_hash=content_hash(
+                "\n".join(sorted(config.raw for config in fresh_configs))
+            ),
+            category=PostCategory.VPN_CONFIG,
+            provider=provider,
+            skipped_reason=None,
+            is_duplicate=False,
+            duplicate_of=None,
+            duplicate_provider=None,
+            configs=fresh_configs,
+        )
+        await self._enqueue_pipeline(post)
+        logger.info(
+            "Stored dialog VPN discovery post=%s chat=%s msg=%s configs=%d",
+            post.post_id,
+            message.source_chat_id,
+            message.message_id,
+            len(fresh_configs),
+        )
+        return post
+
+    async def _clean_discovery_text(
+        self,
+        text: str,
+        all_configs: list[VpnConfig],
+        fresh_configs: list[VpnConfig],
+    ) -> tuple[str, str]:
+        """Protect fresh config URIs, clean ad text, and restore exact values."""
+        fresh_raw = {config.raw for config in fresh_configs}
+        protected = text
+        for config in all_configs:
+            if config.raw not in fresh_raw:
+                protected = protected.replace(config.raw, "")
+        placeholders: dict[str, str] = {}
+        for index, config in enumerate(fresh_configs):
+            placeholder = f"__VPN_CONFIG_{index}__"
+            placeholders[placeholder] = config.raw
+            protected = protected.replace(config.raw, placeholder)
+        provider = "fallback_config_only"
+        try:
+            result = await self._ai.clean_vpn_post(protected)
+            if all(placeholder in result.text for placeholder in placeholders):
+                protected = result.text
+                provider = result.provider
+            else:
+                protected = "\n".join(placeholders)
+                logger.warning("VPN cleanup dropped protected placeholders; using fallback")
+        except VpnTextCleanupError as exc:
+            protected = "\n".join(placeholders)
+            logger.warning("VPN cleanup unavailable; using config-only fallback error=%s", exc)
+        for placeholder, raw in placeholders.items():
+            protected = protected.replace(placeholder, raw)
+        return protected.strip(), provider
+
     async def _classify_and_store_new(
         self, message: CollectedMessage, post_hash: str, text: str
     ) -> Post:
@@ -384,7 +509,7 @@ class CollectPostUseCase:
             )
             return post
 
-        await self._enqueue_next_stage(post)
+        await self._enqueue_pipeline(post)
         logger.info(
             "Stored post id=%s chat=%s msg=%s category=%s configs=%d",
             post.post_id,
@@ -437,9 +562,17 @@ class CollectPostUseCase:
             post_id=uuid.uuid4().hex,
             source_chat_id=message.source_chat_id,
             source_message_id=message.message_id,
+            source_label=message.source_label,
             text=(message.text or "").strip(),
             text_entities=list(message.text_entities),
             content_hash=post_hash,
+            ingestion_mode=message.ingestion_mode,
+            quality_score_status=(
+                QualityScoreStatus.NOT_REQUIRED
+                if message.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY
+                else QualityScoreStatus.PENDING
+            ),
+            vpn_fingerprints=[self._vpn_fingerprint(config.raw) for config in configs],
             grouped_id=message.grouped_id,
             media=list(message.media),
             category=category,
@@ -510,56 +643,69 @@ class CollectPostUseCase:
         """
         if post.skipped_reason:
             return False
-        if post.quality_score is None:
-            relevant_types = {QueueItemType.QUALITY_SCORE}
-        else:
-            relevant_types = {
-                QueueItemType.VPN_TEST,
-                QueueItemType.APPROVAL_REQUEST,
-            }
-        if await self._queue.has_active_or_successful_post_item(
-            post.post_id, relevant_types
+        repaired = False
+        if not await self._queue.has_active_or_successful_post_item(
+            post.post_id, {QueueItemType.APPROVAL_REQUEST}
         ):
-            return False
-        await self._enqueue_next_stage(post)
-        return True
+            await self._queue.enqueue(
+                QueueItemType.APPROVAL_REQUEST, {"post_id": post.post_id}
+            )
+            repaired = True
+        if (
+            post.quality_score_status == QualityScoreStatus.PENDING
+            and not await self._queue.has_active_or_successful_post_item(
+                post.post_id,
+                {QueueItemType.QUALITY_SCORE, QueueItemType.QUALITY_SCORE_UPDATE},
+            )
+        ):
+            await self._queue.enqueue(
+                QueueItemType.QUALITY_SCORE_UPDATE,
+                {"post_id": post.post_id},
+                scheduled_at=self._quality_score_due_at(post),
+            )
+            repaired = True
+        if (
+            post.vpn_configs
+            and self._vpn_testing_enabled
+            and not await self._queue.has_active_or_successful_post_item(
+                post.post_id, {QueueItemType.VPN_TEST}
+            )
+        ):
+            await self._queue.enqueue(QueueItemType.VPN_TEST, {"post_id": post.post_id})
+            repaired = True
+        return repaired
 
-    async def _enqueue_next_stage(self, post: Post) -> QueueItemType:
-        """Enqueue the immediate next eligible pipeline step for a stored post."""
-        next_step = self._next_stage(post)
-        scheduled_at = (
-            self._quality_score_due_at(post)
-            if next_step == QueueItemType.QUALITY_SCORE
-            else None
-        )
+    async def _enqueue_pipeline(self, post: Post) -> None:
+        """Enqueue immediate approval and independent background enrichment."""
         await self._queue.enqueue(
-            next_step, {"post_id": post.post_id}, scheduled_at=scheduled_at
+            QueueItemType.APPROVAL_REQUEST, {"post_id": post.post_id}
         )
-        if scheduled_at is None:
-            logger.info("Enqueued %s post=%s", next_step.value, post.post_id)
-        else:
+        logger.info("Enqueued approval_request post=%s", post.post_id)
+        if post.quality_score_status == QualityScoreStatus.PENDING:
+            scheduled_at = self._quality_score_due_at(post)
+            await self._queue.enqueue(
+                QueueItemType.QUALITY_SCORE_UPDATE,
+                {"post_id": post.post_id},
+                scheduled_at=scheduled_at,
+            )
             logger.info(
                 "Enqueued %s post=%s scheduled_at=%s",
-                next_step.value,
+                QueueItemType.QUALITY_SCORE_UPDATE.value,
                 post.post_id,
                 scheduled_at.isoformat(),
             )
-        return next_step
-
-    def _next_stage(self, post: Post) -> QueueItemType:
-        """Return the next queue stage for an eligible stored post."""
-        if post.quality_score is None:
-            return QueueItemType.QUALITY_SCORE
         if post.vpn_configs and self._vpn_testing_enabled:
-            return QueueItemType.VPN_TEST
-        return QueueItemType.APPROVAL_REQUEST
+            await self._queue.enqueue(
+                QueueItemType.VPN_TEST, {"post_id": post.post_id}
+            )
+            logger.info("Enqueued vpn_test post=%s", post.post_id)
 
     @staticmethod
     def _quality_score_due_at(post: Post) -> datetime:
         """
         Return when the post should be scored.
 
-        Posts younger than 15 minutes wait until source engagement metrics
+        Posts younger than 20 minutes wait until source engagement metrics
         have had time to settle. Older backfill posts are scored immediately.
         """
         now = datetime.now(timezone.utc)
@@ -572,3 +718,8 @@ class CollectPostUseCase:
             source_published_at = source_published_at.astimezone(timezone.utc)
         due_at = source_published_at + timedelta(minutes=QUALITY_SCORE_DELAY_MINUTES)
         return max(now, due_at)
+
+    @staticmethod
+    def _vpn_fingerprint(raw: str) -> str:
+        """Return a stable exact fingerprint for one proxy configuration URI."""
+        return content_hash(raw.strip())

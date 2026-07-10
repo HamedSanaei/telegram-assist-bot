@@ -29,6 +29,10 @@ class QualityScoringError(AppError):
     """Raised when quality scoring fails on all configured AI providers."""
 
 
+class VpnTextCleanupError(AppError):
+    """Raised when all AI providers fail to clean a VPN discovery post."""
+
+
 class TelegramPublishError(AppError):
     """Raised when publishing a message to a Telegram channel fails."""
 

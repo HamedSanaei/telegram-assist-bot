@@ -28,6 +28,7 @@ from src.composition import (
 from src.domain.entities import MediaItem, PostSourceMetrics, TextEntity
 from src.domain.enums import MediaKind
 from src.domain.interfaces import ChannelRepository
+from src.domain.services.vpn_parser import extract_vpn_configs
 from src.shared.config import (
     AppConfig,
     load_configuration,
@@ -41,6 +42,8 @@ from src.workers.config_sync import ConfigSyncWorker
 logger = get_logger(__name__)
 
 _RUNTIME_CATCH_UP_MAX_MESSAGES = 300
+_DISCOVERY_REFRESH_SECONDS = 300
+_DISCOVERY_CATCH_UP_MAX_MESSAGES = 100
 
 
 class Collector:
@@ -80,6 +83,8 @@ class Collector:
         self._media_download_timeout_seconds = media_download_timeout_seconds
         self._seen_album_keys: set[tuple[int, int]] = set()
         self._source_chat_ids: set[int] = set()
+        self._discovery_chat_ids: set[int] = set()
+        self._chat_labels: dict[int, str] = {}
         self._timezone_name = "Asia/Tehran"
 
     async def run(
@@ -112,7 +117,9 @@ class Collector:
         self._media_dir.mkdir(parents=True, exist_ok=True)
         resolved = await self._resolve_sources(sources)
         if not resolved:
-            raise AppError("No source channel could be resolved")
+            logger.warning(
+                "No configured source channel resolved; continuing with VPN dialog discovery"
+            )
 
         self._client.add_event_handler(self._on_new_message, events.NewMessage())
         self._client.add_event_handler(self._on_album, events.Album())
@@ -124,6 +131,12 @@ class Collector:
                 startup_backfill_max_messages,
             )
         )
+        discovery_task = asyncio.create_task(
+            self._run_discovery_backfill_safely(
+                startup_backfill_since,
+                startup_backfill_max_messages,
+            )
+        )
         refresh_task = asyncio.create_task(
             self._refresh_sources(
                 source_refresh_seconds,
@@ -131,10 +144,18 @@ class Collector:
                 startup_backfill_max_messages,
             )
         )
+        discovery_refresh_task = asyncio.create_task(
+            self._refresh_discovery_dialogs(startup_backfill_since)
+        )
         try:
             await self._client.run_until_disconnected()
         finally:
-            for task in (backfill_task, refresh_task):
+            for task in (
+                backfill_task,
+                discovery_task,
+                refresh_task,
+                discovery_refresh_task,
+            ):
                 task.cancel()
                 try:
                     await task
@@ -152,6 +173,9 @@ class Collector:
                 username = str(getattr(entity, "username", "") or "")
                 resolved.append(entity)
                 self._source_chat_ids.add(chat_id)
+                self._chat_labels[chat_id] = title or (
+                    f"@{username}" if username else str(chat_id)
+                )
                 if self._channels is not None:
                     await self._channels.upsert_source_details(
                         identifier=str(source),
@@ -292,9 +316,107 @@ class Collector:
         except Exception:
             logger.exception("Collector startup backfill failed")
 
+    async def _run_discovery_backfill_safely(
+        self,
+        since: datetime | None,
+        max_messages_per_dialog: int,
+    ) -> None:
+        """Resolve joined groups/channels and scan today's config posts."""
+        try:
+            entities = await self._resolve_discovery_dialogs()
+            logger.info(
+                "Collector VPN discovery listening on %d non-configured dialogs",
+                len(entities),
+            )
+            await self._backfill_recent_messages(
+                entities,
+                since,
+                max_messages_per_dialog,
+                discovery=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Collector VPN discovery startup backfill failed")
+
+    async def _resolve_discovery_dialogs(self) -> list[object]:
+        """Return joined channels/groups excluding configured sources/destinations."""
+        destination_ids: set[int] = set()
+        if self._channels is not None:
+            destination_ids = {
+                channel.chat_id for channel in await self._channels.list_destinations()
+            }
+        excluded = set(self._source_chat_ids).union(destination_ids)
+        entities: dict[int, object] = {}
+        for archived in (False, True):
+            try:
+                iterator = self._client.iter_dialogs(archived=archived)
+                async for dialog in iterator:
+                    if not (
+                        bool(getattr(dialog, "is_channel", False))
+                        or bool(getattr(dialog, "is_group", False))
+                    ):
+                        continue
+                    entity = getattr(dialog, "entity", None)
+                    if entity is None:
+                        continue
+                    chat_id = get_peer_id(entity)
+                    if chat_id not in excluded:
+                        entities[chat_id] = entity
+                        self._chat_labels[chat_id] = self._entity_title(entity) or str(chat_id)
+            except TypeError:
+                if archived:
+                    continue
+                async for dialog in self._client.iter_dialogs():
+                    if not (
+                        bool(getattr(dialog, "is_channel", False))
+                        or bool(getattr(dialog, "is_group", False))
+                    ):
+                        continue
+                    entity = getattr(dialog, "entity", None)
+                    if entity is None:
+                        continue
+                    chat_id = get_peer_id(entity)
+                    if chat_id not in excluded:
+                        entities[chat_id] = entity
+                        self._chat_labels[chat_id] = self._entity_title(entity) or str(chat_id)
+        self._discovery_chat_ids = set(entities)
+        return list(entities.values())
+
+    async def _refresh_discovery_dialogs(self, since: datetime | None) -> None:
+        """Refresh dialog membership and perform bounded config catch-up scans."""
+        while True:
+            await asyncio.sleep(_DISCOVERY_REFRESH_SECONDS)
+            try:
+                before = set(self._discovery_chat_ids)
+                entities = await self._resolve_discovery_dialogs()
+                new_entities = [
+                    entity for entity in entities if get_peer_id(entity) not in before
+                ]
+                if new_entities:
+                    await self._backfill_recent_messages(
+                        new_entities,
+                        _current_day_start_utc(self._timezone_name),
+                        _RUNTIME_CATCH_UP_MAX_MESSAGES,
+                        discovery=True,
+                    )
+                if since is not None:
+                    await self._backfill_recent_messages(
+                        entities,
+                        _current_day_start_utc(self._timezone_name),
+                        _DISCOVERY_CATCH_UP_MAX_MESSAGES,
+                        discovery=True,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Collector VPN discovery refresh failed")
+
     async def _on_new_message(self, event: events.NewMessage.Event) -> None:
         """Handle one incoming message; errors are logged, never raised."""
-        if event.chat_id not in self._source_chat_ids:
+        is_source = event.chat_id in self._source_chat_ids
+        is_discovery = event.chat_id in self._discovery_chat_ids
+        if not is_source and not is_discovery:
             return
         grouped_id = getattr(event.message, "grouped_id", None)
         if grouped_id is not None:
@@ -305,11 +427,18 @@ class Collector:
                 grouped_id,
             )
             return
-        await self._process_messages(event.chat_id, [event.message], origin="live")
+        await self._process_messages(
+            event.chat_id,
+            [event.message],
+            origin="live" if is_source else "vpn_discovery_live",
+            discovery=is_discovery and not is_source,
+        )
 
     async def _on_album(self, event: events.Album.Event) -> None:
         """Handle a Telegram album as one collected post."""
-        if event.chat_id not in self._source_chat_ids:
+        is_source = event.chat_id in self._source_chat_ids
+        is_discovery = event.chat_id in self._discovery_chat_ids
+        if not is_source and not is_discovery:
             return
         messages = list(event.messages)
         if not messages:
@@ -325,13 +454,19 @@ class Collector:
                 )
                 return
             self._seen_album_keys.add(key)
-        await self._process_messages(event.chat_id, messages, origin="live_album")
+        await self._process_messages(
+            event.chat_id,
+            messages,
+            origin="live_album" if is_source else "vpn_discovery_live_album",
+            discovery=is_discovery and not is_source,
+        )
 
     async def _backfill_recent_messages(
         self,
         entities: list[object],
         since: datetime | None,
         max_messages_per_source: int,
+        discovery: bool = False,
     ) -> None:
         """
         Process today's messages from each source at startup.
@@ -360,6 +495,10 @@ class Collector:
                     message_date = self._message_date(message)
                     if message_date is not None and message_date < since:
                         break
+                    if discovery and not extract_vpn_configs(
+                        self._message_text(message)
+                    ):
+                        continue
                     messages.append(message)
             except Exception:
                 logger.exception(
@@ -394,7 +533,12 @@ class Collector:
                 if grouped_id is not None:
                     self._seen_album_keys.add((chat_id, int(grouped_id)))
                 origin = "backfill_album" if len(group) > 1 else "backfill"
-                await self._process_messages(chat_id, group, origin=origin)
+                await self._process_messages(
+                    chat_id,
+                    group,
+                    origin=(f"vpn_discovery_{origin}" if discovery else origin),
+                    discovery=discovery,
+                )
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -466,7 +610,11 @@ class Collector:
         return result
 
     async def _process_messages(
-        self, chat_id: int, messages: list[object], origin: str
+        self,
+        chat_id: int,
+        messages: list[object],
+        origin: str,
+        discovery: bool = False,
     ) -> None:
         """Normalize one message or album and feed it into the use case."""
         first = messages[0]
@@ -475,6 +623,8 @@ class Collector:
             first,
         )
         text = self._message_text(text_message)
+        if discovery and not extract_vpn_configs(text):
+            return
         photo_count = sum(1 for message in messages if self._media_kind(message) == MediaKind.PHOTO)
         video_count = sum(
             1 for message in messages if self._media_kind(message) == MediaKind.VIDEO
@@ -519,13 +669,17 @@ class Collector:
             collected = CollectedMessage(
                 source_chat_id=chat_id,
                 message_id=first.id,
+                source_label=self._chat_labels.get(chat_id, str(chat_id)),
                 grouped_id=grouped_id_int,
                 text=text,
                 text_entities=self._message_text_entities(text_message),
                 media=media,
                 source_metrics=self._source_metrics(first),
             )
-            await self._use_case.handle_new_message(collected)
+            if discovery:
+                await self._use_case.handle_vpn_discovery_message(collected)
+            else:
+                await self._use_case.handle_new_message(collected)
         except AppError as exc:
             cause = exc.__cause__
             logger.error(

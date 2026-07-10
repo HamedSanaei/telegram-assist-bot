@@ -10,6 +10,7 @@ from src.infrastructure.db.sqlite.migrations import apply_migrations
 from src.infrastructure.db.sqlite.repositories import (
     SqliteAdminRepository,
     SqliteChannelRepository,
+    SqliteRecurringForwardCampaignRepository,
 )
 from src.workers.config_sync import ConfigSyncWorker
 
@@ -51,6 +52,20 @@ def _config(source: str, destination_chat_id: int, admin_id: int) -> dict:
             "mongodb_connection_string": "mongodb://localhost:27017",
             "mongodb_database": "telegram_admin_bot",
         },
+        "scheduler": {
+            "timezone": "Asia/Tehran",
+            "recurring_forward_lookahead_hours": 24,
+            "recurring_forwards": [
+                {
+                    "id": f"campaign_{admin_id}",
+                    "enabled": True,
+                    "source_post_url": "https://t.me/source/123",
+                    "destination_chat_ids": [destination_chat_id],
+                    "show_forward_header": False,
+                    "times": ["09:00", "21:00"],
+                }
+            ],
+        },
     }
 
 
@@ -69,11 +84,13 @@ async def test_runtime_config_sync_is_authoritative(tmp_path: Path) -> None:
     worker = ConfigSyncWorker(db, config_path=config_path)
     channels = SqliteChannelRepository(db)
     admins = SqliteAdminRepository(db)
+    campaigns = SqliteRecurringForwardCampaignRepository(db)
 
     assert await worker.sync_if_changed() is True
     assert await channels.list_sources() == ["@old"]
     assert [c.chat_id for c in await channels.list_destinations()] == [-100]
     assert await admins.list_user_ids() == [1]
+    assert [item.id for item in await campaigns.list_all()] == ["campaign_1"]
 
     _write_config(config_path, _config("@new", -200, 2))
     worker._last_mtime_ns = None
@@ -82,6 +99,7 @@ async def test_runtime_config_sync_is_authoritative(tmp_path: Path) -> None:
     assert await channels.list_sources() == ["@new"]
     assert [c.chat_id for c in await channels.list_destinations()] == [-200]
     assert await admins.list_user_ids() == [2]
+    assert [item.id for item in await campaigns.list_all()] == ["campaign_2"]
     await db.close()
 
 

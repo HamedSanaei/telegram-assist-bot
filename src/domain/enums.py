@@ -18,10 +18,15 @@ class PostCategory(str, Enum):
 
 
 class VpnProtocol(str, Enum):
-    """Supported VPN configuration protocols."""
+    """Supported proxy and VPN configuration protocols."""
 
     VMESS = "vmess"
     VLESS = "vless"
+    SHADOWSOCKS = "ss"
+    SHADOWSOCKS_R = "ssr"
+    TROJAN = "trojan"
+    HYSTERIA2 = "hysteria2"
+    TUIC = "tuic"
 
 
 class VpnTestStatus(str, Enum):
@@ -30,6 +35,7 @@ class VpnTestStatus(str, Enum):
     PENDING = "pending"
     WORKING = "working"
     FAILED = "failed"
+    UNSUPPORTED = "unsupported"
 
 
 class ChannelKind(str, Enum):
@@ -45,6 +51,7 @@ class QueueItemType(str, Enum):
     """Type of a background queue item."""
 
     QUALITY_SCORE = "quality_score"
+    QUALITY_SCORE_UPDATE = "quality_score_update"
     VPN_TEST = "vpn_test"
     APPROVAL_REQUEST = "approval_request"
     SCHEDULED_PUBLISH = "scheduled_publish"
@@ -71,3 +78,19 @@ class MediaKind(str, Enum):
     PHOTO = "photo"
     VIDEO = "video"
     DOCUMENT = "document"
+
+
+class IngestionMode(str, Enum):
+    """Origin pipeline used to ingest a Telegram post."""
+
+    CONFIGURED_SOURCE = "configured_source"
+    DIALOG_VPN_DISCOVERY = "dialog_vpn_discovery"
+
+
+class QualityScoreStatus(str, Enum):
+    """Lifecycle state of advisory quality scoring for one post."""
+
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    SCORED = "scored"
+    UNAVAILABLE = "unavailable"

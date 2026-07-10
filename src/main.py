@@ -19,6 +19,7 @@ from telethon import TelegramClient
 
 from src.application.approval_service import ApprovalService
 from src.application.cleanup_service import CleanupService
+from src.application.management_service import ManagementService
 from src.application.price_service import UsdPriceService
 from src.application.quality_score_service import QualityScoreService
 from src.application.vpn_test_service import VpnTestService
@@ -37,9 +38,11 @@ from src.infrastructure.telegram.telethon_publish import (
     TelethonSourceMetadataRefresher,
 )
 from src.infrastructure.telegram.publisher import AiogramMessagePublisher
+from src.infrastructure.configuration.atomic_editor import AtomicConfigurationEditor
 from src.infrastructure.vpn.worker_client import IranWorkerVpnTester
 from src.presentation.approval_bot.handlers import create_approval_router
 from src.presentation.approval_bot.notifier import AiogramApprovalNotifier
+from src.presentation.approval_bot.panel import create_panel_router
 from src.presentation.approval_bot.propagation import refresh_all_approval_keyboards
 from src.presentation.main_bot.handlers import create_main_router
 from src.shared.config import (
@@ -50,6 +53,7 @@ from src.shared.config import (
 from src.shared.errors import ApprovalStateError
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers.queue_worker import QueueWorker
+from src.workers.recurring_forward import RecurringForwardWorker
 from src.workers.config_sync import ConfigSyncWorker
 from src.workers.scheduler import create_scheduler
 
@@ -131,6 +135,7 @@ async def run(configure_logging: bool = True) -> None:
         approval_bot,
         repos["admins"],
         repos["channels"],
+        approval_messages=repos["approval_messages"],
         timezone_name=config.scheduler.timezone,
     )
 
@@ -161,53 +166,37 @@ async def run(configure_logging: bool = True) -> None:
     )
 
     async def handle_quality_score(item: QueueItem) -> QueueStatus:
-        """Score a post, then queue its next eligible stage."""
+        """Process a legacy score job without losing its approval preview."""
         post_id = str(item.payload["post_id"])
-        next_step = await quality_scores.score_post(post_id)
-        if (
-            next_step == QueueItemType.APPROVAL_REQUEST
-            and await repos["approval_requests"].has_requested(post_id)
-        ):
-            logger.info(
-                "Skipping approval queue; approval already requested post=%s",
-                post_id,
-            )
-            return QueueStatus.COMPLETED
-        await repos["queue"].enqueue(next_step, {"post_id": post_id})
-        logger.info(
-            "Quality score complete post=%s next=%s",
-            post_id,
-            next_step.value,
-        )
+        await approval.request_approval(post_id)
+        await quality_scores.score_post(post_id)
+        updated = await posts.get(post_id)
+        if updated is not None:
+            await notifier.refresh_post(updated)
+        return QueueStatus.COMPLETED
+
+    async def handle_quality_score_update(item: QueueItem) -> QueueStatus:
+        """Refresh metrics, score, and edit existing approval previews."""
+        post_id = str(item.payload["post_id"])
+        await quality_scores.score_post(post_id)
+        updated = await posts.get(post_id)
+        if updated is not None:
+            await notifier.refresh_post(updated)
         return QueueStatus.COMPLETED
 
     async def handle_vpn_test(item: QueueItem) -> QueueStatus:
         """Test a post's configs; queue approval when eligible."""
         post_id = str(item.payload["post_id"])
         eligible = await vpn_tests.test_post_configs(post_id)
-        if not eligible:
-            logger.info("Post not eligible for VPN channels post=%s", post_id)
-            return QueueStatus.SKIPPED
-        if await repos["approval_requests"].has_requested(post_id):
-            logger.info(
-                "Skipping approval queue; approval already requested post=%s",
-                post_id,
-            )
-            return QueueStatus.COMPLETED
-        await repos["queue"].enqueue(QueueItemType.APPROVAL_REQUEST, {"post_id": post_id})
+        updated = await posts.get(post_id)
+        if updated is not None:
+            await notifier.refresh_post(updated)
+        logger.info("Background VPN test complete post=%s eligible=%s", post_id, eligible)
         return QueueStatus.COMPLETED
 
     async def handle_approval_request(item: QueueItem) -> QueueStatus:
         """Send the approval message for a post to all admins."""
         post_id = str(item.payload["post_id"])
-        post = await posts.get(post_id)
-        if post is not None and post.quality_score is None:
-            await repos["queue"].enqueue(QueueItemType.QUALITY_SCORE, {"post_id": post_id})
-            logger.warning(
-                "Approval request repaired to quality_score first post=%s",
-                post_id,
-            )
-            return QueueStatus.SKIPPED
         await approval.request_approval(post_id)
         return QueueStatus.WAITING_APPROVAL
 
@@ -229,6 +218,7 @@ async def run(configure_logging: bool = True) -> None:
         queue=repos["queue"],
         handlers={
             QueueItemType.QUALITY_SCORE: handle_quality_score,
+            QueueItemType.QUALITY_SCORE_UPDATE: handle_quality_score_update,
             QueueItemType.VPN_TEST: handle_vpn_test,
             QueueItemType.APPROVAL_REQUEST: handle_approval_request,
             QueueItemType.SCHEDULED_PUBLISH: handle_scheduled_publish,
@@ -253,10 +243,21 @@ async def run(configure_logging: bool = True) -> None:
         await refresh_all_approval_keyboards(approval_bot, approval)
 
     config_sync = ConfigSyncWorker(db, on_applied=refresh_tracked_approval_messages)
+    management = ManagementService(
+        repos["channels"],
+        AtomicConfigurationEditor(),
+        repos["recurring_campaigns"],
+    )
+    recurring_forwards = RecurringForwardWorker(
+        repos["recurring_forwards"], destination_publisher
+    )
 
     approval_dispatcher = Dispatcher()
     approval_dispatcher.include_router(
         create_approval_router(approval, timezone_name=config.scheduler.timezone)
+    )
+    approval_dispatcher.include_router(
+        create_panel_router(management, repos["admins"])
     )
     main_dispatcher = Dispatcher()
     main_dispatcher.include_router(
@@ -272,10 +273,12 @@ async def run(configure_logging: bool = True) -> None:
             main_dispatcher.start_polling(publisher_bot),
             worker.run(),
             config_sync.run(),
+            recurring_forwards.run(),
         )
     finally:
         worker.stop()
         config_sync.stop()
+        recurring_forwards.stop()
         scheduler.shutdown(wait=False)
         await publisher_bot.session.close()
         await approval_bot.session.close()

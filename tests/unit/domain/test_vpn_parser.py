@@ -120,3 +120,29 @@ class TestExtractVpnConfigs:
 
     def test_no_configs_in_plain_news(self) -> None:
         assert extract_vpn_configs("خبر فوری: قیمت دلار افزایش یافت") == []
+
+    def test_extracts_common_proxy_protocols(self) -> None:
+        """Discovery recognizes SS, SSR, Trojan, Hysteria2, and TUIC."""
+        ss_credentials = base64.urlsafe_b64encode(b"aes-256-gcm:secret").decode().rstrip("=")
+        ss = f"ss://{ss_credentials}@ss.example.com:8388#server"
+        ssr_payload = "ssr.example.com:443:origin:aes-256-cfb:plain:" + base64.urlsafe_b64encode(b"secret").decode().rstrip("=")
+        ssr = "ssr://" + base64.urlsafe_b64encode(ssr_payload.encode()).decode().rstrip("=")
+        text = "\n".join(
+            [
+                ss,
+                ssr,
+                "trojan://password@trojan.example.com:443?security=tls",
+                "hy2://password@hy.example.com:443?sni=example.com",
+                "tuic://uuid:password@tuic.example.com:443?congestion_control=bbr",
+            ]
+        )
+
+        protocols = {config.protocol for config in extract_vpn_configs(text)}
+
+        assert protocols == {
+            VpnProtocol.SHADOWSOCKS,
+            VpnProtocol.SHADOWSOCKS_R,
+            VpnProtocol.TROJAN,
+            VpnProtocol.HYSTERIA2,
+            VpnProtocol.TUIC,
+        }

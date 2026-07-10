@@ -62,6 +62,8 @@ Edit `config/configuration.json` (UTF-8, never committed):
 | `vpn_testing.worker_api_token` | Shared secret for the worker API |
 | `vpn_testing.xray_binary_path` | xray path on the Iran server |
 | `scheduler.usd_price_publish_times` | e.g. `["09:00", "21:00"]` (in `scheduler.timezone`) |
+| `scheduler.recurring_forward_lookahead_hours` | Rolling native Telegram schedule horizon for recurring campaigns (default `24`) |
+| `scheduler.recurring_forwards` | Daily campaign objects with `id`, `enabled`, `source_post_url`, `destination_chat_ids`, `show_forward_header`, and Tehran `times` in `HH:MM` format |
 | `usd_price.provider` | `"nobitex"` (default; free-market USDT rate from the public Nobitex API, no key needed, published in Toman) or `"http_json"` for a custom endpoint |
 | `usd_price.source_url` / `price_json_path` | Only for `provider: "http_json"`: JSON endpoint and dotted path of the USD price value |
 | `logging.color_console` | Colorize console logs: AI provider/model usage in green, AI provider failures in orange, and application errors in red. File logs stay plain UTF-8. Each process start also creates `logs/YYYYMMDD-HHMMSS-<entrypoint>.log` beside the stable configured log file. |
@@ -125,10 +127,10 @@ python -m src.main
 ```
 
 This single process runs the approval bot (long polling), the SQLite queue
-worker (quality scoring, VPN test dispatch, and approval dispatch), the
+worker (background quality updates, VPN test dispatch, and approval dispatch), the
 Telethon destination/scheduler user session for approved channel publishing
-and native channel scheduling, and the scheduler (USD price publishing and
-daily cleanup). It also polls the main management bot
+and native channel scheduling, the recurring-forward reconciler, and the
+scheduler (USD price publishing and daily cleanup). It also polls the main management bot
 (`telegram.bot_token`) for admin commands.
 
 ### Managing Channels with the Management Bot
@@ -150,13 +152,25 @@ admins listed in `telegram.admin_user_ids`:
 | `/setinterval <chat_id> <minutes>` | Shortcut for the scheduling interval |
 
 `configuration.json` is hot-reloaded while the app is running for
-`source_channels`, `destination_channels`, and `admin_user_ids`. Those
-lists are authoritative: adding a channel/admin to the file enables it
-without a restart, and removing one disables/removes it from runtime
-SQLite state. Secrets, AI providers, database paths, Telegram sessions,
-scheduler phone, and price settings still require a restart. Runtime edits
-made with bot commands are overwritten by the next config reload unless
-the same change is also written to `configuration.json`.
+`source_channels`, `destination_channels`, `admin_user_ids`, and
+`scheduler.recurring_forwards`. Those lists are authoritative: adding an
+item to the file activates it without a restart, and removing one disables
+or removes it from runtime SQLite state. Secrets, AI providers, database
+paths, Telegram sessions, scheduler phone, and price settings still require
+a restart. Runtime edits made with legacy bot commands are overwritten by
+the next config reload unless the same change is also written to
+`configuration.json`.
+
+The approval bot also exposes `/panel`. Its callback menus manage source
+channels, destination channels, and recurring campaigns. Panel changes are
+written atomically to the UTF-8 JSON file and immediately mirrored to
+SQLite, so they survive hot reload and do not require a restart. Use
+`/cancel` to leave an unfinished panel wizard.
+
+Recurring definitions are normalized into
+`recurring_forward_campaigns`, `recurring_forward_campaign_times`, and
+`recurring_forward_campaign_destinations`; actual Telegram schedule state
+is tracked separately in the occurrence/message tables.
 
 ### Running the Approval Bot
 
@@ -176,6 +190,19 @@ deletes the real published message from the destination channel. A second
 tap on `✅ اسکجول` removes the native Telegram scheduled message. If
 Telegram refuses deletion because of permissions or a missing message id,
 the state stays active and the bot shows an error alert.
+
+Posts are delivered to the approval bot immediately after duplicate,
+advertisement, and relevance analysis. The initial italic header shows
+`⭐ امتیاز: در انتظار آمار ۲۰ دقیقه‌ای`. At 20 minutes after the source
+publish time, a background queue item refreshes views, forwards, replies,
+and reactions, calculates the 0-to-100 score, and edits the same approval
+message for every admin. It never sends a second approval preview. Older
+same-day backfill posts are approved first and scored immediately afterward.
+
+When a post has any publish/schedule history, a prominent single button is
+rendered above destination actions. Tapping it shows the recorded channel
+states (`published`, `scheduled`, or `removed`). This state is shared across
+admins and refreshes after every toggle.
 
 When multiple admins receive the same approval post, the bot stores every
 approval message id. If one admin publishes or schedules a post, keyboards
@@ -223,7 +250,7 @@ busy channel cannot delay all other channels' same-day posts. The normal
 exact-hash and AI deduplication prevents restarts, cross-channel reposts,
 and already processed posts from being stored twice. If a same-day post was
 already stored in MongoDB but never reached an active/successful
-`quality_score`, `vpn_test`, or `approval_request` queue item, the backfill
+`quality_score_update`, `vpn_test`, or `approval_request` queue item, the backfill
 requeues the missing next stage instead of hiding it as a duplicate. Stored source messages are
 checked before media download, so restarts do not download the same photo
 or video again when MongoDB already has the media. If an older bug or
@@ -235,6 +262,19 @@ source; increase it for very high-volume channels or set it to `0` only
 when you want a strict live-only listener.
 If one source fails while reading history, the collector logs that source
 failure and continues backfilling the remaining sources.
+
+In parallel, the collector enumerates every joined Telegram channel and
+group, including archived/muted dialogs, except configured source and
+destination chats. It prefilters today's messages locally for `vmess`,
+`vless`, `ss`, `ssr`, `trojan`, `hysteria2`/`hy2`, and `tuic` URIs before
+media download or AI usage. Each source message and each exact config URI
+is persisted idempotently, so the same config forwarded through another
+chat is not proposed again. AI removes promotional/referral text while
+protected placeholders guarantee the original config URIs are restored
+unchanged; if AI fails, only the config URIs are kept. These discovery posts
+go immediately to approval without quality scoring and show only VPN
+destination buttons. Publishing is allowed before Iran testing; currently
+only `vmess`/`vless` are testable and other protocols are marked unsupported.
 
 While running, the collector reloads the source channel list from SQLite
 every `telegram.source_refresh_seconds` seconds. Sources added with the
@@ -272,6 +312,15 @@ The scheduler runs inside `src.main`. Times are configured in the
 `scheduler` section (`Asia/Tehran` by default). The USD price job uses
 the source selected by `usd_price.provider` — with the default
 `"nobitex"` no further price configuration is required.
+
+The recurring-forward worker also runs inside `src.main`. It loads campaign
+changes without restart and fills the next configured lookahead window in
+Telegram's native channel schedule. `show_forward_header: true` performs a
+real forward; `false` copies text/media/albums without `Forwarded from`.
+Occurrence identity is stored in SQLite, preventing duplicate schedules
+after restart. Disabling, deleting, or changing a campaign removes obsolete
+future native scheduled messages. Missed past times are intentionally not
+sent as catch-up advertisements.
 
 ## Running Tests
 
@@ -431,7 +480,8 @@ the Telethon session file exists.
   | `AI-pruned advertisement ...` | AI judged the source post to be promotional; it is stored with `skipped_reason=advertisement` and is not sent to approval |
   | `Classification unavailable; storing for manual approval ...` | Every enabled AI provider failed classification; post is still stored for admin review |
   | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
-  | `Enqueued quality_score post=... scheduled_at=...` | The post is waiting for the required 0-100 quality score. Fresh posts wait until 15 minutes after source publish time; older backfill posts are due immediately |
+  | `Enqueued approval_request post=...` | The valid post was queued for immediate admin preview |
+  | `Enqueued quality_score_update post=... scheduled_at=...` | The already-approved post will have its metrics and score refreshed 20 minutes after source publication |
   | `Quality scored post=... score=.../100 provider=...` | Required AI quality score was stored in MongoDB and the post can continue to VPN testing or approval |
   | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued after quality scoring for approval or VPN testing |
   | `Repaired stored source post post=... chat=... msg=...` | Backfill found a post that was stored before but never reached quality scoring/approval/VPN flow, so it repaired the missing pipeline stage |

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from src.application.ai_service import AiService
 from src.domain.entities import Post, PostQualityScore
-from src.domain.enums import QueueItemType
+from src.domain.enums import QualityScoreStatus, QueueItemType
 from src.domain.interfaces import PostRepository, SourceMetadataRefresher
 from src.shared.errors import ApprovalStateError, QualityScoringError
 from src.shared.logging_setup import get_logger
@@ -39,7 +39,7 @@ class QualityScoreService:
             posts: Post repository.
             ai: AI service used for quality scoring.
             metadata_refresher: Optional Telegram adapter used to refresh
-                source views/forwards/reactions after the 15-minute delay.
+                source views/forwards/reactions after the 20-minute delay.
             vpn_testing_enabled: Whether VPN config posts should continue to
                 the Iran worker after scoring.
         """
@@ -77,6 +77,7 @@ class QualityScoreService:
                 scored_at=scored_at,
                 metrics=result.raw_metrics,
             )
+            post.quality_score_status = QualityScoreStatus.SCORED
             logger.info(
                 "Quality scored post=%s score=%.1f/100 provider=%s",
                 post_id,
@@ -84,15 +85,10 @@ class QualityScoreService:
                 result.provider,
             )
         except QualityScoringError as exc:
-            post.quality_score = PostQualityScore(
-                score=50.0,
-                reason="امتیازدهی هوش مصنوعی در دسترس نبود",
-                provider="unavailable",
-                scored_at=scored_at,
-                metrics=metrics,
-            )
+            post.quality_score = None
+            post.quality_score_status = QualityScoreStatus.UNAVAILABLE
             logger.error(
-                "Quality scoring unavailable; using fallback post=%s error=%s",
+                "Quality scoring unavailable post=%s error=%s",
                 post_id,
                 exc,
             )

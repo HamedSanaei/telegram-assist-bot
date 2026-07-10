@@ -7,7 +7,7 @@ import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.domain.entities import DestinationChannel, MediaItem
+from src.domain.entities import ApprovalMessageRef, DestinationChannel, MediaItem
 from src.domain.entities import Post, PostQualityScore
 from src.domain.entities import PostSourceMetrics
 from src.domain.enums import MediaKind, PostCategory
@@ -32,7 +32,7 @@ class FailingApprovalNotifier(AiogramApprovalNotifier):
 
     async def _send_preview(
         self, admin_id: int, post: Post, text: str, keyboard: object
-    ) -> int:
+    ) -> tuple[int, str]:
         """Raise as if Telegram refused the approval message."""
         raise RuntimeError("bot was blocked")
 
@@ -42,9 +42,9 @@ class SuccessfulApprovalNotifier(AiogramApprovalNotifier):
 
     async def _send_preview(
         self, admin_id: int, post: Post, text: str, keyboard: object
-    ) -> int:
+    ) -> tuple[int, str]:
         """Return a deterministic fake message id."""
-        return admin_id + 1000
+        return admin_id + 1000, "text"
 
 
 class FakeMessage:
@@ -72,6 +72,34 @@ class VideoFailingBot:
         """Return a successful document preview message."""
         self.document_calls += 1
         return FakeMessage(777)
+
+
+class PreviewEditBot:
+    """Bot fake recording approval preview text/caption edits."""
+
+    def __init__(self) -> None:
+        self.text_edits: list[dict[str, object]] = []
+        self.caption_edits: list[dict[str, object]] = []
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        self.text_edits.append(kwargs)
+
+    async def edit_message_caption(self, **kwargs: object) -> None:
+        self.caption_edits.append(kwargs)
+
+
+class FakeApprovalMessageRepository:
+    """Minimal active approval-message repository for edit tests."""
+
+    def __init__(self, refs: list[ApprovalMessageRef]) -> None:
+        self.refs = refs
+        self.deactivated: list[int] = []
+
+    async def list_active(self, post_id: str) -> list[ApprovalMessageRef]:
+        return [ref for ref in self.refs if ref.post_id == post_id and ref.active]
+
+    async def deactivate(self, message_ref_id: int) -> None:
+        self.deactivated.append(message_ref_id)
 
 
 class TestApprovalPreview:
@@ -201,3 +229,38 @@ class TestApprovalPreview:
         assert refs[0].message_id == 777
         assert bot.video_calls == 1
         assert bot.document_calls == 1
+
+    async def test_score_refresh_edits_existing_admin_preview(self) -> None:
+        """Background scoring updates the tracked message instead of resending."""
+        post = Post(
+            post_id="p1",
+            source_chat_id=-100,
+            source_message_id=1,
+            text="خبر",
+            content_hash="hash",
+            quality_score=PostQualityScore(
+                score=88,
+                reason="تعامل مناسب",
+                provider="groq",
+            ),
+        )
+        refs = [
+            ApprovalMessageRef(
+                id=1,
+                post_id="p1",
+                admin_user_id=42,
+                chat_id=42,
+                message_id=100,
+                preview_kind="text",
+            )
+        ]
+        bot = PreviewEditBot()
+        notifier = AiogramApprovalNotifier(
+            bot=bot,
+            admins=FakeAdminRepository([42]),
+            approval_messages=FakeApprovalMessageRepository(refs),
+        )
+
+        assert await notifier.refresh_post(post) == 1
+        assert "88/100" in str(bot.text_edits[0]["text"])
+        assert bot.caption_edits == []

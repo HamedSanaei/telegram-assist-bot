@@ -14,6 +14,7 @@ from src.domain.interfaces import (
     AiClassificationResult,
     AiPostAnalysisResult,
     AiProvider,
+    AiTextCleanupResult,
     DuplicateCheckResult,
     QualityScoreResult,
 )
@@ -23,6 +24,7 @@ from src.shared.errors import (
     InvalidPostError,
     PostClassificationError,
     QualityScoringError,
+    VpnTextCleanupError,
 )
 from src.shared.logging_setup import get_logger
 
@@ -212,6 +214,26 @@ class AiService:
                     extra={"event_kind": "ai_error"},
                 )
         raise QualityScoringError(str(last_error)) from last_error
+
+    async def clean_vpn_post(self, text: str) -> AiTextCleanupResult:
+        """Clean one protected VPN discovery post through the provider chain."""
+        last_error: AiProviderError | None = None
+        providers = self._available_providers()
+        if not providers:
+            raise VpnTextCleanupError("All AI providers are in cooldown")
+        for provider in providers:
+            try:
+                return await provider.clean_vpn_post(text)
+            except AiProviderError as exc:
+                last_error = exc
+                self._cool_down_if_exhausted(provider, exc)
+                logger.warning(
+                    "VPN text cleanup failed on provider=%s error=%s",
+                    provider.name,
+                    exc,
+                    extra={"event_kind": "ai_error"},
+                )
+        raise VpnTextCleanupError(str(last_error)) from last_error
 
     def _available_providers(self) -> list[AiProvider]:
         """
