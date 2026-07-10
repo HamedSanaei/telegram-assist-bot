@@ -405,9 +405,14 @@ class FakeApprovalMessageRepository:
             if ref.id in self.deactivated or not ref.active
         ][:limit]
 
-    async def list_active_post_ids(self) -> list[str]:
-        """Return post ids with active refs."""
-        return sorted({ref.post_id for ref in await self.list_active_refs()})
+    async def list_active_post_ids(self, limit: int | None = None) -> list[str]:
+        """Return newest post ids with active refs."""
+        post_ids = list(
+            dict.fromkeys(
+                ref.post_id for ref in reversed(await self.list_active_refs())
+            )
+        )
+        return post_ids if limit is None else post_ids[: max(1, limit)]
 
     async def deactivate_admins_except(self, admin_user_ids: set[int]) -> int:
         """Deactivate refs belonging to removed admins."""

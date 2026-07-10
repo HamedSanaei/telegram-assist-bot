@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+import sqlite3
 from typing import Any, Iterable
 
 import aiosqlite
 
 from src.shared.errors import RepositoryError
+
+_BUSY_TIMEOUT_SECONDS = 10.0
+_BUSY_RETRY_DELAYS = (0.05, 0.25)
 
 
 class Database:
@@ -48,12 +53,19 @@ class Database:
         if self._path != ":memory:":
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._conn = await aiosqlite.connect(self._path)
+            self._conn = await aiosqlite.connect(
+                self._path,
+                timeout=_BUSY_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             raise RepositoryError(f"Cannot open SQLite database: {exc}") from exc
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.execute("PRAGMA journal_mode = WAL")
+        await self._conn.execute(
+            f"PRAGMA busy_timeout = {int(_BUSY_TIMEOUT_SECONDS * 1000)}"
+        )
+        await self._conn.execute("PRAGMA synchronous = NORMAL")
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -73,29 +85,77 @@ class Database:
         Returns:
             ``lastrowid`` of the executed statement (0 when not applicable).
         """
-        cursor = await self.connection.execute(sql, params)
-        await self.connection.commit()
-        return cursor.lastrowid or 0
+        for attempt in range(len(_BUSY_RETRY_DELAYS) + 1):
+            try:
+                cursor = await self.connection.execute(sql, params)
+                await self.connection.commit()
+                return cursor.lastrowid or 0
+            except sqlite3.OperationalError as exc:
+                await self._handle_busy_error(exc, attempt)
+        raise RepositoryError("SQLite execute retry loop ended unexpectedly")
 
     async def executescript(self, script: str) -> None:
         """Execute a multi-statement SQL script and commit."""
-        await self.connection.executescript(script)
-        await self.connection.commit()
+        for attempt in range(len(_BUSY_RETRY_DELAYS) + 1):
+            try:
+                await self.connection.executescript(script)
+                await self.connection.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                await self._handle_busy_error(exc, attempt)
+        raise RepositoryError("SQLite script retry loop ended unexpectedly")
 
     async def fetchone(
         self, sql: str, params: Iterable[Any] | dict[str, Any] = ()
     ) -> aiosqlite.Row | None:
         """Execute a query, commit, and return the first row or ``None``."""
-        cursor = await self.connection.execute(sql, params)
-        row = await cursor.fetchone()
-        await self.connection.commit()
-        return row
+        for attempt in range(len(_BUSY_RETRY_DELAYS) + 1):
+            try:
+                cursor = await self.connection.execute(sql, params)
+                row = await cursor.fetchone()
+                await self.connection.commit()
+                return row
+            except sqlite3.OperationalError as exc:
+                await self._handle_busy_error(exc, attempt)
+        raise RepositoryError("SQLite fetch-one retry loop ended unexpectedly")
 
     async def fetchall(
         self, sql: str, params: Iterable[Any] | dict[str, Any] = ()
     ) -> list[aiosqlite.Row]:
         """Execute a query, commit, and return all rows."""
-        cursor = await self.connection.execute(sql, params)
-        rows = await cursor.fetchall()
-        await self.connection.commit()
-        return list(rows)
+        for attempt in range(len(_BUSY_RETRY_DELAYS) + 1):
+            try:
+                cursor = await self.connection.execute(sql, params)
+                rows = await cursor.fetchall()
+                await self.connection.commit()
+                return list(rows)
+            except sqlite3.OperationalError as exc:
+                await self._handle_busy_error(exc, attempt)
+        raise RepositoryError("SQLite fetch-all retry loop ended unexpectedly")
+
+    async def _handle_busy_error(
+        self, exc: sqlite3.OperationalError, attempt: int
+    ) -> None:
+        """
+        Roll back and delay a retry for transient SQLite lock contention.
+
+        Args:
+            exc: SQLite operational error raised by the attempted operation.
+            attempt: Zero-based retry attempt index.
+
+        Raises:
+            sqlite3.OperationalError: The error is not lock contention.
+            RepositoryError: Lock contention remains after all retries.
+        """
+        message = str(exc).lower()
+        if "database is locked" not in message and "database is busy" not in message:
+            raise exc
+        try:
+            await self.connection.rollback()
+        except Exception:
+            pass
+        if attempt >= len(_BUSY_RETRY_DELAYS):
+            raise RepositoryError(
+                f"SQLite remained locked after retries: {exc}"
+            ) from exc
+        await asyncio.sleep(_BUSY_RETRY_DELAYS[attempt])

@@ -315,7 +315,12 @@ async def _run_application(config: AppConfig) -> None:
     )
     async def refresh_tracked_approval_messages() -> None:
         """Refresh approval keyboards after runtime channel/admin config changes."""
-        await refresh_all_approval_keyboards(approval_bot, approval)
+        await refresh_all_approval_keyboards(
+            approval_bot,
+            approval,
+            max_posts=25,
+            delay_seconds=1.05,
+        )
 
     config_sync = ConfigSyncWorker(db, on_applied=refresh_tracked_approval_messages)
     management = ManagementService(
@@ -342,7 +347,10 @@ async def _run_application(config: AppConfig) -> None:
     async def repair_recent_previews_in_background() -> None:
         """Repair existing approval keyboards without delaying bot startup."""
         try:
-            await approval.repair_recent_approval_previews(delay_seconds=0.15)
+            await approval.repair_recent_approval_previews(
+                limit=40,
+                delay_seconds=1.05,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -351,14 +359,13 @@ async def _run_application(config: AppConfig) -> None:
     scheduler.start()
     logger.info("Main application started")
     try:
-        await asyncio.gather(
-            approval_dispatcher.start_polling(approval_bot),
-            main_dispatcher.start_polling(publisher_bot),
-            worker.run(),
-            config_sync.run(),
-            recurring_forwards.run(),
-            repair_recent_previews_in_background(),
-        )
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(approval_dispatcher.start_polling(approval_bot))
+            tasks.create_task(main_dispatcher.start_polling(publisher_bot))
+            tasks.create_task(worker.run())
+            tasks.create_task(config_sync.run())
+            tasks.create_task(recurring_forwards.run())
+            tasks.create_task(repair_recent_previews_in_background())
     finally:
         worker.stop()
         config_sync.stop()

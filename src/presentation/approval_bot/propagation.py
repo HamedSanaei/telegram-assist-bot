@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import Bot
+from aiogram.exceptions import TelegramRetryAfter
 
 from src.application.approval_service import ApprovalService
 from src.presentation.approval_bot.keyboards import MODE_IMMEDIATE, build_channel_keyboard
@@ -33,6 +36,7 @@ def _is_permanent_message_error(exc: Exception) -> bool:
             "message not found",
             "message to edit not found",
             "message_id_invalid",
+            "message can't be edited",
             "chat not found",
             "bot was blocked",
             "user is deactivated",
@@ -92,6 +96,15 @@ async def refresh_approval_keyboards(
                     ref.id,
                 )
                 continue
+            if isinstance(exc, TelegramRetryAfter):
+                logger.warning(
+                    "Approval keyboard batch rate-limited post=%s chat=%s "
+                    "retry_after=%ss; stopping batch",
+                    post_id,
+                    ref.chat_id,
+                    exc.retry_after,
+                )
+                raise
             logger.warning(
                 "Approval keyboard refresh failed post=%s chat=%s message=%s "
                 "ref=%s error=%s",
@@ -106,20 +119,33 @@ async def refresh_approval_keyboards(
     return refreshed
 
 
-async def refresh_all_approval_keyboards(bot: Bot, approval: ApprovalService) -> int:
+async def refresh_all_approval_keyboards(
+    bot: Bot,
+    approval: ApprovalService,
+    max_posts: int = 25,
+    delay_seconds: float = 1.05,
+) -> int:
     """
     Refresh every active approval message known to SQLite.
 
     Args:
         bot: Approval bot used to edit messages.
         approval: Approval service exposing tracked approval post ids.
+        max_posts: Maximum newest posts refreshed in one config reload.
+        delay_seconds: Throttle between posts to protect per-admin limits.
 
     Returns:
         Total number of messages successfully edited.
     """
     total = 0
-    for post_id in await approval.active_approval_post_ids():
-        total += await refresh_approval_keyboards(bot, approval, post_id)
+    post_ids = await approval.active_approval_post_ids(max_posts)
+    for index, post_id in enumerate(post_ids):
+        try:
+            total += await refresh_approval_keyboards(bot, approval, post_id)
+        except TelegramRetryAfter:
+            break
+        if delay_seconds > 0 and index + 1 < len(post_ids):
+            await asyncio.sleep(delay_seconds)
     if total:
         logger.info("Refreshed approval keyboards count=%d", total)
     return total

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -159,6 +160,31 @@ class TestMigrations:
             ("current", "text"),
             ("legacy", "unknown"),
         ]
+
+
+async def test_sqlite_connections_wait_for_short_writer_contention(tmp_path) -> None:
+    """Concurrent main/collector connections wait instead of crashing."""
+    path = tmp_path / "contended.db"
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    await first.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT)")
+    await first.connection.execute("BEGIN IMMEDIATE")
+    await first.connection.execute("INSERT INTO events(value) VALUES ('first')")
+
+    blocked_write = asyncio.create_task(
+        second.execute("INSERT INTO events(value) VALUES ('second')")
+    )
+    await asyncio.sleep(0.05)
+    assert blocked_write.done() is False
+    await first.connection.commit()
+    await asyncio.wait_for(blocked_write, timeout=2)
+
+    rows = await second.fetchall("SELECT value FROM events ORDER BY id")
+    assert [row["value"] for row in rows] == ["first", "second"]
+    await second.close()
+    await first.close()
 
 
 class TestQueueRepository:

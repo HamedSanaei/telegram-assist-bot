@@ -524,6 +524,7 @@ class AiogramApprovalNotifier:
                 "message to edit not found",
                 "message not found",
                 "message_id_invalid",
+                "message can't be edited",
                 "chat not found",
                 "bot was blocked",
                 "user is deactivated",

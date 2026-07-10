@@ -120,7 +120,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
 
 ## Infrastructure Layer
 
-- `db/sqlite/connection.py` — `Database` wrapper over aiosqlite (WAL mode).
+- `db/sqlite/connection.py` — `Database` wrapper over aiosqlite (WAL mode),
+  with a busy timeout, rollback, and bounded retries for concurrent
+  main/collector write contention.
 - `db/sqlite/migrations.py` — versioned migrations in `MIGRATIONS`,
   tracked in `schema_migrations`; applied on every startup.
 - `db/sqlite/repositories.py` — `SqliteChannelRepository` (destination
@@ -198,7 +200,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
   after publish/schedule callbacks and runtime config reloads. Telegram's
   harmless `message is not modified` response is treated as a successful
   no-op; stale or deleted approval messages are marked inactive instead of
-  failing callbacks.
+  failing callbacks. Config reload refresh is limited to the 25 newest posts,
+  throttled per post, and stops immediately on Telegram RetryAfter.
 - `approval_bot/panel.py` — admin-only `/panel` callback UI with paged
   source/destination lists and recurring campaign add/edit/toggle/delete
   wizards. Every action revalidates the admin id.
@@ -216,7 +219,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
   dispatches by `QueueItemType` (`source_metrics_refresh`,
   `quality_score_update`, legacy `quality_score`, `vpn_test`,
   `approval_request`, legacy `scheduled_publish`), retries with linear backoff up to `max_attempts`,
-  then marks failed. Safe to restart at any time.
+  then marks failed. Transient queue claim/persistence errors are logged and
+  retried without crashing main. Safe to restart at any time.
   Native scheduled approval actions upload immediately to Telegram's own
   channel schedule at a slot five minutes after the latest scheduled or
   published post for that destination.
@@ -228,7 +232,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `config_sync.py` — watches `configuration.json` mtime and hot-reloads
   only runtime-safe lists (`source_channels`, `destination_channels`,
   `admin_user_ids`) into SQLite. Invalid/half-written config files are
-  logged and ignored.
+  logged and ignored. Startup only baselines the already-applied config and
+  does not trigger a bulk Telegram refresh. In all-in-one mode the main app
+  is the sole config writer; collector reads refreshed sources from SQLite.
 - `collector.py` — Telethon-based listener on source channels; stores
   resolved source titles/usernames, downloads photos/videos/documents to
   `storage.media_directory`, and feeds `CollectPostUseCase`. On
@@ -269,7 +275,9 @@ build/             GENERATED PyInstaller work files (git-ignored).
   under `supervise()` which restarts a crashed component after a delay and
   permanently stops (only) a component whose configuration is invalid.
   Before either component starts, it atomically acquires both distributed
-  runtime leases; a second instance exits without polling or backfill.
+  runtime leases; a second instance exits without polling or backfill. Main
+  service tasks use structured cancellation, so a crashed queue worker cannot
+  leave old aiogram pollers alive before supervisor restart.
 - `iran_vpn_worker.py` — FastAPI app on the Iran server. `POST /api/test`
   (bearer token) receives `{"raw": "<vmess|vless URI>"}` and returns
   `{"working", "latency_ms", "error"}`. `GET /api/health` is a liveness probe.
@@ -431,6 +439,12 @@ can only be built on Windows; `--skip-exe` builds the Ubuntu bundle only.
 10. Update `deploy/*.service` if execution commands changed.
 
 ## Last Updated
+
+2026-07-10 — Fixed restart-created duplicate aiogram pollers, SQLite lock
+crashes, and config-reload Telegram floods. Main tasks now cancel as one
+group before supervisor restart, SQLite waits/retries transient contention,
+queue claim errors no longer kill main, initial config sync skips UI refresh,
+and bulk keyboard repair is bounded, throttled, and RetryAfter-aware.
 
 2026-07-10 — Added Mongo-backed distributed runtime leases for bot polling
 and collector ownership. Startup now refuses a second instance before

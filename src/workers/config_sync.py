@@ -71,6 +71,8 @@ class ConfigSyncWorker:
             SQLite state.
         """
         logger.info("Runtime config sync watching path=%s", self._path)
+        if self._last_mtime_ns is None:
+            self._remember_current_mtime()
         while not self._stop_event.is_set():
             try:
                 await self.sync_if_changed()
@@ -85,9 +87,14 @@ class ConfigSyncWorker:
             except asyncio.TimeoutError:
                 pass
 
-    async def sync_if_changed(self) -> bool:
+    async def sync_if_changed(self, invoke_callback: bool = True) -> bool:
         """
         Apply a config reload when the file mtime changed.
+
+        Args:
+            invoke_callback: Whether to invoke the expensive post-apply UI
+                callback. Startup baselining applies current config without
+                refreshing every historical approval keyboard.
 
         Returns:
             ``True`` when a new valid config was applied, otherwise ``False``.
@@ -110,10 +117,20 @@ class ConfigSyncWorker:
             return False
         await sync_config_to_sqlite(config, self._db)
         self._last_mtime_ns = stat.st_mtime_ns
-        if self._on_applied is not None:
+        if invoke_callback and self._on_applied is not None:
             try:
                 await self._on_applied()
             except Exception:
                 logger.exception("Runtime config reload callback failed")
         logger.info("Runtime config reload applied path=%s", self._path)
         return True
+
+    def _remember_current_mtime(self) -> None:
+        """Baseline the already-applied startup config without rewriting SQLite."""
+        try:
+            self._last_mtime_ns = self._path.stat().st_mtime_ns
+        except FileNotFoundError:
+            logger.error(
+                "Runtime config baseline skipped; file not found path=%s",
+                self._path,
+            )

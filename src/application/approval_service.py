@@ -175,11 +175,11 @@ class ApprovalService:
             return []
         return await self._approval_messages.list_active(post_id)
 
-    async def active_approval_post_ids(self) -> list[str]:
-        """Return post ids that still have active approval-bot messages."""
+    async def active_approval_post_ids(self, limit: int | None = None) -> list[str]:
+        """Return newest post ids that still have active approval messages."""
         if self._approval_messages is None:
             return []
-        return await self._approval_messages.list_active_post_ids()
+        return await self._approval_messages.list_active_post_ids(limit)
 
     async def approval_view_state(
         self, post_id: str

@@ -763,14 +763,19 @@ class SqliteApprovalMessageRepository:
         )
         return [self._row_to_ref(row) for row in rows]
 
-    async def list_active_post_ids(self) -> list[str]:
-        """Return post ids that have active approval messages."""
+    async def list_active_post_ids(self, limit: int | None = None) -> list[str]:
+        """Return newest post ids that have active approval messages."""
+        limit_clause = "" if limit is None else "LIMIT ?"
+        params = () if limit is None else (max(1, limit),)
         rows = await self._db.fetchall(
-            """
-            SELECT DISTINCT post_id FROM approval_messages
+            f"""
+            SELECT post_id FROM approval_messages
             WHERE active = 1
-            ORDER BY post_id
-            """
+            GROUP BY post_id
+            ORDER BY MAX(updated_at) DESC, MAX(id) DESC
+            {limit_clause}
+            """,
+            params,
         )
         return [row["post_id"] for row in rows]
 

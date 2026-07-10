@@ -926,7 +926,7 @@ async def run(
     if runtime_lease is not None:
         if not runtime_lease.is_acquired:
             raise RuntimeError("Externally managed collector lease is not acquired")
-        await _run_collector_application(config)
+        await _run_collector_application(config, enable_config_sync=False)
         return
 
     lease_client, lease_repository = create_runtime_lease_store(config)
@@ -946,12 +946,17 @@ async def run(
         lease_client.close()
 
 
-async def _run_collector_application(config: AppConfig) -> None:
+async def _run_collector_application(
+    config: AppConfig,
+    enable_config_sync: bool = True,
+) -> None:
     """
     Build and run collector dependencies after lease acquisition.
 
     Args:
         config: Validated application configuration.
+        enable_config_sync: Whether this process owns config-to-SQLite
+            synchronization. ``src.run_all`` leaves this to the main app.
     """
 
     db = await create_sqlite(config)
@@ -996,8 +1001,10 @@ async def _run_collector_application(config: AppConfig) -> None:
         repos["queue"],
         {QueueItemType.SOURCE_METRICS_REFRESH: handle_source_metrics},
     )
-    config_sync = ConfigSyncWorker(db)
-    config_sync_task = asyncio.create_task(config_sync.run())
+    config_sync = ConfigSyncWorker(db) if enable_config_sync else None
+    config_sync_task = (
+        asyncio.create_task(config_sync.run()) if config_sync is not None else None
+    )
     startup_backfill_since = _current_day_start_utc(config.scheduler.timezone)
     initial_sources = _ordered_unique_sources(
         list(config.telegram.source_channels),
@@ -1024,12 +1031,14 @@ async def _run_collector_application(config: AppConfig) -> None:
                 await metrics_task
             except asyncio.CancelledError:
                 pass
-        config_sync.stop()
-        config_sync_task.cancel()
-        try:
-            await config_sync_task
-        except asyncio.CancelledError:
-            pass
+        if config_sync is not None:
+            config_sync.stop()
+        if config_sync_task is not None:
+            config_sync_task.cancel()
+            try:
+                await config_sync_task
+            except asyncio.CancelledError:
+                pass
         await client.disconnect()
         mongo_client.close()
         await db.close()

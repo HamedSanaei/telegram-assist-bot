@@ -72,26 +72,40 @@ class QueueWorker:
         """
         logger.info("Queue worker started handlers=%s", list(self._handlers))
         while not self._stopped.is_set():
-            item = await self._queue.claim_next_due(
-                datetime.now(timezone.utc), set(self._handlers)
-            )
-            if item is None:
-                try:
-                    await asyncio.wait_for(
-                        self._stopped.wait(), timeout=self._poll_interval
-                    )
-                except asyncio.TimeoutError:
-                    pass
+            try:
+                item = await self._queue.claim_next_due(
+                    datetime.now(timezone.utc), set(self._handlers)
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Queue claim failed; retrying error=%s", exc)
+                await self._wait_or_stop(self._poll_interval)
                 continue
-            await self.process_item(item)
+            if item is None:
+                await self._wait_or_stop(self._poll_interval)
+                continue
+            try:
+                await self.process_item(item)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Queue state persistence failed id=%s type=%s error=%s",
+                    item.id,
+                    item.type,
+                    exc,
+                )
             if self._processed_item_delay > 0:
-                try:
-                    await asyncio.wait_for(
-                        self._stopped.wait(), timeout=self._processed_item_delay
-                    )
-                except asyncio.TimeoutError:
-                    pass
+                await self._wait_or_stop(self._processed_item_delay)
         logger.info("Queue worker stopped")
+
+    async def _wait_or_stop(self, timeout: float) -> None:
+        """Wait for worker stop or a bounded polling delay."""
+        try:
+            await asyncio.wait_for(self._stopped.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
 
     async def process_item(self, item: QueueItem) -> None:
         """

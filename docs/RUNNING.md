@@ -234,7 +234,7 @@ create a duplicate preview. Missing approval-message refs remain untouched
 and are never recreated automatically.
 
 Recent inactive approval references are repaired only after polling and the
-queue worker have started. This background pass edits at most 500 references
+queue worker have started. This background pass edits at most 40 references
 from the last 24 hours with a short throttle and never sends a new approval.
 SQLite migration 12 marks pre-migration preview references as `unknown`;
 the notifier then detects whether Telegram expects message text or a media
@@ -575,6 +575,17 @@ the Telethon session file exists.
     renewed safely or another owner replaced the lease. The component stops
     to prevent duplicate Telegram polling; restore MongoDB connectivity and
     start one instance again.
+  - `Queue claim failed; retrying error=SQLite remained locked ...` — main
+    and collector briefly contended for SQLite. Connections wait and retry,
+    and the queue worker stays alive instead of restarting bot polling.
+  - `Approval keyboard batch rate-limited ... stopping batch` — Telegram
+    requested a pause. Bulk config refresh stops immediately instead of
+    sending more edits. Each reload updates at most the 25 newest approval
+    posts with a per-post delay.
+  - Repeated `TelegramConflictError` immediately after `Component 'main-app'
+    crashed` indicated stale polling tasks in older builds. Main tasks now
+    use structured cancellation, so both bot pollers stop before supervisor
+    starts a replacement main application.
   - `Source race resolved using stored winner ...` — live/backfill or another
     collector process reached the same source message concurrently. Mongo's
     unique identity selected one winner without creating duplicate approval.

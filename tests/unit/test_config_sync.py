@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -119,4 +120,31 @@ async def test_runtime_config_sync_ignores_invalid_json(tmp_path: Path) -> None:
 
     assert await worker.sync_if_changed() is False
     assert await channels.list_sources() == ["@stable"]
+    await db.close()
+
+
+async def test_initial_config_baseline_does_not_invoke_callback(tmp_path: Path) -> None:
+    """Startup sync must not refresh every historical approval keyboard."""
+    db = Database(tmp_path / "app.db")
+    await db.connect()
+    await apply_migrations(db)
+    config_path = tmp_path / "configuration.json"
+    _write_config(config_path, _config("@stable", -100, 1))
+    callback_calls = 0
+
+    async def callback() -> None:
+        """Record expensive post-apply callback invocation."""
+        nonlocal callback_calls
+        callback_calls += 1
+
+    worker = ConfigSyncWorker(db, config_path=config_path, on_applied=callback)
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.05)
+    worker.stop()
+    await asyncio.wait_for(task, timeout=1)
+    assert callback_calls == 0
+    worker._last_mtime_ns = None
+    assert await worker.sync_if_changed() is True
+    assert callback_calls == 1
     await db.close()

@@ -516,8 +516,8 @@ class ApprovalMessageRepository(Protocol):
         """Return recently inactive messages for best-effort repair."""
         ...
 
-    async def list_active_post_ids(self) -> list[str]:
-        """Return post ids that still have active approval messages."""
+    async def list_active_post_ids(self, limit: int | None = None) -> list[str]:
+        """Return newest post ids that still have active approval messages."""
         ...
 
     async def deactivate_admins_except(self, admin_user_ids: set[int]) -> int:
