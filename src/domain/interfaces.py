@@ -13,6 +13,7 @@ from typing import Protocol
 from src.domain.entities import (
     AdminUser,
     ApprovalMessageRef,
+    ApprovalPreviewRefreshResult,
     DestinationChannel,
     DollarPrice,
     Post,
@@ -172,6 +173,10 @@ class PostRepository(Protocol):
         """Insert or replace a post document."""
         ...
 
+    async def insert_if_absent(self, post: Post) -> bool:
+        """Atomically insert a post; return false on source-identity conflict."""
+        ...
+
     async def get(self, post_id: str) -> Post | None:
         """Return a post by internal id, or ``None`` when absent/expired."""
         ...
@@ -215,7 +220,19 @@ class QueueRepository(Protocol):
         """Insert a new pending queue item and return its id."""
         ...
 
-    async def claim_next_due(self, now: datetime) -> QueueItem | None:
+    async def enqueue_if_missing_post_item(
+        self,
+        item_type: QueueItemType,
+        post_id: str,
+        payload: dict[str, object],
+        scheduled_at: datetime | None = None,
+    ) -> int | None:
+        """Atomically enqueue unless an active/successful post job exists."""
+        ...
+
+    async def claim_next_due(
+        self, now: datetime, allowed_types: set[QueueItemType] | None = None
+    ) -> QueueItem | None:
         """
         Atomically claim the next due pending item.
 
@@ -485,6 +502,16 @@ class ApprovalMessageRepository(Protocol):
         """Mark an approval message as inactive after edit failure."""
         ...
 
+    async def activate(self, message_ref_id: int) -> None:
+        """Reactivate an approval message after successful repair."""
+        ...
+
+    async def list_recent_inactive(
+        self, updated_since: datetime, limit: int = 500
+    ) -> list[ApprovalMessageRef]:
+        """Return recently inactive messages for best-effort repair."""
+        ...
+
     async def list_active_post_ids(self) -> list[str]:
         """Return post ids that still have active approval messages."""
         ...
@@ -612,14 +639,6 @@ class SourceMetadataRefresher(Protocol):
         ...
 
 
-class ApprovalPreviewUpdater(Protocol):
-    """Port for editing already-delivered approval preview headers."""
-
-    async def refresh_post(self, post: Post) -> int:
-        """Edit all active approval previews for a post; return update count."""
-        ...
-
-
 class RecurringForwardOccurrenceRepository(Protocol):
     """Persistence port for recurring native Telegram schedule occurrences."""
 
@@ -673,6 +692,18 @@ class ApprovalNotifier(Protocol):
         self, post: Post, channels: list[DestinationChannel]
     ) -> list[ApprovalMessageRef]:
         """Send approval messages and return delivered message references."""
+        ...
+
+    async def refresh_approval_request(
+        self,
+        post: Post,
+        channels: list[DestinationChannel],
+        published_chat_ids: set[int],
+        scheduled_chat_ids: set[int],
+        has_delivery_history: bool,
+        refs: list[ApprovalMessageRef] | None = None,
+    ) -> ApprovalPreviewRefreshResult:
+        """Edit tracked previews while preserving current callback buttons."""
         ...
 
 

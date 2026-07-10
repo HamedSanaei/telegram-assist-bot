@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from src.application.ai_service import AiService
 from src.application.quality_score_service import QualityScoreService
@@ -10,7 +10,6 @@ from src.domain.entities import Post, PostSourceMetrics
 from src.domain.enums import PostCategory, QualityScoreStatus, QueueItemType
 from tests.unit.application.fakes import (
     FakeAiProvider,
-    FakeMetadataRefresher,
     FakePostRepository,
 )
 
@@ -83,7 +82,7 @@ class TestQualityScoreService:
         assert posts.posts["p1"].quality_score is None
         assert posts.posts["p1"].quality_score_status == QualityScoreStatus.UNAVAILABLE
 
-    async def test_refreshes_metrics_before_scoring(self) -> None:
+    async def test_existing_score_is_not_recomputed_during_preview_retry(self) -> None:
         posts = FakePostRepository()
         await posts.save(
             Post(
@@ -92,22 +91,17 @@ class TestQualityScoreService:
                 source_message_id=10,
                 text="خبر",
                 content_hash="hash",
-                source_metrics=PostSourceMetrics(views=1),
+                source_metrics=PostSourceMetrics(views=200),
             )
         )
-        refreshed = PostSourceMetrics(
-            views=200,
-            forwards=12,
-            source_published_at=datetime.now(timezone.utc),
-        )
-        refresher = FakeMetadataRefresher(refreshed)
+        provider = FakeAiProvider(name="groq", score=82)
         service = QualityScoreService(
             posts,
-            AiService(FakeAiProvider(name="groq", score=82)),
-            metadata_refresher=refresher,
+            AiService(provider),
         )
 
         await service.score_post("p1")
+        await service.score_post("p1")
 
-        assert refresher.calls == [(-100, 10)]
+        assert provider.score_calls == 1
         assert posts.posts["p1"].quality_score.metrics["views"] == 200

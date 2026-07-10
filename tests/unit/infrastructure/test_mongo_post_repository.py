@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from pymongo.errors import DuplicateKeyError
+
 from src.domain.entities import Post, TextEntity
 from src.domain.enums import PostCategory
 from src.infrastructure.db.mongo.post_repository import MongoPostRepository
@@ -29,6 +31,17 @@ class FakeCollection:
         self, query: dict[str, Any], doc: dict[str, Any], upsert: bool = False
     ) -> FakeReplaceResult:
         """Store the replacement document by ``_id``."""
+        self.docs[str(doc["_id"])] = dict(doc)
+        return FakeReplaceResult()
+
+    async def insert_one(self, doc: dict[str, Any]) -> FakeReplaceResult:
+        """Store a newly inserted document by id."""
+        for existing in self.docs.values():
+            if all(
+                existing.get(key) == doc.get(key)
+                for key in ("source_chat_id", "source_message_id", "grouped_id")
+            ):
+                raise DuplicateKeyError("duplicate source identity")
         self.docs[str(doc["_id"])] = dict(doc)
         return FakeReplaceResult()
 
@@ -120,3 +133,26 @@ class TestMongoPostRepository:
 
         assert loaded is not None
         assert loaded.text_entities == post.text_entities
+
+    async def test_insert_if_absent_treats_source_race_as_benign(self) -> None:
+        """Only one post wins a concurrent source-identity insert."""
+        database = FakeDatabase()
+        repo = MongoPostRepository(database)  # type: ignore[arg-type]
+        first = Post(
+            post_id="p1",
+            source_chat_id=-100,
+            source_message_id=55,
+            text="خبر",
+            content_hash="hash",
+        )
+        second = Post(
+            post_id="p2",
+            source_chat_id=-100,
+            source_message_id=55,
+            text="خبر",
+            content_hash="hash",
+        )
+
+        assert await repo.insert_if_absent(first) is True
+        assert await repo.insert_if_absent(second) is False
+        assert await repo.find_by_source_message(-100, 55, None) is not None

@@ -52,6 +52,7 @@ class QueueItemType(str, Enum):
 
     QUALITY_SCORE = "quality_score"
     QUALITY_SCORE_UPDATE = "quality_score_update"
+    SOURCE_METRICS_REFRESH = "source_metrics_refresh"
     VPN_TEST = "vpn_test"
     APPROVAL_REQUEST = "approval_request"
     SCHEDULED_PUBLISH = "scheduled_publish"
@@ -80,6 +81,14 @@ class MediaKind(str, Enum):
     DOCUMENT = "document"
 
 
+class MediaDownloadStatus(str, Enum):
+    """Download completeness for one collected Telegram post."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class IngestionMode(str, Enum):
     """Origin pipeline used to ingest a Telegram post."""
 
@@ -93,4 +102,13 @@ class QualityScoreStatus(str, Enum):
     NOT_REQUIRED = "not_required"
     PENDING = "pending"
     SCORED = "scored"
+    UNAVAILABLE = "unavailable"
+
+
+class SourceMetricsStatus(str, Enum):
+    """Lifecycle state of delayed Telegram source-metric refresh."""
+
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    REFRESHED = "refreshed"
     UNAVAILABLE = "unavailable"

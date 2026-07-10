@@ -10,6 +10,7 @@ from src.application.channel_mention_rewriter import (
 )
 from src.domain.entities import (
     ApprovalMessageRef,
+    ApprovalPreviewRefreshResult,
     DestinationChannel,
     Post,
     PublishLogEntry,
@@ -133,13 +134,7 @@ class ApprovalService:
                     post_id,
                 )
                 return
-        channels = await self._channels.list_destinations()
-        if post.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY:
-            channels = [channel for channel in channels if channel.kind == ChannelKind.VPN]
-            if not channels:
-                raise ApprovalStateError(
-                    "No enabled VPN destination exists for dialog discovery post"
-                )
+        channels = await self._channels_for_post(post)
         try:
             message_refs = await self._notifier.send_approval_request(post, channels)
         except Exception as exc:
@@ -191,6 +186,74 @@ class ApprovalService:
             return []
         return await self._approval_messages.list_active_post_ids()
 
+    async def approval_view_state(
+        self, post_id: str
+    ) -> tuple[Post, list[DestinationChannel], set[int], set[int], list[PublishLogEntry]]:
+        """Return the complete current state needed to render an approval UI."""
+        post = await self._get_post(post_id)
+        return (
+            post,
+            await self._channels_for_post(post),
+            await self._publish_log.published_channels(post_id),
+            await self._publish_log.scheduled_channels(post_id),
+            await self._publish_log.list_history(post_id),
+        )
+
+    async def refresh_approval_previews(
+        self,
+        post_id: str,
+        refs: list[ApprovalMessageRef] | None = None,
+    ) -> ApprovalPreviewRefreshResult:
+        """Refresh existing previews without creating any new Telegram message."""
+        if self._notifier is None:
+            return ApprovalPreviewRefreshResult()
+        post, channels, published, scheduled, history = await self.approval_view_state(
+            post_id
+        )
+        return await self._notifier.refresh_approval_request(
+            post,
+            channels,
+            published,
+            scheduled,
+            bool(history),
+            refs,
+        )
+
+    async def repair_recent_approval_previews(
+        self, hours: int = 24, limit: int = 500
+    ) -> ApprovalPreviewRefreshResult:
+        """Best-effort repair recent inactive refs without resending approvals."""
+        if self._approval_messages is None or self._notifier is None:
+            return ApprovalPreviewRefreshResult()
+        since = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+        grouped: dict[str, list[ApprovalMessageRef]] = {}
+        for ref in await self._approval_messages.list_recent_inactive(since, limit):
+            grouped.setdefault(ref.post_id, []).append(ref)
+        totals = ApprovalPreviewRefreshResult()
+        for post_id, refs in grouped.items():
+            try:
+                result = await self.refresh_approval_previews(post_id, refs)
+            except ApprovalStateError:
+                continue
+            totals = ApprovalPreviewRefreshResult(
+                updated=totals.updated + result.updated,
+                retryable_failures=(
+                    totals.retryable_failures + result.retryable_failures
+                ),
+                permanent_failures=(
+                    totals.permanent_failures + result.permanent_failures
+                ),
+            )
+        if grouped:
+            logger.info(
+                "Approval preview startup repair refs=%d updated=%d retryable=%d permanent=%d",
+                sum(len(refs) for refs in grouped.values()),
+                totals.updated,
+                totals.retryable_failures,
+                totals.permanent_failures,
+            )
+        return totals
+
     async def set_approval_message_mode(
         self, post_id: str, chat_id: int, message_id: int, delivery_mode: str
     ) -> None:
@@ -223,6 +286,20 @@ class ApprovalService:
     async def list_channels(self) -> list[DestinationChannel]:
         """Return all enabled destination channels for keyboard building."""
         return await self._channels.list_destinations()
+
+    async def _channels_for_post(self, post: Post) -> list[DestinationChannel]:
+        """Return enabled destinations allowed for one post ingestion mode."""
+        channels = await self._channels.list_destinations()
+        if post.ingestion_mode != IngestionMode.DIALOG_VPN_DISCOVERY:
+            return channels
+        vpn_channels = [
+            channel for channel in channels if channel.kind == ChannelKind.VPN
+        ]
+        if not vpn_channels:
+            raise ApprovalStateError(
+                "No enabled VPN destination exists for dialog discovery post"
+            )
+        return vpn_channels
 
     async def published_channels(self, post_id: str) -> set[int]:
         """Return chat ids the post has already been published to."""

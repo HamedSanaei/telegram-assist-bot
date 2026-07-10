@@ -13,11 +13,13 @@ from decimal import Decimal
 from src.domain.enums import (
     ChannelKind,
     IngestionMode,
+    MediaDownloadStatus,
     MediaKind,
     PostCategory,
     QualityScoreStatus,
     QueueItemType,
     QueueStatus,
+    SourceMetricsStatus,
     VpnProtocol,
     VpnTestStatus,
 )
@@ -166,10 +168,13 @@ class Post:
     source_label: str = ""
     ingestion_mode: IngestionMode = IngestionMode.CONFIGURED_SOURCE
     quality_score_status: QualityScoreStatus = QualityScoreStatus.PENDING
+    source_metrics_status: SourceMetricsStatus = SourceMetricsStatus.PENDING
     vpn_fingerprints: list[str] = field(default_factory=list)
     text_entities: list[TextEntity] = field(default_factory=list)
     grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
+    expected_media_count: int = 0
+    media_download_status: MediaDownloadStatus = MediaDownloadStatus.COMPLETE
     category: PostCategory | None = None
     ai_provider: str | None = None
     is_duplicate: bool = False
@@ -321,6 +326,15 @@ class ApprovalMessageRef:
     preview_kind: str = "text"
     active: bool = True
     id: int | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalPreviewRefreshResult:
+    """Outcome of editing tracked approval previews in place."""
+
+    updated: int = 0
+    retryable_failures: int = 0
+    permanent_failures: int = 0
 
 
 @dataclass(frozen=True)

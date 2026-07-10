@@ -72,7 +72,9 @@ class QueueWorker:
         """
         logger.info("Queue worker started handlers=%s", list(self._handlers))
         while not self._stopped.is_set():
-            item = await self._queue.claim_next_due(datetime.now(timezone.utc))
+            item = await self._queue.claim_next_due(
+                datetime.now(timezone.utc), set(self._handlers)
+            )
             if item is None:
                 try:
                     await asyncio.wait_for(

@@ -12,7 +12,12 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import FSInputFile
 
-from src.domain.entities import ApprovalMessageRef, DestinationChannel, Post
+from src.domain.entities import (
+    ApprovalMessageRef,
+    ApprovalPreviewRefreshResult,
+    DestinationChannel,
+    Post,
+)
 from src.domain.enums import MediaKind, PostCategory, QualityScoreStatus
 from src.domain.interfaces import (
     AdminRepository,
@@ -116,6 +121,30 @@ def _first_existing_media(post: Post) -> tuple[MediaKind, Path] | None:
     return None
 
 
+def _build_caption_text(
+    post: Post,
+    source_label: str | None,
+    timezone_name: str,
+) -> str:
+    """Build valid HTML that always fits Telegram's caption limit."""
+    low, high = 0, 500
+    best = build_preview_text(post, source_label, timezone_name, body_limit=0)
+    while low <= high:
+        body_limit = (low + high) // 2
+        candidate = build_preview_text(
+            post,
+            source_label,
+            timezone_name,
+            body_limit=body_limit,
+        )
+        if len(candidate) <= _CAPTION_LIMIT:
+            best = candidate
+            low = body_limit + 1
+        else:
+            high = body_limit - 1
+    return best
+
+
 class AiogramApprovalNotifier:
     """
     Sends approval request messages with channel buttons to every
@@ -173,12 +202,6 @@ class AiogramApprovalNotifier:
             post,
             await self._source_label(post),
             timezone_name=self._timezone_name,
-        )
-        caption_text = build_preview_text(
-            post,
-            await self._source_label(post),
-            timezone_name=self._timezone_name,
-            body_limit=500,
         )
         keyboard = build_channel_keyboard(post.post_id, channels, published_chat_ids=set())
         success_count = 0
@@ -275,7 +298,15 @@ class AiogramApprovalNotifier:
         )
         return self._message_id(sent), "text"
 
-    async def refresh_post(self, post: Post) -> int:
+    async def refresh_approval_request(
+        self,
+        post: Post,
+        channels: list[DestinationChannel],
+        published_chat_ids: set[int],
+        scheduled_chat_ids: set[int],
+        has_delivery_history: bool,
+        refs: list[ApprovalMessageRef] | None = None,
+    ) -> ApprovalPreviewRefreshResult:
         """
         Edit all active approval preview headers after background enrichment.
 
@@ -283,17 +314,34 @@ class AiogramApprovalNotifier:
             post: Updated MongoDB post.
 
         Returns:
-            Number of previews updated or already current.
+            Counts of updated, retryable-failed, and permanently failed refs.
         """
         if self._approval_messages is None:
-            return 0
+            return ApprovalPreviewRefreshResult()
         text = build_preview_text(
             post,
             await self._source_label(post),
             timezone_name=self._timezone_name,
         )
+        caption_text = _build_caption_text(
+            post,
+            await self._source_label(post),
+            self._timezone_name,
+        )
+        keyboard = build_channel_keyboard(
+            post.post_id,
+            channels,
+            published_chat_ids,
+            scheduled_chat_ids,
+            has_delivery_history=has_delivery_history,
+        )
         updated = 0
-        for ref in await self._approval_messages.list_active(post.post_id):
+        retryable_failures = 0
+        permanent_failures = 0
+        target_refs = refs
+        if target_refs is None:
+            target_refs = await self._approval_messages.list_active(post.post_id)
+        for ref in target_refs:
             try:
                 if ref.preview_kind == "caption":
                     await self._bot.edit_message_caption(
@@ -301,6 +349,7 @@ class AiogramApprovalNotifier:
                         message_id=ref.message_id,
                         caption=caption_text,
                         parse_mode="HTML",
+                        reply_markup=keyboard,
                     )
                 else:
                     await self._bot.edit_message_text(
@@ -308,11 +357,16 @@ class AiogramApprovalNotifier:
                         message_id=ref.message_id,
                         text=text,
                         parse_mode="HTML",
+                        reply_markup=keyboard,
                     )
                 updated += 1
+                if not ref.active and ref.id is not None:
+                    await self._approval_messages.activate(ref.id)
             except Exception as exc:
                 if "message is not modified" in str(exc).lower():
                     updated += 1
+                    if not ref.active and ref.id is not None:
+                        await self._approval_messages.activate(ref.id)
                     continue
                 logger.warning(
                     "Approval preview update failed post=%s chat=%s message=%s error=%s",
@@ -321,11 +375,48 @@ class AiogramApprovalNotifier:
                     ref.message_id,
                     exc,
                 )
-                if ref.id is not None:
+                permanent = self._is_permanent_edit_error(exc)
+                if permanent:
+                    permanent_failures += 1
+                else:
+                    retryable_failures += 1
+                if permanent and ref.active and ref.id is not None:
                     await self._approval_messages.deactivate(ref.id)
         if updated:
             logger.info("Approval previews updated post=%s count=%d", post.post_id, updated)
-        return updated
+        return ApprovalPreviewRefreshResult(
+            updated=updated,
+            retryable_failures=retryable_failures,
+            permanent_failures=permanent_failures,
+        )
+
+    async def refresh_post(self, post: Post) -> int:
+        """Backward-compatible refresh helper for older callers and tests."""
+        channels = await self._channels.list_destinations() if self._channels else []
+        result = await self.refresh_approval_request(
+            post,
+            channels,
+            set(),
+            set(),
+            False,
+        )
+        return result.updated
+
+    @staticmethod
+    def _is_permanent_edit_error(exc: Exception) -> bool:
+        """Return whether Telegram says the tracked message is permanently gone."""
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "message to edit not found",
+                "message not found",
+                "message_id_invalid",
+                "chat not found",
+                "bot was blocked",
+                "user is deactivated",
+            )
+        )
 
     @staticmethod
     def _message_id(message: object) -> int:

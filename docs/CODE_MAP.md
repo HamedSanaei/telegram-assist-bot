@@ -85,15 +85,19 @@ build/             GENERATED PyInstaller work files (git-ignored).
   identity repair → exact hash dedup → local fuzzy duplicate filtering →
   combined AI classification/ad pruning with at most five local duplicate
   candidates → VPN config extraction → store with 14-day expiry and source
-  metrics → enqueue immediate `approval_request`, independent
-  `quality_score_update` at source time +20 minutes, and optional VPN test.
+  metrics → enqueue immediate `approval_request`, collector-owned
+  `source_metrics_refresh` at source time +20 minutes, and optional VPN test.
+  Source-identity inserts are atomic, so a live/backfill race reuses the
+  stored winner without duplicate AI, queue, or approval work.
   Duplicate, advertisement, and
   irrelevant posts are stored with `skipped_reason` so restarts do not keep
   redownloading or reprocessing them.
-- `quality_score_service.py` — background advisory scoring stage. It refreshes
-  Telegram source metrics when possible, asks AI for a 0-to-100 repost
-  score/status in MongoDB, then the notifier edits existing approval
-  previews without gating or resending them.
+- `source_metrics_service.py` — collector-side delayed metrics refresh using
+  the source-reading Telethon session; it hands refreshed or stored metrics
+  to the main quality queue.
+- `quality_score_service.py` — idempotent background advisory scoring stage.
+  It asks AI for a 0-to-100 score and the approval service edits existing
+  previews with their current keyboards, without gating or resending them.
 - `management_service.py` — application boundary for approval-bot panel
   edits, persisting live channels and recurring campaign configuration.
 - `vpn_test_service.py` — `VpnTestService`: tests each config via the
@@ -118,7 +122,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `db/sqlite/repositories.py` — `SqliteChannelRepository` (destination
   channels plus resolved source-channel labels), `SqliteAdminRepository`,
   `SqliteQueueRepository` (atomic claim via conditional
-  `UPDATE ... RETURNING`), `SqliteApprovalRequestRepository`,
+  `UPDATE ... RETURNING` with per-worker type filtering),
+  `SqliteApprovalRequestRepository`,
   `SqliteApprovalMessageRepository`, `SqlitePublishLogRepository`,
   `SqliteRecurringForwardOccurrenceRepository`, `SqlitePriceHistoryRepository`.
 - `configuration/atomic_editor.py` — locked UTF-8 JSON updates through a
@@ -126,6 +131,8 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `db/mongo/post_repository.py` — `MongoPostRepository` (Motor); TTL index
   on `expires_at`, lookup index on `content_hash`, and unique source
   identity index on `source_chat_id + source_message_id + grouped_id`.
+  `insert_if_absent` converts cross-process identity races into a benign
+  stored-winner result.
 - `ai/openai_compatible.py` — shared OpenAI-compatible chat-completions
   client with strict JSON prompts for combined analysis (classification,
   duplicate, advertisement), classification, duplicate checks, and
@@ -146,7 +153,7 @@ build/             GENERATED PyInstaller work files (git-ignored).
   `formatting_entities`. It also deletes immediate/scheduled messages for
   approval toggles. It reconnects the user session before MTProto requests
   and retries once after transient disconnects. `TelethonSourceMetadataRefresher`
-  refreshes views/forwards/replies/reactions before quality scoring using
+  refreshes views/forwards/replies/reactions from the collector process using
   the same reconnect guard. The destination adapter also copies or forwards
   source-post URLs into native Telegram schedules for recurring campaigns.
 - `vpn/worker_client.py` — `IranWorkerVpnTester`: HTTP client for the Iran
@@ -166,14 +173,17 @@ build/             GENERATED PyInstaller work files (git-ignored).
 - `approval_bot/handlers.py` — `create_approval_router(approval_service,
   timezone_name)`: direct `apv:pub:<post_id>:<chat_id>` and
   `apv:sch:<post_id>:<chat_id>` callbacks without confirmation. Every
-  callback validates admin, post, channel, and current publish state, then
+  callback is acknowledged before slow Telegram uploads, validates admin,
+  post, channel, and current publish state, then
   refreshes all admins' keyboards best-effort.
 - `approval_bot/notifier.py` — `AiogramApprovalNotifier`: sends the Persian
   preview with a readable source-channel label, required 0-to-100 quality-score
   header, the first downloaded photo/video/document when present, and
   keyboard to every configured admin; returns the message id that owns each
   inline keyboard, obeys Telegram retry-after responses, and retries video
-  previews as documents when Bot API rejects `send_video`.
+  previews as documents when Bot API rejects `send_video`. Score/VPN refresh
+  edits always include the current inline keyboard; transient failures retry
+  without deactivating the tracked message.
 - `approval_bot/propagation.py` — best-effort keyboard refresh helpers used
   after publish/schedule callbacks and runtime config reloads. Telegram's
   harmless `message is not modified` response is treated as a successful
@@ -191,8 +201,10 @@ build/             GENERATED PyInstaller work files (git-ignored).
 
 ## Workers
 
-- `queue_worker.py` — `QueueWorker`: polls SQLite queue, claims atomically,
-  dispatches by `QueueItemType` (`quality_score_update`, legacy `quality_score`, `vpn_test`,
+- `queue_worker.py` — `QueueWorker`: polls SQLite queue, claims atomically
+  only from the types registered by that worker,
+  dispatches by `QueueItemType` (`source_metrics_refresh`,
+  `quality_score_update`, legacy `quality_score`, `vpn_test`,
   `approval_request`, legacy `scheduled_publish`), retries with linear backoff up to `max_attempts`,
   then marks failed. Safe to restart at any time.
   Native scheduled approval actions upload immediately to Telegram's own
@@ -222,18 +234,20 @@ build/             GENERATED PyInstaller work files (git-ignored).
   media. Already complete source messages are not downloaded again, but
   text-only stored posts can repair missing video/photo attachments on the
   next same-day backfill. Stored posts still pass through the use case so
-  missing `quality_score_update`, `vpn_test`, or `approval_request` queue stages
+  missing `source_metrics_refresh`, `quality_score_update`, `vpn_test`, or
+  `approval_request` queue stages
   can be repaired.
-  Media downloads are bounded by `storage.media_download_timeout_seconds`;
-  a stalled Telegram DC download is logged and skipped so the text post
-  still enters MongoDB/approval and the remaining backfill continues.
+  Media downloads use a file-size-aware timeout capped at ten minutes and
+  retry once; incomplete state is stored so later catch-up can repair it.
+  Source identities are locked across live/backfill paths before media or AI.
   It reloads the source channel list from SQLite every
   `telegram.source_refresh_seconds` seconds so sources added or removed via
   the management bot are picked up without a restart; new ones are
   backfilled from today's first message. Albums are
   collected as one post. It also captures Telegram-side metrics (`views`,
   `forwards`, reply count, reaction count, source post date) and custom
-  emoji text entities. Runs as its own process
+  emoji text entities. A collector-only queue worker refreshes engagement
+  metrics after 20 minutes with this same source session. Runs as its own process
   (`python -m src.workers.collector`) or inside the all-in-one entrypoint.
   Note: only the first media file of a post is republished currently.
   It also discovers config-bearing posts across all joined channel/group
@@ -409,6 +423,11 @@ normalized recurring campaign/time/destination mirrors in SQLite,
 immediate approval with 20-minute in-place score updates, shared delivery
 history buttons, and all-dialog VPN config discovery for common proxy
 protocols with URI-level deduplication and AI advertisement cleanup.
+
+2026-07-10 — Fixed score refresh removing approval keyboards and the caption
+`caption_text` failure. Added retry-aware preview repair, early callback
+acknowledgement, atomic live/backfill source ingestion, collector-session
+metric refresh jobs, and bounded media download retries.
 
 2026-07-08 — Hardened Telethon destination publishing and source metadata
 refresh against transient user-session disconnects, and made approval

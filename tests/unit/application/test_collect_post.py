@@ -12,6 +12,7 @@ from src.application.collect_post import CollectedMessage, CollectPostUseCase
 from src.domain.entities import MediaItem, Post, PostSourceMetrics
 from src.domain.enums import (
     IngestionMode,
+    MediaDownloadStatus,
     MediaKind,
     PostCategory,
     QualityScoreStatus,
@@ -64,7 +65,7 @@ class TestCollectPost:
         assert posts.posts[post.post_id].text == "خبر مهم امروز"
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
         ]
 
     async def test_expiry_is_fourteen_days(self) -> None:
@@ -144,12 +145,36 @@ class TestCollectPost:
                         mime_type="video/mp4",
                     )
                 ],
+                expected_media_count=1,
             )
         )
 
         assert should_download is True
         assert result is existing
         assert posts.posts["p-existing"].media[0].kind == MediaKind.VIDEO
+        assert (
+            posts.posts["p-existing"].media_download_status
+            == MediaDownloadStatus.COMPLETE
+        )
+
+    async def test_failed_media_download_is_recorded_for_later_repair(self) -> None:
+        """Text remains eligible while Mongo records an incomplete attachment."""
+        posts, queue = FakePostRepository(), FakeQueueRepository()
+        use_case = _use_case(posts, queue)
+
+        post = await use_case.handle_new_message(
+            CollectedMessage(
+                source_chat_id=-100,
+                message_id=33,
+                text="خبر ویدئویی",
+                expected_media_count=1,
+            )
+        )
+
+        assert post is not None
+        assert post.media_download_status == MediaDownloadStatus.FAILED
+        assert post.expected_media_count == 1
+        assert queue.items[0].type == QueueItemType.APPROVAL_REQUEST
 
     async def test_stored_post_with_existing_media_does_not_request_download(
         self, tmp_path: Path
@@ -215,7 +240,7 @@ class TestCollectPost:
         assert len(posts.posts) == 2
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
         ]
 
     async def test_ai_detected_duplicate_is_stored_as_skipped(self) -> None:
@@ -234,7 +259,7 @@ class TestCollectPost:
         assert len(posts.posts) == 2
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
         ]
 
     async def test_local_fuzzy_duplicate_skips_ai_and_scoring(self) -> None:
@@ -323,7 +348,7 @@ class TestCollectPost:
         assert result.category == PostCategory.VPN_CONFIG
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
             QueueItemType.VPN_TEST,
         ]
 
@@ -339,7 +364,7 @@ class TestCollectPost:
         assert len(post.vpn_configs) == 1
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
             QueueItemType.VPN_TEST,
         ]
 
@@ -364,7 +389,7 @@ class TestCollectPost:
         )
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
         ]
 
     async def test_ai_classification_failure_still_stores_for_manual_approval(
@@ -408,7 +433,7 @@ class TestCollectPost:
         assert result is existing
         assert [item.type for item in queue.items] == [
             QueueItemType.APPROVAL_REQUEST,
-            QueueItemType.QUALITY_SCORE_UPDATE,
+            QueueItemType.SOURCE_METRICS_REFRESH,
         ]
         assert queue.items[0].payload == {"post_id": "stored"}
 

@@ -361,21 +361,80 @@ class SqliteQueueRepository:
             (item_type.value, json.dumps(payload, ensure_ascii=False), due, now, now),
         )
 
-    async def claim_next_due(self, now: datetime) -> QueueItem | None:
-        """Atomically claim the oldest due pending item, or ``None``."""
+    async def enqueue_if_missing_post_item(
+        self,
+        item_type: QueueItemType,
+        post_id: str,
+        payload: dict[str, object],
+        scheduled_at: datetime | None = None,
+    ) -> int | None:
+        """Atomically insert one idempotent post pipeline item."""
+        now = _utcnow_iso()
+        due = (scheduled_at or datetime.now(timezone.utc)).isoformat()
+        statuses = (
+            QueueStatus.PENDING.value,
+            QueueStatus.PROCESSING.value,
+            QueueStatus.WAITING_APPROVAL.value,
+            QueueStatus.APPROVED.value,
+            QueueStatus.COMPLETED.value,
+            QueueStatus.PUBLISHED.value,
+        )
+        placeholders = ",".join("?" for _ in statuses)
+        cursor = await self._db.connection.execute(
+            f"""
+            INSERT INTO queue_items
+                (type, status, payload, attempts, scheduled_at, created_at, updated_at)
+            SELECT ?, 'pending', ?, 0, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM queue_items
+                WHERE type = ?
+                  AND json_extract(payload, '$.post_id') = ?
+                  AND status IN ({placeholders})
+            )
+            RETURNING id
+            """,
+            (
+                item_type.value,
+                json.dumps(payload, ensure_ascii=False),
+                due,
+                now,
+                now,
+                item_type.value,
+                post_id,
+                *statuses,
+            ),
+        )
+        row = await cursor.fetchone()
+        await self._db.connection.commit()
+        return int(row["id"]) if row is not None else None
+
+    async def claim_next_due(
+        self, now: datetime, allowed_types: set[QueueItemType] | None = None
+    ) -> QueueItem | None:
+        """Atomically claim the oldest due item matching optional types."""
         now_iso = now.isoformat()
+        params: dict[str, object] = {"now": now_iso}
+        type_filter = ""
+        if allowed_types:
+            names: list[str] = []
+            for index, item_type in enumerate(sorted(allowed_types, key=lambda x: x.value)):
+                key = f"type_{index}"
+                names.append(f":{key}")
+                params[key] = item_type.value
+            type_filter = f" AND type IN ({','.join(names)})"
         row = await self._db.fetchone(
-            """
+            f"""
             UPDATE queue_items
             SET status = 'processing', attempts = attempts + 1, updated_at = :now
             WHERE id = (
                 SELECT id FROM queue_items
                 WHERE status = 'pending' AND scheduled_at <= :now
+                {type_filter}
                 ORDER BY id LIMIT 1
             ) AND status = 'pending'
             RETURNING *
             """,
-            {"now": now_iso},
+            params,
         )
         return self._row_to_item(row) if row is not None else None
 
@@ -666,6 +725,32 @@ class SqliteApprovalMessageRepository:
             """,
             (_utcnow_iso(), message_ref_id),
         )
+
+    async def activate(self, message_ref_id: int) -> None:
+        """Reactivate one approval message after a successful repair edit."""
+        await self._db.execute(
+            """
+            UPDATE approval_messages
+            SET active = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (_utcnow_iso(), message_ref_id),
+        )
+
+    async def list_recent_inactive(
+        self, updated_since: datetime, limit: int = 500
+    ) -> list[ApprovalMessageRef]:
+        """Return recently inactive message references for startup repair."""
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM approval_messages
+            WHERE active = 0 AND updated_at >= ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (updated_since.isoformat(), max(1, limit)),
+        )
+        return [self._row_to_ref(row) for row in rows]
 
     async def list_active_post_ids(self) -> list[str]:
         """Return post ids that have active approval messages."""

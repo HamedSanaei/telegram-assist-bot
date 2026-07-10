@@ -53,6 +53,11 @@ class VpnTestService:
 
         any_working = False
         for config in post.vpn_configs:
+            if config.test_status != VpnTestStatus.PENDING:
+                any_working = any_working or (
+                    config.test_status == VpnTestStatus.WORKING
+                )
+                continue
             if config.protocol not in {VpnProtocol.VMESS, VpnProtocol.VLESS}:
                 config.test_status = VpnTestStatus.UNSUPPORTED
                 logger.info(

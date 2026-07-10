@@ -28,6 +28,22 @@ def _is_message_not_modified_error(exc: Exception) -> bool:
     return "message is not modified" in str(exc).lower()
 
 
+def _is_permanent_message_error(exc: Exception) -> bool:
+    """Return whether Telegram says an approval message is permanently gone."""
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "message not found",
+            "message to edit not found",
+            "message_id_invalid",
+            "chat not found",
+            "bot was blocked",
+            "user is deactivated",
+        )
+    )
+
+
 def format_scheduled_time(scheduled_at: datetime, timezone_name: str) -> str:
     """
     Format a UTC schedule time for the admin answer in the local timezone.
@@ -64,6 +80,14 @@ def _answer_for_result(
     if result.action == "unscheduled":
         return "🗑 از اسکجول کانال حذف شد."
     return "انجام شد."
+
+
+async def _acknowledge_action(callback: CallbackQuery) -> None:
+    """Stop Telegram's callback spinner before a potentially slow upload."""
+    try:
+        await callback.answer("در حال انجام...")
+    except Exception as exc:
+        logger.warning("Early callback acknowledgement failed error=%s", exc)
 
 
 def create_approval_router(
@@ -108,10 +132,9 @@ def create_approval_router(
         """Re-render the clicked message keyboard from current state."""
         if callback.message is None:
             return
-        channels = await approval.list_channels()
-        published = await approval.published_channels(post_id)
-        scheduled = await approval.scheduled_channels(post_id)
-        history = await approval.delivery_history(post_id)
+        _post, channels, published, scheduled, history = (
+            await approval.approval_view_state(post_id)
+        )
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=build_channel_keyboard(
@@ -136,10 +159,9 @@ def create_approval_router(
         if not refs:
             await _refresh_clicked_keyboard(callback, post_id)
             return
-        channels = await approval.list_channels()
-        published = await approval.published_channels(post_id)
-        scheduled = await approval.scheduled_channels(post_id)
-        history = await approval.delivery_history(post_id)
+        _post, channels, published, scheduled, history = (
+            await approval.approval_view_state(post_id)
+        )
         bot: Bot = callback.bot
         for ref in refs:
             try:
@@ -173,7 +195,7 @@ def create_approval_router(
                     ref.id,
                     exc,
                 )
-                if ref.id is not None:
+                if ref.id is not None and _is_permanent_message_error(exc):
                     await approval.deactivate_approval_message(ref.id)
 
     @router.callback_query(F.data.startswith(f"{CB_PREFIX}:nop"))
@@ -218,43 +240,67 @@ def create_approval_router(
         """Toggle immediate publish/delete without a confirmation step."""
         parts = callback.data.split(":")
         post_id, chat_id = parts[2], int(parts[3])
+        await _acknowledge_action(callback)
         try:
             result = await approval.toggle_publish(
                 post_id, chat_id, callback.from_user.id
             )
         except ApprovalStateError as exc:
             logger.warning("Immediate toggle rejected post=%s chat=%s: %s", post_id, chat_id, exc)
-            await callback.answer("ارسال فوری ممکن نیست یا حالت دیگری فعال است.", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "ارسال فوری ممکن نیست یا حالت دیگری فعال است."
+                )
             await _refresh_all_approval_keyboards(callback, post_id)
             return
         except TelegramPublishError as exc:
             logger.error("Immediate toggle failed post=%s chat=%s: %s", post_id, chat_id, exc)
-            await callback.answer("خطا در ارسال/حذف فوری. دوباره تلاش کنید.", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "خطا در ارسال/حذف فوری. دوباره تلاش کنید."
+                )
             await _refresh_all_approval_keyboards(callback, post_id)
             return
         await _refresh_all_approval_keyboards(callback, post_id)
-        await callback.answer(_answer_for_result(result, timezone_name))
+        logger.info(
+            "Immediate callback complete post=%s chat=%s result=%s",
+            post_id,
+            chat_id,
+            _answer_for_result(result, timezone_name),
+        )
 
     @router.callback_query(F.data.startswith(f"{CB_PREFIX}:sch:"))
     async def on_schedule_toggle(callback: CallbackQuery) -> None:
         """Toggle native Telegram schedule/delete without confirmation."""
         parts = callback.data.split(":")
         post_id, chat_id = parts[2], int(parts[3])
+        await _acknowledge_action(callback)
         try:
             result = await approval.toggle_schedule(
                 post_id, chat_id, callback.from_user.id
             )
         except ApprovalStateError as exc:
             logger.warning("Schedule toggle rejected post=%s chat=%s: %s", post_id, chat_id, exc)
-            await callback.answer("اسکجول ممکن نیست یا حالت دیگری فعال است.", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "اسکجول ممکن نیست یا حالت دیگری فعال است."
+                )
             await _refresh_all_approval_keyboards(callback, post_id)
             return
         except TelegramPublishError as exc:
             logger.error("Schedule toggle failed post=%s chat=%s: %s", post_id, chat_id, exc)
-            await callback.answer("خطا در اسکجول/حذف اسکجول. دوباره تلاش کنید.", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "خطا در اسکجول/حذف اسکجول. دوباره تلاش کنید."
+                )
             await _refresh_all_approval_keyboards(callback, post_id)
             return
         await _refresh_all_approval_keyboards(callback, post_id)
-        await callback.answer(_answer_for_result(result, timezone_name))
+        logger.info(
+            "Schedule callback complete post=%s chat=%s result=%s",
+            post_id,
+            chat_id,
+            _answer_for_result(result, timezone_name),
+        )
 
     return router

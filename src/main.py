@@ -32,10 +32,9 @@ from src.composition import (
     sync_config_to_sqlite,
 )
 from src.domain.entities import QueueItem
-from src.domain.enums import QueueItemType, QueueStatus
+from src.domain.enums import QueueItemType, QueueStatus, SourceMetricsStatus
 from src.infrastructure.telegram.telethon_publish import (
     TelethonDestinationPublisher,
-    TelethonSourceMetadataRefresher,
 )
 from src.infrastructure.telegram.publisher import AiogramMessagePublisher
 from src.infrastructure.configuration.atomic_editor import AtomicConfigurationEditor
@@ -50,7 +49,7 @@ from src.shared.config import (
     log_startup_summary,
     validate_main_app_config,
 )
-from src.shared.errors import ApprovalStateError
+from src.shared.errors import ApprovalStateError, TelegramPublishError
 from src.shared.logging_setup import get_logger, setup_logging
 from src.workers.queue_worker import QueueWorker
 from src.workers.recurring_forward import RecurringForwardWorker
@@ -115,7 +114,6 @@ async def run(configure_logging: bool = True) -> None:
         config.telegram.api_hash,
     )
     destination_publisher: TelethonDestinationPublisher
-    metadata_refresher: TelethonSourceMetadataRefresher
     await scheduler_client.connect()
     if await scheduler_client.is_user_authorized():
         logger.info(
@@ -130,7 +128,6 @@ async def run(configure_logging: bool = True) -> None:
             config.telegram.scheduler_session,
         )
     destination_publisher = TelethonDestinationPublisher(scheduler_client)
-    metadata_refresher = TelethonSourceMetadataRefresher(scheduler_client)
     notifier = AiogramApprovalNotifier(
         approval_bot,
         repos["admins"],
@@ -161,36 +158,60 @@ async def run(configure_logging: bool = True) -> None:
     quality_scores = QualityScoreService(
         posts=posts,
         ai=ai,
-        metadata_refresher=metadata_refresher,
         vpn_testing_enabled=config.vpn_testing.iran_worker_enabled,
     )
+
+    async def metrics_are_ready(post_id: str) -> bool:
+        """Reroute legacy score jobs through the collector metrics worker."""
+        post = await posts.get(post_id)
+        if post is None:
+            raise ApprovalStateError(f"Post {post_id} not found for scoring")
+        if post.source_metrics_status != SourceMetricsStatus.PENDING:
+            return True
+        await repos["queue"].enqueue_if_missing_post_item(
+            QueueItemType.SOURCE_METRICS_REFRESH,
+            post_id,
+            {"post_id": post_id, "legacy_score_job": True},
+        )
+        logger.info("Deferred legacy score until collector metrics refresh post=%s", post_id)
+        return False
 
     async def handle_quality_score(item: QueueItem) -> QueueStatus:
         """Process a legacy score job without losing its approval preview."""
         post_id = str(item.payload["post_id"])
         await approval.request_approval(post_id)
+        if not await metrics_are_ready(post_id):
+            return QueueStatus.SKIPPED
         await quality_scores.score_post(post_id)
-        updated = await posts.get(post_id)
-        if updated is not None:
-            await notifier.refresh_post(updated)
+        result = await approval.refresh_approval_previews(post_id)
+        if result.retryable_failures:
+            raise TelegramPublishError(
+                f"Approval preview refresh has {result.retryable_failures} retryable failures"
+            )
         return QueueStatus.COMPLETED
 
     async def handle_quality_score_update(item: QueueItem) -> QueueStatus:
         """Refresh metrics, score, and edit existing approval previews."""
         post_id = str(item.payload["post_id"])
+        if not await metrics_are_ready(post_id):
+            return QueueStatus.SKIPPED
         await quality_scores.score_post(post_id)
-        updated = await posts.get(post_id)
-        if updated is not None:
-            await notifier.refresh_post(updated)
+        result = await approval.refresh_approval_previews(post_id)
+        if result.retryable_failures:
+            raise TelegramPublishError(
+                f"Approval preview refresh has {result.retryable_failures} retryable failures"
+            )
         return QueueStatus.COMPLETED
 
     async def handle_vpn_test(item: QueueItem) -> QueueStatus:
         """Test a post's configs; queue approval when eligible."""
         post_id = str(item.payload["post_id"])
         eligible = await vpn_tests.test_post_configs(post_id)
-        updated = await posts.get(post_id)
-        if updated is not None:
-            await notifier.refresh_post(updated)
+        result = await approval.refresh_approval_previews(post_id)
+        if result.retryable_failures:
+            raise TelegramPublishError(
+                f"Approval preview refresh has {result.retryable_failures} retryable failures"
+            )
         logger.info("Background VPN test complete post=%s eligible=%s", post_id, eligible)
         return QueueStatus.COMPLETED
 
@@ -266,6 +287,7 @@ async def run(configure_logging: bool = True) -> None:
 
     scheduler.start()
     await approval.repair_orphaned_approval_requests()
+    await approval.repair_recent_approval_previews()
     logger.info("Main application started")
     try:
         await asyncio.gather(

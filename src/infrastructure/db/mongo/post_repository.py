@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 
 from src.domain.entities import (
     MediaItem,
@@ -21,9 +22,11 @@ from src.domain.entities import (
 )
 from src.domain.enums import (
     IngestionMode,
+    MediaDownloadStatus,
     MediaKind,
     PostCategory,
     QualityScoreStatus,
+    SourceMetricsStatus,
     VpnProtocol,
     VpnTestStatus,
 )
@@ -190,7 +193,26 @@ class MongoPostRepository:
 
     async def save(self, post: Post) -> None:
         """Insert or replace the post document."""
-        doc = {
+        doc = self._post_to_doc(post)
+        try:
+            await self._collection.replace_one({"_id": post.post_id}, doc, upsert=True)
+        except Exception as exc:
+            raise RepositoryError(f"Mongo save failed: {exc}") from exc
+
+    async def insert_if_absent(self, post: Post) -> bool:
+        """Atomically insert a new post, treating source conflicts as benign."""
+        try:
+            await self._collection.insert_one(self._post_to_doc(post))
+            return True
+        except DuplicateKeyError:
+            return False
+        except Exception as exc:
+            raise RepositoryError(f"Mongo insert failed: {exc}") from exc
+
+    @staticmethod
+    def _post_to_doc(post: Post) -> dict[str, Any]:
+        """Serialize one post into its MongoDB document representation."""
+        return {
             "_id": post.post_id,
             "source_chat_id": post.source_chat_id,
             "source_message_id": post.source_message_id,
@@ -201,6 +223,7 @@ class MongoPostRepository:
             "content_hash": post.content_hash,
             "ingestion_mode": post.ingestion_mode.value,
             "quality_score_status": post.quality_score_status.value,
+            "source_metrics_status": post.source_metrics_status.value,
             "vpn_fingerprints": list(post.vpn_fingerprints),
             "media": [
                 {
@@ -211,6 +234,8 @@ class MongoPostRepository:
                 }
                 for m in post.media
             ],
+            "expected_media_count": post.expected_media_count,
+            "media_download_status": post.media_download_status.value,
             "category": post.category.value if post.category else None,
             "ai_provider": post.ai_provider,
             "is_duplicate": post.is_duplicate,
@@ -223,10 +248,6 @@ class MongoPostRepository:
             "collected_at": post.collected_at,
             "expires_at": post.expires_at,
         }
-        try:
-            await self._collection.replace_one({"_id": post.post_id}, doc, upsert=True)
-        except Exception as exc:
-            raise RepositoryError(f"Mongo save failed: {exc}") from exc
 
     async def get(self, post_id: str) -> Post | None:
         """Return the post by internal id, or ``None``."""
@@ -332,6 +353,17 @@ class MongoPostRepository:
                     ),
                 )
             ),
+            source_metrics_status=SourceMetricsStatus(
+                doc.get(
+                    "source_metrics_status",
+                    (
+                        SourceMetricsStatus.NOT_REQUIRED.value
+                        if doc.get("ingestion_mode")
+                        == IngestionMode.DIALOG_VPN_DISCOVERY.value
+                        else SourceMetricsStatus.PENDING.value
+                    ),
+                )
+            ),
             vpn_fingerprints=list(doc.get("vpn_fingerprints", [])),
             text_entities=[
                 _doc_to_entity(entity) for entity in doc.get("text_entities", [])
@@ -346,6 +378,10 @@ class MongoPostRepository:
                 )
                 for m in doc.get("media", [])
             ],
+            expected_media_count=int(doc.get("expected_media_count", 0)),
+            media_download_status=MediaDownloadStatus(
+                doc.get("media_download_status", MediaDownloadStatus.COMPLETE.value)
+            ),
             category=PostCategory(doc["category"]) if doc.get("category") else None,
             ai_provider=doc.get("ai_provider"),
             is_duplicate=bool(doc.get("is_duplicate", False)),

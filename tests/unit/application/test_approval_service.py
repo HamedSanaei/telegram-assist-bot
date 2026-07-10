@@ -561,3 +561,31 @@ class TestSchedulePublish:
         assert second.action == "unscheduled"
         assert scheduled_publisher.deleted == [(NEWS_CHANNEL, 501)]
         assert await publish_log.scheduled_channels("p1") == set()
+
+    async def test_startup_preview_repair_never_resends_approval(self) -> None:
+        """Recent inactive refs are edited in place without a new preview."""
+        posts = FakePostRepository()
+        await posts.save(_post())
+        notifier = FakeApprovalNotifier()
+        messages = FakeApprovalMessageRepository()
+        await messages.record_messages(
+            [ApprovalMessageRef("p1", ADMIN_ID, ADMIN_ID, 10)]
+        )
+        await messages.deactivate(1)
+        service = ApprovalService(
+            posts=posts,
+            publish_log=FakePublishLogRepository(),
+            channels=FakeChannelRepository(
+                [DestinationChannel(NEWS_CHANNEL, "News")]
+            ),
+            admins=FakeAdminRepository({ADMIN_ID}),
+            publisher=FakePublisher(),
+            notifier=notifier,
+            approval_messages=messages,
+        )
+
+        result = await service.repair_recent_approval_previews()
+
+        assert result.updated == 1
+        assert notifier.sent == []
+        assert notifier.refreshed == [("p1", [NEWS_CHANNEL])]

@@ -88,6 +88,18 @@ class PreviewEditBot:
         self.caption_edits.append(kwargs)
 
 
+class FailingPreviewEditBot(PreviewEditBot):
+    """Preview bot fake that raises one scripted edit error."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__()
+        self.error = error
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        """Raise the configured Telegram-like edit error."""
+        raise RuntimeError(self.error)
+
+
 class FakeApprovalMessageRepository:
     """Minimal active approval-message repository for edit tests."""
 
@@ -100,6 +112,11 @@ class FakeApprovalMessageRepository:
 
     async def deactivate(self, message_ref_id: int) -> None:
         self.deactivated.append(message_ref_id)
+
+    async def activate(self, message_ref_id: int) -> None:
+        """Record reactivation of a repaired reference."""
+        if message_ref_id in self.deactivated:
+            self.deactivated.remove(message_ref_id)
 
 
 class TestApprovalPreview:
@@ -263,4 +280,73 @@ class TestApprovalPreview:
 
         assert await notifier.refresh_post(post) == 1
         assert "88/100" in str(bot.text_edits[0]["text"])
+        assert bot.text_edits[0]["reply_markup"] is not None
         assert bot.caption_edits == []
+
+    async def test_score_refresh_preserves_caption_keyboard(self) -> None:
+        """Caption refresh defines caption text and keeps callback buttons."""
+        post = Post(
+            post_id="p1",
+            source_chat_id=-100,
+            source_message_id=1,
+            text="خبر تصویری",
+            content_hash="hash",
+            quality_score=PostQualityScore(score=90, reason="خوب", provider="groq"),
+        )
+        refs = [
+            ApprovalMessageRef(
+                id=1,
+                post_id="p1",
+                admin_user_id=42,
+                chat_id=42,
+                message_id=100,
+                preview_kind="caption",
+            )
+        ]
+        bot = PreviewEditBot()
+        notifier = AiogramApprovalNotifier(
+            bot=bot,
+            admins=FakeAdminRepository([42]),
+            approval_messages=FakeApprovalMessageRepository(refs),
+        )
+
+        assert await notifier.refresh_post(post) == 1
+        assert "90/100" in str(bot.caption_edits[0]["caption"])
+        assert bot.caption_edits[0]["reply_markup"] is not None
+        assert len(str(bot.caption_edits[0]["caption"])) <= 1024
+
+    async def test_transient_preview_error_keeps_reference_active(self) -> None:
+        """A disconnect is retryable and must not discard the message ref."""
+        post = Post("p1", -100, 1, "خبر", "hash")
+        refs = [ApprovalMessageRef("p1", 42, 42, 100, id=1)]
+        repository = FakeApprovalMessageRepository(refs)
+        notifier = AiogramApprovalNotifier(
+            bot=FailingPreviewEditBot("Server disconnected"),
+            admins=FakeAdminRepository([42]),
+            approval_messages=repository,
+        )
+
+        result = await notifier.refresh_approval_request(
+            post, [], set(), set(), False
+        )
+
+        assert result.retryable_failures == 1
+        assert repository.deactivated == []
+
+    async def test_permanent_preview_error_deactivates_reference(self) -> None:
+        """A deleted Telegram message is excluded from later refresh loops."""
+        post = Post("p1", -100, 1, "خبر", "hash")
+        refs = [ApprovalMessageRef("p1", 42, 42, 100, id=1)]
+        repository = FakeApprovalMessageRepository(refs)
+        notifier = AiogramApprovalNotifier(
+            bot=FailingPreviewEditBot("Bad Request: message to edit not found"),
+            admins=FakeAdminRepository([42]),
+            approval_messages=repository,
+        )
+
+        result = await notifier.refresh_approval_request(
+            post, [], set(), set(), False
+        )
+
+        assert result.permanent_failures == 1
+        assert repository.deactivated == [1]

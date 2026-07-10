@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from src.application.ai_service import AiService
 from src.domain.entities import Post, PostQualityScore
 from src.domain.enums import QualityScoreStatus, QueueItemType
-from src.domain.interfaces import PostRepository, SourceMetadataRefresher
+from src.domain.interfaces import PostRepository
 from src.shared.errors import ApprovalStateError, QualityScoringError
 from src.shared.logging_setup import get_logger
 
@@ -18,9 +18,8 @@ class QualityScoreService:
     """
     Calculates and stores an AI repost-quality score for a collected post.
 
-    The score is advisory only. If all AI providers fail, the post still
-    continues through the pipeline with a neutral fallback score so admins
-    do not lose content during temporary AI outages.
+    The score is advisory only. If all AI providers fail, the post remains
+    approved with an explicit unavailable status so admins do not lose it.
 
     Example:
         service = QualityScoreService(posts, ai)
@@ -31,21 +30,17 @@ class QualityScoreService:
         self,
         posts: PostRepository,
         ai: AiService,
-        metadata_refresher: SourceMetadataRefresher | None = None,
         vpn_testing_enabled: bool = True,
     ) -> None:
         """
         Args:
             posts: Post repository.
             ai: AI service used for quality scoring.
-            metadata_refresher: Optional Telegram adapter used to refresh
-                source views/forwards/reactions after the 20-minute delay.
             vpn_testing_enabled: Whether VPN config posts should continue to
                 the Iran worker after scoring.
         """
         self._posts = posts
         self._ai = ai
-        self._metadata_refresher = metadata_refresher
         self._vpn_testing_enabled = vpn_testing_enabled
 
     async def score_post(self, post_id: str) -> QueueItemType:
@@ -65,7 +60,15 @@ class QualityScoreService:
         post = await self._posts.get(post_id)
         if post is None:
             raise ApprovalStateError(f"Post {post_id} not found for scoring")
-        await self._refresh_metrics(post)
+        if post.quality_score_status in (
+            QualityScoreStatus.SCORED,
+            QualityScoreStatus.UNAVAILABLE,
+        ):
+            return (
+                QueueItemType.VPN_TEST
+                if post.vpn_configs and self._vpn_testing_enabled
+                else QueueItemType.APPROVAL_REQUEST
+            )
         metrics = self._metrics_for_ai(post)
         scored_at = datetime.now(timezone.utc)
         try:
@@ -96,48 +99,6 @@ class QualityScoreService:
         if post.vpn_configs and self._vpn_testing_enabled:
             return QueueItemType.VPN_TEST
         return QueueItemType.APPROVAL_REQUEST
-
-    async def _refresh_metrics(self, post: Post) -> None:
-        """
-        Refresh source engagement metrics before AI scoring.
-
-        Side effects:
-            Mutates ``post.source_metrics`` when Telegram returns a newer
-            snapshot. Errors are logged as warnings and do not block approval.
-        """
-        if self._metadata_refresher is None:
-            return
-        try:
-            refreshed = await self._metadata_refresher.refresh_metrics(
-                post.source_chat_id,
-                post.source_message_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Source metadata refresh failed post=%s chat=%s msg=%s error=%s",
-                post.post_id,
-                post.source_chat_id,
-                post.source_message_id,
-                exc,
-            )
-            return
-        if refreshed is None:
-            logger.warning(
-                "Source metadata refresh returned no message post=%s chat=%s msg=%s",
-                post.post_id,
-                post.source_chat_id,
-                post.source_message_id,
-            )
-            return
-        post.source_metrics = refreshed
-        logger.info(
-            "Source metadata refreshed post=%s views=%s forwards=%s reactions=%s replies=%s",
-            post.post_id,
-            refreshed.views,
-            refreshed.forwards,
-            refreshed.reactions_count,
-            refreshed.replies_count,
-        )
 
     @staticmethod
     def _metrics_for_ai(post: Post) -> dict[str, object]:

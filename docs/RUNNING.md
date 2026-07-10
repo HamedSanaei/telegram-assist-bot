@@ -127,7 +127,7 @@ python -m src.main
 ```
 
 This single process runs the approval bot (long polling), the SQLite queue
-worker (background quality updates, VPN test dispatch, and approval dispatch), the
+worker (quality scoring, VPN test dispatch, and approval dispatch), the
 Telethon destination/scheduler user session for approved channel publishing
 and native channel scheduling, the recurring-forward reconciler, and the
 scheduler (USD price publishing and daily cleanup). It also polls the main management bot
@@ -194,9 +194,10 @@ the state stays active and the bot shows an error alert.
 Posts are delivered to the approval bot immediately after duplicate,
 advertisement, and relevance analysis. The initial italic header shows
 `⭐ امتیاز: در انتظار آمار ۲۰ دقیقه‌ای`. At 20 minutes after the source
-publish time, a background queue item refreshes views, forwards, replies,
-and reactions, calculates the 0-to-100 score, and edits the same approval
-message for every admin. It never sends a second approval preview. Older
+publish time, a collector-side queue item refreshes views, forwards, replies,
+and reactions with the collector Telethon session. The main queue then
+calculates the 0-to-100 score and edits the same approval message and its
+current callback keyboard for every admin. It never sends a second approval preview. Older
 same-day backfill posts are approved first and scored immediately afterward.
 
 When a post has any publish/schedule history, a prominent single button is
@@ -209,7 +210,9 @@ approval message id. If one admin publishes or schedules a post, keyboards
 for all other admins are refreshed best-effort. If one admin deletes or
 unschedules it, all keyboards are refreshed back to the available state. If
 an old approval message was deleted or the bot can no longer edit it, that
-message is marked inactive and the callback continues normally. Telegram's
+message is marked inactive only for a permanent missing/blocked error and the
+callback continues normally. Transient network/edit failures remain active
+and are retried. Telegram's
 `message is not modified` response during refresh is a harmless no-op and
 does not deactivate the stored approval message.
 
@@ -250,7 +253,8 @@ busy channel cannot delay all other channels' same-day posts. The normal
 exact-hash and AI deduplication prevents restarts, cross-channel reposts,
 and already processed posts from being stored twice. If a same-day post was
 already stored in MongoDB but never reached an active/successful
-`quality_score_update`, `vpn_test`, or `approval_request` queue item, the backfill
+`source_metrics_refresh`, `quality_score_update`, `vpn_test`, or
+`approval_request` queue item, the backfill
 requeues the missing next stage instead of hiding it as a duplicate. Stored source messages are
 checked before media download, so restarts do not download the same photo
 or video again when MongoDB already has the media. If an older bug or
@@ -302,9 +306,10 @@ Approval previews try to send videos as Telegram videos first and fall back
 to sending the same local file as a document if Bot API rejects the video
 upload, so video posts do not disappear from the approval bot silently.
 If Telegram stalls while downloading a media file from another data center,
-the collector waits up to `storage.media_download_timeout_seconds`, logs a
-warning, and still stores/sends the text portion instead of blocking the
-rest of the backfill.
+the collector uses a timeout scaled to file size (bounded at ten minutes),
+retries once, records incomplete media state in MongoDB, and still stores the
+text portion instead of blocking the rest of the backfill. A later same-day
+catch-up can repair the missing attachment.
 
 ### Running the Scheduler
 
@@ -481,14 +486,15 @@ the Telethon session file exists.
   | `Classification unavailable; storing for manual approval ...` | Every enabled AI provider failed classification; post is still stored for admin review |
   | `Saved post to MongoDB id=...` | Post inserted into MongoDB |
   | `Enqueued approval_request post=...` | The valid post was queued for immediate admin preview |
-  | `Enqueued quality_score_update post=... scheduled_at=...` | The already-approved post will have its metrics and score refreshed 20 minutes after source publication |
+  | `Enqueued source_metrics_refresh post=... scheduled_at=...` | The collector session will refresh engagement metrics 20 minutes after source publication |
+  | `Source metrics refreshed post=...` | Collector access succeeded and a quality-score update was queued for the main worker |
   | `Quality scored post=... score=.../100 provider=...` | Required AI quality score was stored in MongoDB and the post can continue to VPN testing or approval |
   | `Enqueued approval_request post=...` / `Enqueued vpn_test post=...` | Queued after quality scoring for approval or VPN testing |
   | `Repaired stored source post post=... chat=... msg=...` | Backfill found a post that was stored before but never reached quality scoring/approval/VPN flow, so it repaired the missing pipeline stage |
   | `Skipping media download for stored source chat=... msg=...` | The post is already in MongoDB and has enough stored media, so restart/backfill did not download its media again |
   | `Repaired stored source media post=... chat=... msg=... media=...` | Backfill found a stored post whose media was missing and updated MongoDB with the downloaded attachment |
   | `Approval video preview failed; retrying as document ...` | Bot API rejected `send_video`; the approval bot retried the same file with `send_document` |
-  | `Media download timed out msg=... kind=...` | Telegram media download stalled; the collector continued with the text-only post |
+  | `Media download timed out msg=... kind=... attempt=...` | Telegram media download stalled; one bounded retry is attempted before continuing text-only |
   | `Queue item done id=... type=approval_request` | Approval message sent to admins |
 
   Common causes when the chain stops early:
@@ -533,6 +539,13 @@ the Telethon session file exists.
   - `Approval keyboard already current ...` — Telegram said the keyboard
     already had the requested markup. This is expected during config reloads
     and does not remove the tracked approval message.
+  - `Approval preview update failed ...` — transient failures keep the
+    reference active and retry the queue item. Only permanent missing-message
+    or blocked-user errors deactivate it. Startup repairs recent inactive
+    references by editing existing messages; it never resends the post.
+  - `Source race resolved using stored winner ...` — live/backfill or another
+    collector process reached the same source message concurrently. Mongo's
+    unique identity selected one winner without creating duplicate approval.
 - **`ConfigurationError: Configuration file not found`** — copy the example
   file to `config/configuration.json` or set `TELEGRAM_ADMIN_BOT_CONFIG`.
 - **Persian text looks like `Ø³ÙØ§Ù` (Mojibake)** — a file was written

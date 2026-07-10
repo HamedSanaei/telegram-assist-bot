@@ -31,6 +31,7 @@ class FakeMessage:
         date: datetime,
         has_video: bool = False,
         download_delay_seconds: float = 0,
+        timeout_attempts: int = 0,
         entities: list[object] | None = None,
     ) -> None:
         self.id = message_id
@@ -43,10 +44,13 @@ class FakeMessage:
         self.file = FakeFileInfo() if has_video else None
         self.download_count = 0
         self.download_delay_seconds = download_delay_seconds
+        self.timeout_attempts = timeout_attempts
 
     async def download_media(self, file: str) -> str:
         """Pretend to download media into the requested directory."""
         self.download_count += 1
+        if self.download_count <= self.timeout_attempts:
+            raise asyncio.TimeoutError
         if self.download_delay_seconds > 0:
             await asyncio.sleep(self.download_delay_seconds)
         path = Path(file) / f"{self.id}.mp4"
@@ -303,14 +307,45 @@ class TestCollectorBackfill:
             "video with slow download",
             datetime(2026, 7, 2, 10, tzinfo=timezone.utc),
             has_video=True,
-            download_delay_seconds=2,
+            timeout_attempts=2,
         )
 
         await collector._process_messages(-100123, [message], origin="backfill")
 
-        assert message.download_count == 1
+        assert message.download_count == 2
         assert use_case.calls == [(-100123, 5, "video with slow download")]
         assert use_case.media_kinds == [[]]
+
+    async def test_live_and_backfill_share_one_source_identity_lock(
+        self, tmp_path: Path
+    ) -> None:
+        """Concurrent paths cannot download and ingest the same message twice."""
+        client = FakeClient()
+        message = FakeMessage(50, "خبر", TODAY_START, has_video=True)
+
+        class RaceUseCase(FakeUseCase):
+            async def handle_new_message(self, collected) -> None:
+                key = (
+                    collected.source_chat_id,
+                    collected.message_id,
+                    collected.grouped_id,
+                )
+                if key in self.seen:
+                    return
+                self.seen.add(key)
+                self.media_counts[key] = len(collected.media)
+                await super().handle_new_message(collected)
+
+        use_case = RaceUseCase()
+        collector = Collector(client, use_case, tmp_path)
+
+        await asyncio.gather(
+            collector._process_messages(-100, [message], "live"),
+            collector._process_messages(-100, [message], "backfill"),
+        )
+
+        assert message.download_count == 1
+        assert use_case.calls == [(-100, 50, "خبر")]
 
     async def test_custom_emoji_entities_are_collected(
         self, tmp_path: Path, monkeypatch

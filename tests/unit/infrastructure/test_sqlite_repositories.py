@@ -145,6 +145,39 @@ class TestQueueRepository:
         assert await repo.claim_next_due(now) is not None
         assert await repo.claim_next_due(now) is None
 
+    async def test_claim_can_be_restricted_to_worker_job_types(
+        self, db: Database
+    ) -> None:
+        """Main and collector workers cannot steal each other's jobs."""
+        repo = SqliteQueueRepository(db)
+        await repo.enqueue(QueueItemType.SOURCE_METRICS_REFRESH, {"post_id": "p1"})
+        await repo.enqueue(QueueItemType.APPROVAL_REQUEST, {"post_id": "p1"})
+
+        item = await repo.claim_next_due(
+            datetime.now(timezone.utc), {QueueItemType.APPROVAL_REQUEST}
+        )
+
+        assert item is not None
+        assert item.type == QueueItemType.APPROVAL_REQUEST
+
+    async def test_post_pipeline_enqueue_is_idempotent(self, db: Database) -> None:
+        """Concurrent ingestion stages cannot create duplicate queue rows."""
+        repo = SqliteQueueRepository(db)
+
+        first = await repo.enqueue_if_missing_post_item(
+            QueueItemType.APPROVAL_REQUEST,
+            "p1",
+            {"post_id": "p1"},
+        )
+        second = await repo.enqueue_if_missing_post_item(
+            QueueItemType.APPROVAL_REQUEST,
+            "p1",
+            {"post_id": "p1"},
+        )
+
+        assert first is not None
+        assert second is None
+
     async def test_future_items_not_claimed(self, db: Database) -> None:
         repo = SqliteQueueRepository(db)
         future = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -476,6 +509,13 @@ class TestApprovalMessageRepository:
 
         await repo.deactivate(refs[0].id)
         assert await repo.list_active("p1") == []
+
+        inactive = await repo.list_recent_inactive(
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        )
+        assert [ref.message_id for ref in inactive] == [10]
+        await repo.activate(inactive[0].id)
+        assert [ref.message_id for ref in await repo.list_active("p1")] == [10]
 
     async def test_deactivates_messages_for_removed_admins(self, db: Database) -> None:
         repo = SqliteApprovalMessageRepository(db)

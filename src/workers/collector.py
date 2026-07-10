@@ -18,6 +18,7 @@ from telethon import TelegramClient, events
 from telethon.utils import get_peer_id
 
 from src.application.collect_post import CollectedMessage, CollectPostUseCase
+from src.application.source_metrics_service import SourceMetricsService
 from src.composition import (
     create_ai_service,
     create_mongo,
@@ -25,8 +26,8 @@ from src.composition import (
     create_sqlite,
     sync_config_to_sqlite,
 )
-from src.domain.entities import MediaItem, PostSourceMetrics, TextEntity
-from src.domain.enums import MediaKind
+from src.domain.entities import MediaItem, PostSourceMetrics, QueueItem, TextEntity
+from src.domain.enums import MediaKind, QueueItemType, QueueStatus
 from src.domain.interfaces import ChannelRepository
 from src.domain.services.vpn_parser import extract_vpn_configs
 from src.shared.config import (
@@ -37,7 +38,9 @@ from src.shared.config import (
 )
 from src.shared.errors import AppError
 from src.shared.logging_setup import get_logger, setup_logging
+from src.infrastructure.telegram.telethon_publish import TelethonSourceMetadataRefresher
 from src.workers.config_sync import ConfigSyncWorker
+from src.workers.queue_worker import QueueWorker
 
 logger = get_logger(__name__)
 
@@ -85,6 +88,7 @@ class Collector:
         self._source_chat_ids: set[int] = set()
         self._discovery_chat_ids: set[int] = set()
         self._chat_labels: dict[int, str] = {}
+        self._message_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self._timezone_name = "Asia/Tehran"
 
     async def run(
@@ -616,6 +620,26 @@ class Collector:
         origin: str,
         discovery: bool = False,
     ) -> None:
+        """Serialize every ingestion path for one source message or album."""
+        first = messages[0]
+        grouped_id = getattr(first, "grouped_id", None)
+        identity = int(grouped_id) if grouped_id is not None else int(first.id)
+        lock = self._message_locks.setdefault((chat_id, identity), asyncio.Lock())
+        async with lock:
+            await self._process_messages_locked(
+                chat_id,
+                messages,
+                origin,
+                discovery,
+            )
+
+    async def _process_messages_locked(
+        self,
+        chat_id: int,
+        messages: list[object],
+        origin: str,
+        discovery: bool = False,
+    ) -> None:
         """Normalize one message or album and feed it into the use case."""
         first = messages[0]
         text_message = next(
@@ -674,6 +698,7 @@ class Collector:
                 text=text,
                 text_entities=self._message_text_entities(text_message),
                 media=media,
+                expected_media_count=expected_media_count,
                 source_metrics=self._source_metrics(first),
             )
             if discovery:
@@ -738,25 +763,43 @@ class Collector:
             the post text can still be stored and sent to approval.
         """
         message_id = getattr(message, "id", "?")
-        try:
-            path = await asyncio.wait_for(
-                message.download_media(file=str(self._media_dir)),
-                timeout=max(1, self._media_download_timeout_seconds),
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Media download timed out msg=%s kind=%s timeout=%ss; continuing without media",
+        file_size = self._media_size(message) or 0
+        estimated_seconds = int(file_size / (128 * 1024)) + 30
+        timeout_seconds = min(
+            600,
+            max(1, self._media_download_timeout_seconds, estimated_seconds),
+        )
+        path: str | None = None
+        for attempt in range(1, 3):
+            try:
+                path = await asyncio.wait_for(
+                    message.download_media(file=str(self._media_dir)),
+                    timeout=timeout_seconds,
+                )
+                break
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Media download timed out msg=%s kind=%s timeout=%ss attempt=%d",
+                    message_id,
+                    media_kind.value,
+                    timeout_seconds,
+                    attempt,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Media download failed msg=%s kind=%s attempt=%d error=%s",
+                    message_id,
+                    media_kind.value,
+                    attempt,
+                    exc,
+                )
+            if attempt == 1:
+                await asyncio.sleep(2)
+        if path is None:
+            logger.error(
+                "Media download exhausted retries msg=%s kind=%s; post continues text-only",
                 message_id,
                 media_kind.value,
-                self._media_download_timeout_seconds,
-            )
-            return None
-        except Exception as exc:
-            logger.warning(
-                "Media download failed msg=%s kind=%s error=%s; continuing without media",
-                message_id,
-                media_kind.value,
-                exc,
             )
             return None
         if not path:
@@ -894,6 +937,21 @@ async def run(config: AppConfig | None = None, configure_logging: bool = True) -
         channels=repos["channels"],
         media_download_timeout_seconds=config.storage.media_download_timeout_seconds,
     )
+    source_metrics = SourceMetricsService(
+        posts,
+        repos["queue"],
+        TelethonSourceMetadataRefresher(client),
+    )
+
+    async def handle_source_metrics(item: QueueItem) -> QueueStatus:
+        """Refresh source engagement with the collector Telegram session."""
+        await source_metrics.refresh_post(str(item.payload["post_id"]))
+        return QueueStatus.COMPLETED
+
+    metrics_worker = QueueWorker(
+        repos["queue"],
+        {QueueItemType.SOURCE_METRICS_REFRESH: handle_source_metrics},
+    )
     config_sync = ConfigSyncWorker(db)
     config_sync_task = asyncio.create_task(config_sync.run())
     startup_backfill_since = _current_day_start_utc(config.scheduler.timezone)
@@ -901,8 +959,10 @@ async def run(config: AppConfig | None = None, configure_logging: bool = True) -
         list(config.telegram.source_channels),
         list(await repos["channels"].list_sources()),
     )
+    metrics_task: asyncio.Task[None] | None = None
     try:
         await client.start()
+        metrics_task = asyncio.create_task(metrics_worker.run())
         await collector.run(
             initial_sources,
             startup_backfill_since=startup_backfill_since,
@@ -913,6 +973,13 @@ async def run(config: AppConfig | None = None, configure_logging: bool = True) -
             timezone_name=config.scheduler.timezone,
         )
     finally:
+        metrics_worker.stop()
+        if metrics_task is not None:
+            metrics_task.cancel()
+            try:
+                await metrics_task
+            except asyncio.CancelledError:
+                pass
         config_sync.stop()
         config_sync_task.cancel()
         try:

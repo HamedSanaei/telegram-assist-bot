@@ -20,7 +20,8 @@ price updates twice per day with the change compared to the previous record.
   0-to-100 quality scoring through the configured Google AI Studio → Groq
   → OpenRouter → DeepSeek chain.
 - Approval is immediate; 20 minutes after source publication the bot refreshes
-  engagement metrics, calculates the score, and edits the same admin preview.
+  engagement metrics through the collector session, calculates the score,
+  and edits the same admin preview without removing its callback buttons.
 - vmess/vless config extraction and connectivity testing on an Iran server
   through a token-protected worker API (xray-core based).
 - Main management commands plus an admin-only `/panel` in the approval bot
@@ -31,6 +32,8 @@ price updates twice per day with the change compared to the previous record.
   message or removes the native scheduled message; duplicate publishing is
   blocked. Restart never resends a post that already entered the approval
   stage, even if old approval-bot message refs are inactive.
+- Live updates and backfill share an atomic source-identity boundary, so one
+  Telegram message cannot be downloaded, analyzed, or queued twice.
 - Daily source-post campaigns are copied or forwarded into Telegram's native
   channel schedule with restart-safe occurrence tracking.
 - All joined channel/group dialogs are scanned for common free proxy config

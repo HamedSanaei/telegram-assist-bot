@@ -17,9 +17,11 @@ from src.application.ai_service import AiService
 from src.domain.entities import MediaItem, Post, PostSourceMetrics, TextEntity, VpnConfig
 from src.domain.enums import (
     IngestionMode,
+    MediaDownloadStatus,
     PostCategory,
     QualityScoreStatus,
     QueueItemType,
+    SourceMetricsStatus,
 )
 from src.domain.interfaces import PostRepository, QueueRepository
 from src.domain.services.text_fingerprint import rank_similar_texts
@@ -37,6 +39,14 @@ logger = get_logger(__name__)
 QUALITY_SCORE_DELAY_MINUTES = 20
 LOCAL_DUPLICATE_SCORE_THRESHOLD = 0.92
 LOCAL_AI_CANDIDATE_LIMIT = 5
+
+
+@dataclass(frozen=True)
+class _StoredPostResult:
+    """Result of an atomic first-write attempt for one source message."""
+
+    post: Post
+    inserted: bool
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,7 @@ class CollectedMessage:
     source_label: str = ""
     grouped_id: int | None = None
     media: list[MediaItem] = field(default_factory=list)
+    expected_media_count: int = 0
     text_entities: list[TextEntity] = field(default_factory=list)
     source_metrics: PostSourceMetrics = field(default_factory=PostSourceMetrics)
     ingestion_mode: IngestionMode = IngestionMode.CONFIGURED_SOURCE
@@ -278,7 +289,7 @@ class CollectPostUseCase:
                 message,
                 ingestion_mode=IngestionMode.DIALOG_VPN_DISCOVERY,
             )
-            return await self._store_post(
+            stored = await self._store_post(
                 message=skipped,
                 post_hash=content_hash(message.text or "vpn-duplicate"),
                 category=PostCategory.VPN_CONFIG,
@@ -289,6 +300,7 @@ class CollectPostUseCase:
                 duplicate_provider="local_vpn_fingerprint",
                 configs=configs,
             )
+            return stored.post
         cleaned_text, provider = await self._clean_discovery_text(
             message.text or "", configs, fresh_configs
         )
@@ -298,7 +310,7 @@ class CollectPostUseCase:
             text_entities=[],
             ingestion_mode=IngestionMode.DIALOG_VPN_DISCOVERY,
         )
-        post = await self._store_post(
+        stored = await self._store_post(
             message=discovery,
             post_hash=content_hash(
                 "\n".join(sorted(config.raw for config in fresh_configs))
@@ -311,6 +323,10 @@ class CollectPostUseCase:
             duplicate_provider=None,
             configs=fresh_configs,
         )
+        post = stored.post
+        if not stored.inserted:
+            await self._ensure_pipeline_queued(post)
+            return None
         await self._enqueue_pipeline(post)
         logger.info(
             "Stored dialog VPN discovery post=%s chat=%s msg=%s configs=%d",
@@ -397,7 +413,7 @@ class CollectPostUseCase:
                     local_candidates[0].score,
                     len(recent),
                 )
-                return await self._store_post(
+                stored = await self._store_post(
                     message=message,
                     post_hash=post_hash,
                     category=category,
@@ -408,6 +424,7 @@ class CollectPostUseCase:
                     duplicate_provider=duplicate_provider,
                     configs=configs,
                 )
+                return stored.post
             compare_texts = [candidate.text for candidate in local_candidates]
             try:
                 analysis = await self._ai.analyze_post(text, compare_texts)
@@ -488,7 +505,7 @@ class CollectPostUseCase:
         if configs and category not in (PostCategory.VPN, PostCategory.VPN_CONFIG):
             category = PostCategory.VPN_CONFIG
 
-        post = await self._store_post(
+        stored = await self._store_post(
             message=message,
             post_hash=post_hash,
             category=category,
@@ -499,6 +516,16 @@ class CollectPostUseCase:
             duplicate_provider=duplicate_provider,
             configs=configs,
         )
+        post = stored.post
+        if not stored.inserted:
+            await self._ensure_pipeline_queued(post)
+            logger.info(
+                "Source race resolved using stored winner post=%s chat=%s msg=%s",
+                post.post_id,
+                message.source_chat_id,
+                message.message_id,
+            )
+            return post
         if skipped_reason:
             logger.info(
                 "Stored skipped post id=%s chat=%s msg=%s reason=%s",
@@ -532,7 +559,7 @@ class CollectPostUseCase:
         duplicate_provider: str | None,
     ) -> Post:
         """Store a skipped source message without queueing any next stage."""
-        return await self._store_post(
+        stored = await self._store_post(
             message=message,
             post_hash=post_hash,
             category=category,
@@ -543,6 +570,7 @@ class CollectPostUseCase:
             duplicate_provider=duplicate_provider,
             configs=[],
         )
+        return stored.post
 
     async def _store_post(
         self,
@@ -555,7 +583,7 @@ class CollectPostUseCase:
         duplicate_of: str | None,
         duplicate_provider: str | None,
         configs: list[VpnConfig],
-    ) -> Post:
+    ) -> _StoredPostResult:
         """Persist one normalized post document in MongoDB."""
         now = datetime.now(timezone.utc)
         post = Post(
@@ -572,9 +600,16 @@ class CollectPostUseCase:
                 if message.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY
                 else QualityScoreStatus.PENDING
             ),
+            source_metrics_status=(
+                SourceMetricsStatus.NOT_REQUIRED
+                if message.ingestion_mode == IngestionMode.DIALOG_VPN_DISCOVERY
+                else SourceMetricsStatus.PENDING
+            ),
             vpn_fingerprints=[self._vpn_fingerprint(config.raw) for config in configs],
             grouped_id=message.grouped_id,
             media=list(message.media),
+            expected_media_count=message.expected_media_count,
+            media_download_status=self._media_download_status(message),
             category=category,
             ai_provider=provider,
             is_duplicate=is_duplicate,
@@ -586,9 +621,20 @@ class CollectPostUseCase:
             collected_at=now,
             expires_at=now + timedelta(days=self._retention_days),
         )
-        await self._posts.save(post)
-        logger.info("Saved post to MongoDB id=%s", post.post_id)
-        return post
+        inserted = await self._posts.insert_if_absent(post)
+        if inserted:
+            logger.info("Saved post to MongoDB id=%s", post.post_id)
+            return _StoredPostResult(post=post, inserted=True)
+        existing = await self._posts.find_by_source_message(
+            message.source_chat_id,
+            message.message_id,
+            message.grouped_id,
+        )
+        if existing is None:
+            raise RuntimeError(
+                "Mongo source identity conflict occurred but winner was not found"
+            )
+        return _StoredPostResult(post=existing, inserted=False)
 
     async def _repair_existing_media(
         self, existing: Post, message: CollectedMessage
@@ -610,6 +656,8 @@ class CollectPostUseCase:
         ):
             return False
         existing.media = list(message.media)
+        existing.expected_media_count = message.expected_media_count
+        existing.media_download_status = self._media_download_status(message)
         if message.text_entities:
             existing.text_entities = list(message.text_entities)
         existing.source_metrics = message.source_metrics
@@ -622,6 +670,17 @@ class CollectPostUseCase:
             len(message.media),
         )
         return True
+
+    @staticmethod
+    def _media_download_status(message: CollectedMessage) -> MediaDownloadStatus:
+        """Return download completeness for one normalized source message."""
+        expected = max(0, message.expected_media_count)
+        downloaded = len(message.media)
+        if expected == 0 or downloaded >= expected:
+            return MediaDownloadStatus.COMPLETE
+        if downloaded == 0:
+            return MediaDownloadStatus.FAILED
+        return MediaDownloadStatus.PARTIAL
 
     @staticmethod
     def _stored_media_exists(post: Post) -> bool:
@@ -644,64 +703,55 @@ class CollectPostUseCase:
         if post.skipped_reason:
             return False
         repaired = False
-        if not await self._queue.has_active_or_successful_post_item(
-            post.post_id, {QueueItemType.APPROVAL_REQUEST}
-        ):
-            await self._queue.enqueue(
-                QueueItemType.APPROVAL_REQUEST, {"post_id": post.post_id}
-            )
+        if await self._queue.enqueue_if_missing_post_item(
+            QueueItemType.APPROVAL_REQUEST,
+            post.post_id,
+            {"post_id": post.post_id},
+        ) is not None:
             repaired = True
-        if (
-            post.quality_score_status == QualityScoreStatus.PENDING
-            and not await self._queue.has_active_or_successful_post_item(
-                post.post_id,
-                {QueueItemType.QUALITY_SCORE, QueueItemType.QUALITY_SCORE_UPDATE},
-            )
-        ):
-            await self._queue.enqueue(
-                QueueItemType.QUALITY_SCORE_UPDATE,
-                {"post_id": post.post_id},
-                scheduled_at=self._quality_score_due_at(post),
-            )
-            repaired = True
+        if post.quality_score_status == QualityScoreStatus.PENDING:
+            if post.source_metrics_status == SourceMetricsStatus.PENDING:
+                if await self._queue.enqueue_if_missing_post_item(
+                    QueueItemType.SOURCE_METRICS_REFRESH,
+                    post.post_id,
+                    {"post_id": post.post_id},
+                    scheduled_at=self._source_metrics_due_at(post),
+                ) is not None:
+                    repaired = True
+            elif not await self._queue.has_active_or_successful_post_item(
+                post.post_id, {QueueItemType.QUALITY_SCORE}
+            ) and await self._queue.enqueue_if_missing_post_item(
+                    QueueItemType.QUALITY_SCORE_UPDATE,
+                    post.post_id,
+                    {"post_id": post.post_id, "metrics_ready": True},
+                ) is not None:
+                repaired = True
         if (
             post.vpn_configs
             and self._vpn_testing_enabled
-            and not await self._queue.has_active_or_successful_post_item(
-                post.post_id, {QueueItemType.VPN_TEST}
+            and await self._queue.enqueue_if_missing_post_item(
+                QueueItemType.VPN_TEST,
+                post.post_id,
+                {"post_id": post.post_id},
             )
+            is not None
         ):
-            await self._queue.enqueue(QueueItemType.VPN_TEST, {"post_id": post.post_id})
             repaired = True
         return repaired
 
     async def _enqueue_pipeline(self, post: Post) -> None:
         """Enqueue immediate approval and independent background enrichment."""
-        await self._queue.enqueue(
-            QueueItemType.APPROVAL_REQUEST, {"post_id": post.post_id}
+        changed = await self._ensure_pipeline_queued(post)
+        logger.info(
+            "Ensured post pipeline post=%s changed=%s score_status=%s vpn_configs=%d",
+            post.post_id,
+            changed,
+            post.quality_score_status.value,
+            len(post.vpn_configs),
         )
-        logger.info("Enqueued approval_request post=%s", post.post_id)
-        if post.quality_score_status == QualityScoreStatus.PENDING:
-            scheduled_at = self._quality_score_due_at(post)
-            await self._queue.enqueue(
-                QueueItemType.QUALITY_SCORE_UPDATE,
-                {"post_id": post.post_id},
-                scheduled_at=scheduled_at,
-            )
-            logger.info(
-                "Enqueued %s post=%s scheduled_at=%s",
-                QueueItemType.QUALITY_SCORE_UPDATE.value,
-                post.post_id,
-                scheduled_at.isoformat(),
-            )
-        if post.vpn_configs and self._vpn_testing_enabled:
-            await self._queue.enqueue(
-                QueueItemType.VPN_TEST, {"post_id": post.post_id}
-            )
-            logger.info("Enqueued vpn_test post=%s", post.post_id)
 
     @staticmethod
-    def _quality_score_due_at(post: Post) -> datetime:
+    def _source_metrics_due_at(post: Post) -> datetime:
         """
         Return when the post should be scored.
 
@@ -711,7 +761,10 @@ class CollectPostUseCase:
         now = datetime.now(timezone.utc)
         source_published_at = post.source_metrics.source_published_at
         if source_published_at is None:
-            return now
+            collected_at = post.collected_at or now
+            if collected_at.tzinfo is None:
+                collected_at = collected_at.replace(tzinfo=timezone.utc)
+            return max(now, collected_at + timedelta(minutes=QUALITY_SCORE_DELAY_MINUTES))
         if source_published_at.tzinfo is None:
             source_published_at = source_published_at.replace(tzinfo=timezone.utc)
         else:

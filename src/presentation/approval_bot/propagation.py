@@ -24,6 +24,22 @@ def _is_message_not_modified_error(exc: Exception) -> bool:
     return "message is not modified" in str(exc).lower()
 
 
+def _is_permanent_message_error(exc: Exception) -> bool:
+    """Return whether a tracked Telegram message is permanently unavailable."""
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "message not found",
+            "message to edit not found",
+            "message_id_invalid",
+            "chat not found",
+            "bot was blocked",
+            "user is deactivated",
+        )
+    )
+
+
 async def refresh_approval_keyboards(
     bot: Bot, approval: ApprovalService, post_id: str
 ) -> int:
@@ -45,10 +61,9 @@ async def refresh_approval_keyboards(
     refs = await approval.active_approval_messages(post_id)
     if not refs:
         return 0
-    channels = await approval.list_channels()
-    published = await approval.published_channels(post_id)
-    scheduled = await approval.scheduled_channels(post_id)
-    history = await approval.delivery_history(post_id)
+    _post, channels, published, scheduled, history = (
+        await approval.approval_view_state(post_id)
+    )
     refreshed = 0
     for ref in refs:
         immediate = ref.delivery_mode == MODE_IMMEDIATE
@@ -86,7 +101,7 @@ async def refresh_approval_keyboards(
                 ref.id,
                 exc,
             )
-            if ref.id is not None:
+            if ref.id is not None and _is_permanent_message_error(exc):
                 await approval.deactivate_approval_message(ref.id)
     return refreshed
 

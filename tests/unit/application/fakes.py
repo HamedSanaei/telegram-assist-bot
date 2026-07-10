@@ -8,6 +8,7 @@ from decimal import Decimal
 from src.domain.entities import (
     AdminUser,
     ApprovalMessageRef,
+    ApprovalPreviewRefreshResult,
     DestinationChannel,
     DollarPrice,
     Post,
@@ -118,6 +119,18 @@ class FakePostRepository:
     async def save(self, post: Post) -> None:
         self.posts[post.post_id] = post
 
+    async def insert_if_absent(self, post: Post) -> bool:
+        """Insert unless another post already owns the source identity."""
+        for existing in self.posts.values():
+            if (
+                existing.source_chat_id == post.source_chat_id
+                and existing.source_message_id == post.source_message_id
+                and existing.grouped_id == post.grouped_id
+            ):
+                return False
+        self.posts[post.post_id] = post
+        return True
+
     async def get(self, post_id: str) -> Post | None:
         return self.posts.get(post_id)
 
@@ -194,9 +207,27 @@ class FakeQueueRepository:
         self.items.append(item)
         return item.id
 
-    async def claim_next_due(self, now: datetime) -> QueueItem | None:
+    async def enqueue_if_missing_post_item(
+        self,
+        item_type: QueueItemType,
+        post_id: str,
+        payload: dict[str, object],
+        scheduled_at: datetime | None = None,
+    ) -> int | None:
+        """Enqueue only when the fake has no active/successful matching item."""
+        if await self.has_active_or_successful_post_item(post_id, {item_type}):
+            return None
+        return await self.enqueue(item_type, payload, scheduled_at)
+
+    async def claim_next_due(
+        self, now: datetime, allowed_types: set[QueueItemType] | None = None
+    ) -> QueueItem | None:
         for item in self.items:
-            if item.status == QueueStatus.PENDING and item.scheduled_at <= now:
+            if (
+                item.status == QueueStatus.PENDING
+                and item.scheduled_at <= now
+                and (not allowed_types or item.type in allowed_types)
+            ):
                 item.status = QueueStatus.PROCESSING
                 item.attempts += 1
                 return item
@@ -352,6 +383,21 @@ class FakeApprovalMessageRepository:
     async def deactivate(self, message_ref_id: int) -> None:
         """Deactivate one ref by id."""
         self.deactivated.add(message_ref_id)
+
+    async def activate(self, message_ref_id: int) -> None:
+        """Reactivate one ref by id."""
+        self.deactivated.discard(message_ref_id)
+
+    async def list_recent_inactive(
+        self, updated_since: datetime, limit: int = 500
+    ) -> list[ApprovalMessageRef]:
+        """Return inactive refs; timestamps are irrelevant for this fake."""
+        del updated_since
+        return [
+            ref
+            for ref in self.refs
+            if ref.id in self.deactivated or not ref.active
+        ][:limit]
 
     async def list_active_post_ids(self) -> list[str]:
         """Return post ids with active refs."""
@@ -681,6 +727,7 @@ class FakeApprovalNotifier:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, list[int]]] = []
+        self.refreshed: list[tuple[str, list[int]]] = []
 
     async def send_approval_request(
         self, post: Post, channels: list[DestinationChannel]
@@ -695,6 +742,22 @@ class FakeApprovalNotifier:
                 message_id=len(self.sent),
             )
         ]
+
+    async def refresh_approval_request(
+        self,
+        post: Post,
+        channels: list[DestinationChannel],
+        published_chat_ids: set[int],
+        scheduled_chat_ids: set[int],
+        has_delivery_history: bool,
+        refs: list[ApprovalMessageRef] | None = None,
+    ) -> ApprovalPreviewRefreshResult:
+        """Record one in-place preview refresh."""
+        del published_chat_ids, scheduled_chat_ids, has_delivery_history, refs
+        self.refreshed.append(
+            (post.post_id, [channel.chat_id for channel in channels])
+        )
+        return ApprovalPreviewRefreshResult(updated=1)
 
 
 class FakeVpnTester:
