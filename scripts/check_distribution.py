@@ -81,6 +81,10 @@ def validate_wheel(wheel_path: Path) -> None:
             required_members = {
                 f"{EXPECTED_IMPORT_PACKAGE}/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/py.typed",
+                f"{EXPECTED_IMPORT_PACKAGE}/shared/config/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/shared/config/loader.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/shared/config/models.py",
                 *{
                     f"{EXPECTED_IMPORT_PACKAGE}/{layer}/__init__.py"
                     for layer in (
@@ -160,6 +164,7 @@ def validate_source_distribution(archive_path: Path) -> None:
     member_names = {member.as_posix() for member in members}
     required = {
         f"{root}/README.md",
+        f"{root}/config/configuration.example.json",
         f"{root}/pyproject.toml",
         f"{root}/src/{EXPECTED_IMPORT_PACKAGE}/__init__.py",
     }

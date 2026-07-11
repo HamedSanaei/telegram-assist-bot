@@ -1,6 +1,6 @@
 # T001 — Bootstrap پروژه و Quality Gateها
 
-- **Status:** Active
+- **Status:** Completed
 - **Milestone:** Milestone 0 — پایه قابل اجرا
 
 ## Goal
@@ -227,6 +227,36 @@ git status --short
 - ثبت تصمیم Python/toolchain در `docs/DECISIONS.md` با تکمیل پیامدهای `ADR-001`؛ تصمیم روزمرهٔ ابزار نباید ADR جداگانهٔ غیرضروری بسازد.
 - افزودن فرمان‌های نصب و Quality Gate به `README.md`.
 - Requirement محصول در `docs/REQUIREMENTS.md` نباید در این Task تغییر کند.
+
+## Verification results
+
+- **Verified on:** 2026-07-11
+- **Toolchain:** `uv 0.11.28`، CPython `3.12.13` و `3.13.14`.
+- **Remote CI:** اجرا نشد؛ معادل کامل Matrix روی هر دو Minor به‌صورت محلی اجرا و موفق شد.
+- **Integration tests:** برای T001 طبق Scope برابر N/A؛ Packaging smoke جایگزین الزامی اجرا شد.
+
+| Command or check | Result |
+|---|---|
+| `uv sync --locked --group dev` | Pass روی Python 3.12 و 3.13؛ ۲۵ Package قفل‌شده و بدون runtime dependency |
+| `uv sync --locked --group dev --offline` | Pass؛ editable build از `hatchling==1.31.0` و `editables==0.5` قفل‌شده و بدون شبکه |
+| `uv lock --check` | Pass؛ Lockfile با metadata و dependency declaration هماهنگ است |
+| `uv run pytest -m "not live" --cov=telegram_assist_bot --cov-branch --cov-report=term-missing --cov-fail-under=90` | Pass روی هر دو Minor؛ ۶۱ تست و branch coverage برابر ۱۰۰٪ |
+| `uv run ruff check .` | Pass روی هر دو Minor |
+| `uv run ruff format --check .` | Pass روی هر دو Minor |
+| `uv run mypy src tests scripts` | Pass در حالت strict روی هر دو Minor |
+| `uv run python scripts/check_text_integrity.py --changed` | Pass؛ فایل‌های staged، unstaged و untracked غیرignored بررسی شدند |
+| `uv run python scripts/check_text_integrity.py --all` | Pass؛ ۹۱ فایل متنی با UTF-8 سخت‌گیرانه بررسی شدند |
+| `uv run detect-secrets-hook --no-verify --baseline .secrets.baseline <Git-visible files>` | Pass؛ baseline بدون finding و بدون دسترسی شبکه باقی ماند |
+| `uv build` | Pass؛ wheel و sdist با build dependencyهای pin‌شده ساخته شدند |
+| `uv build --no-build-isolation --offline` | Pass؛ Build رسمی locked و بدون Resolve پنهان اجرا شد |
+| `uv run python scripts/check_distribution.py dist` | Pass؛ membership دقیق Wheel، metadata، Python range و sdist تأیید شد |
+| Clean-wheel install/import | Pass روی Python 3.12 و 3.13 با `--no-deps` و isolated import |
+| `uv run python -c "import telegram_assist_bot"` | Pass روی هر دو Minor |
+| Ignore policy tests | Pass؛ Secret، private key، Session، Config محلی، Media، Log و Artifact پوشش داده شدند و template/fixture/Lockfile قابل Track ماندند |
+| UTF-8/Persian manual review | Pass؛ متن فارسی، نیم‌فاصله، line break و Emoji سالم‌اند و Mojibake جدیدی دیده نشد |
+| `git diff --check` و Secret/Session file review | Pass؛ فایل کاربردی، credential یا generated session افزوده نشده است |
+
+هر ۱۴ معیار پذیرش به‌صورت جداگانه بازبینی و تأیید شد. دو بازبینی مستقل نیز پس از اصلاح baseline، build isolation، Wheel membership و قواعد private-key هیچ blocker باقی‌مانده‌ای گزارش نکردند.
 
 ## Definition of done
 

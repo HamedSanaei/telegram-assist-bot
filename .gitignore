@@ -40,6 +40,7 @@ pip-wheel-metadata/
 !.env.example
 /config/configuration.json
 /config/configuration.local.json
+/config/configuration.*.json
 /config/configuration.*.local.json
 /config/*.secret.json
 /config/*.secrets.json

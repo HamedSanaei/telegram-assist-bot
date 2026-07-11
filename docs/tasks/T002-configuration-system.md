@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -112,6 +112,44 @@ uv run python scripts/check_text_integrity.py --changed
 - افزودن مسیر و جریان Configuration به `docs/CODE_MAP.md`.
 - همگام‌سازی `docs/ARCHITECTURE.md` اگر نام/مرز مدل‌ها با طرح فعلی تفاوت پیدا کرد.
 - ثبت تصمیم Schema/version یا کتابخانهٔ مدل‌سازی در `docs/DECISIONS.md` فقط اگر تصمیم معماری پایدار است.
+
+## نتایج راستی‌آزمایی
+
+- **Verified on:** 2026-07-11
+- **Toolchain:** `uv 0.11.28`، CPython `3.12.13` و `3.13.14`.
+- **Integration tests:** طبق Scope برابر N/A؛ همهٔ I/O فایل با `tmp_path` در Unit
+  Test و بدون شبکه/دیتابیس پوشش داده شد.
+- **Remote CI:** اجرا نشد؛ Matrix معادل CI روی هر دو Minor به‌صورت محلی موفق شد.
+
+| Command or check | Result |
+|---|---|
+| `uv run pytest tests/unit/shared/config` | Pass؛ ۱۳۹ تست Configuration |
+| `uv run pytest` | Pass؛ ۲۰۱ تست کل مخزن |
+| آزمون کامل با `--cov=telegram_assist_bot --cov-branch --cov-fail-under=90` | Pass روی Python 3.12 و 3.13؛ branch coverage کل ۹۲٫۷۳٪ |
+| `uv run ruff check .` | Pass روی هر دو Minor |
+| `uv run ruff format --check .` | Pass روی هر دو Minor |
+| `uv run mypy src tests` و Gate کامل `mypy src tests scripts` | Pass در حالت strict روی هر دو Minor |
+| `uv run python scripts/check_text_integrity.py --changed` | Pass؛ همهٔ فایل‌های changed/untracked غیرignored UTF-8 و فاقد marker خراب بودند |
+| `uv run python scripts/check_text_integrity.py --all` | Pass؛ کل متن مخزن بررسی شد |
+| `uv lock --check` و `uv sync --locked --group dev` | Pass؛ Pydantic، tzdata و dependencyهای توسعه در ۳۰ Package قفل شدند |
+| `uv build --no-build-isolation` و `check_distribution.py dist` | Pass؛ Config sample در sdist و ماژول‌های Config در Wheel تأیید شدند |
+| Clean-wheel install/import | Pass روی Python 3.12 و 3.13 همراه runtime dependencyها و `Asia/Tehran` |
+| `detect-secrets-hook --baseline .secrets.baseline` | Pass برای همهٔ فایل‌های Git-visible شامل فایل‌های جدید |
+| `git diff --check` و بازبینی دستی diff/نمونهٔ فارسی | Pass؛ Persian، ZWNJ، LF و Emoji سالم ماندند |
+| Secret/Session/generated-file review | Pass؛ Credential واقعی، Config محلی، Session یا فایل Runtime افزوده نشد |
+
+### بررسی معیارهای پذیرش
+
+| # | Result | Evidence |
+|---|---|---|
+| ۱ | Pass | `configuration.example.json` با Environment referenceهای مصنوعی به مدل کامل typed تبدیل شد. |
+| ۲ | Pass | خطاهای مستقل file-not-found، read، UTF-8، JSON/root و Schema ناشناخته تست شدند. |
+| ۳ | Pass | خطاهای structural، semantic و Secret حتی در یک section نامعتبر، یکجا و با path دقیق گزارش شدند. |
+| ۴ | Pass | `Asia/Tehran` و `UTC` پذیرفته و ZoneInfo نامعتبر رد شد؛ `tzdata` قفل است. |
+| ۵ | Pass | resolve فقط از Mapping محیطی انجام و sentinel از `str`، `repr`، cause/context و snapshot حذف شد. |
+| ۶ | Pass | Admin/Channel/Provider/Route تکراری، مقصد/Provider ناشناخته و boundaryهای عددی رد شدند. |
+| ۷ | Pass | نمونه، Source و fixtureها UTF-8 هستند و فارسی، نیم‌فاصله، line break و Emoji round-trip دقیق دارند. |
+| ۸ | Pass | تست no-I/O اثبات کرد Loader هیچ Socket، Session path، MongoDB، Telegram یا AI را لمس نمی‌کند. |
 
 ## تعریف انجام‌شدن
 
