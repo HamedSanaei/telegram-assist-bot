@@ -87,3 +87,26 @@
   صریح نیاز دارد؛ Pydantic و tzdata runtime dependencyهای قفل‌شده‌اند؛
   Composition Root تنها مصرف‌کنندهٔ Loader است؛ Configuration پس از Startup
   read-only است و تغییر آن Restart کنترل‌شده می‌خواهد.
+
+## ADR-010 — چرخهٔ عمر حداقلی Post و مختصات UTF-16 Entity
+
+- **Status:** Accepted
+- **Context:** فهرست وضعیت‌های بخش ۱۰ نیازمندی‌ها پیشنهادی است و حالت‌های
+  پردازش، انتخاب چند مقصد و انتشار را مخلوط می‌کند. در عین حال Domain باید پیش
+  از انتخاب Telegram SDK، هویت و Entityهای متن اصلی را بدون از دست‌دادن Custom
+  Emoji تثبیت کند.
+- **Decision:** وضعیت کلی Post در Milestone 0 فقط مقادیر پایدار `Discovered`،
+  `Stored` و `Expired` دارد. Transitionهای مجاز عبارت‌اند از
+  `Discovered → Stored` پیش از انقضا و `Discovered/Stored → Expired` در یا پس از
+  مرز انقضا؛ `Expired` Terminal است. هر Transition یک snapshot frozen تازه با
+  history و version افزایشی می‌سازد. وضعیت آیندهٔ هر مقصد در مدل مستقل
+  `Post × Destination` قرار می‌گیرد. Entity اصلی offset و length را صریحاً با
+  UTF-16 code unit و شناسهٔ Custom Emoji را به‌صورت رشتهٔ opaque نگه می‌دارد.
+- **Reason:** این تفکیک، وضعیت جزئی چند مقصد را به یک Enum سراسری تحمیل نمی‌کند،
+  optimistic concurrency را بدون وابستگی به MongoDB قابل‌آزمون می‌کند و با
+  قرارداد offset تلگرام و حفظ Premium/Custom Emoji سازگار است.
+- **Consequences:** نام وضعیت‌ها و واحد Entity قرارداد persistence آینده‌اند و
+  تغییر ناسازگارشان migration می‌خواهد. Adapter تلگرام مسئول mapping بدون
+  normalization و Mapper MongoDB مسئول بازسازی UTC/history است. Atomic compare
+  and set در T004 پیاده می‌شود و افزودن وضعیت یا workflow مقصد فقط در Task
+  صریح مربوط مجاز است.

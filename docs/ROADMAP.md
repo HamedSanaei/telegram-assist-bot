@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T003 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T004 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -17,8 +17,8 @@
 |---|---|---|---|---|
 | [T001](tasks/T001-project-bootstrap.md) | Bootstrap پروژه و Quality Gateها | — | `1`، `3`، `15` | Completed |
 | [T002](tasks/T002-configuration-system.md) | Configuration و Secret Validation | T001 | `4`، `14` | Completed |
-| [T003](tasks/T003-post-domain-lifecycle.md) | مدل Domain و چرخه عمر Post | T001 | `3`، `5.4`، `10` | Active |
-| [T004](tasks/T004-mongodb-idempotent-posts.md) | MongoDB و Persistence یکتای Post | T002، T003 | `5.3`، `5.4` | Planned |
+| [T003](tasks/T003-post-domain-lifecycle.md) | مدل Domain و چرخه عمر Post | T001 | `3`، `5.4`، `10` | Completed |
+| [T004](tasks/T004-mongodb-idempotent-posts.md) | MongoDB و Persistence یکتای Post | T002، T003 | `5.3`، `5.4` | Active |
 | [T005](tasks/T005-observability-retry-foundation.md) | Logging، خطا و Retry foundation | T001، T002 | `12`، `13`، `14` | Planned |
 | [T006](tasks/T006-foundation-startup-stabilization.md) | Startup و Stabilization پایه | T002، T004، T005 | `4`، `12`، `13` | Planned |
 
