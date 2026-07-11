@@ -12,6 +12,13 @@ EXPECTED_DISTRIBUTION = "telegram-assist-bot"
 EXPECTED_IMPORT_PACKAGE = "telegram_assist_bot"
 EXPECTED_VERSION = "0.1.0"
 EXPECTED_PYTHON_SPECIFIERS = frozenset({">=3.12", "<3.14"})
+EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
+    {
+        "pydantic<3,>=2.12.0",
+        "pymongo<5,>=4.13.0",
+        "tzdata>=2025.2",
+    }
+)
 
 
 class DistributionValidationError(RuntimeError):
@@ -58,6 +65,20 @@ def _metadata_headers(metadata: str) -> dict[str, str]:
     return headers
 
 
+def _metadata_header_values(metadata: str, expected_name: str) -> frozenset[str]:
+    """Return every non-folded value for one metadata header."""
+    values: set[str] = set()
+    for line in metadata.splitlines():
+        if not line:
+            break
+        if line[0].isspace():
+            continue
+        name, separator, value = line.partition(":")
+        if separator and name == expected_name:
+            values.add(value.strip())
+    return frozenset(values)
+
+
 def validate_wheel(wheel_path: Path) -> None:
     """Validate wheel membership and the project-owned metadata contract."""
     try:
@@ -90,6 +111,15 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/errors.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/models.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/status.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ports/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ports/post_repository.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/client.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/errors.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/indexes.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/post_mapper.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/post_repository.py",
                 *{
                     f"{EXPECTED_IMPORT_PACKAGE}/{layer}/__init__.py"
                     for layer in (
@@ -151,6 +181,12 @@ def validate_wheel(wheel_path: Path) -> None:
     if python_specifiers != EXPECTED_PYTHON_SPECIFIERS:
         raise DistributionValidationError(
             f"unexpected Requires-Python metadata: {headers.get('Requires-Python')!r}"
+        )
+
+    runtime_requirements = _metadata_header_values(metadata, "Requires-Dist")
+    if runtime_requirements != EXPECTED_RUNTIME_REQUIREMENTS:
+        raise DistributionValidationError(
+            f"unexpected runtime requirements: {sorted(runtime_requirements)}"
         )
 
 

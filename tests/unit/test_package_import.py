@@ -16,6 +16,17 @@ ARCHITECTURE_PACKAGES = (
     "shared",
     "workers",
 )
+T004_MODULES = (
+    "application.ports",
+    "application.ports.post_repository",
+    "infrastructure.persistence",
+    "infrastructure.persistence.mongodb",
+    "infrastructure.persistence.mongodb.client",
+    "infrastructure.persistence.mongodb.errors",
+    "infrastructure.persistence.mongodb.indexes",
+    "infrastructure.persistence.mongodb.post_mapper",
+    "infrastructure.persistence.mongodb.post_repository",
+)
 
 
 def test_distribution_metadata_matches_import_package() -> None:
@@ -24,6 +35,7 @@ def test_distribution_metadata_matches_import_package() -> None:
     assert frozenset(metadata.requires(DISTRIBUTION_NAME) or ()) == frozenset(
         {
             "pydantic<3,>=2.12.0",
+            "pymongo<5,>=4.13.0",
             "tzdata>=2025.2",
         }
     )
@@ -33,4 +45,11 @@ def test_architecture_scaffolds_are_importable_and_documented() -> None:
     """Expose every planned layer without adding product behavior."""
     for package_name in ARCHITECTURE_PACKAGES:
         module = import_module(f"telegram_assist_bot.{package_name}")
+        assert module.__doc__
+
+
+def test_t004_repository_modules_are_importable_and_documented() -> None:
+    """Keep the T004 repository boundary and MongoDB adapter importable."""
+    for module_name in T004_MODULES:
+        module = import_module(f"telegram_assist_bot.{module_name}")
         assert module.__doc__
