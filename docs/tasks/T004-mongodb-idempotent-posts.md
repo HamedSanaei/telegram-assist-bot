@@ -126,9 +126,15 @@ uv run python scripts/check_text_integrity.py --changed
 
 - `uv run pytest tests/unit/application/ports/test_post_repository_contract.py`: موفق؛ `17 passed`.
 - `uv run pytest tests/unit/infrastructure/persistence/test_post_mapper.py tests/unit/infrastructure/persistence/test_mongodb_post_repository_unit.py`: موفق؛ `68 passed`.
-- `uv run pytest tests/integration/infrastructure/persistence/test_mongodb_post_repository.py` با `TEST_MONGODB_URI` آزمایشی loopback و بدون credential: موفق؛ `12 passed` و هیچ تستی skip نشد.
+- فایل Integration واقعی MongoDB در اجرای suite کامل با `TEST_MONGODB_URI` آزمایشی loopback و بدون credential: موفق؛ `13 passed` و هیچ تستی skip نشد.
 - تعریف واقعی هر دو Index، راه‌اندازی تکرارشونده، رقابت درج و CAS، حذف منطقی رکورد منقضی، redaction خطا و round-trip فارسی/Emoji/Entity در تست‌های بالا بررسی شدند.
-- نتیجهٔ Gateهای کامل مخزن پس از اجرای نهایی ثبت می‌شود؛ این بخش نتیجه‌ای برای فرمان اجرا‌نشده ادعا نمی‌کند.
+- `uv run ruff check .`: موفق.
+- `uv run ruff format --check .`: موفق؛ `48 files already formatted`.
+- `uv run mypy src tests scripts`: موفق؛ `48 source files` بدون خطا.
+- `uv run pytest -m "not live" --cov=telegram_assist_bot --cov-branch --cov-report=term-missing --cov-fail-under=90`: موفق؛ `449 passed`، بدون skip و پوشش Branch برابر `93.38%`.
+- `uv run python scripts/check_text_integrity.py --all`: موفق؛ `126` فایل بررسی شد.
+- `detect-secrets-hook` با baseline مخزن روی تمام فایل‌های tracked: موفق.
+- `git diff --check`: موفق.
 
 ## تعریف انجام‌شدن
 
