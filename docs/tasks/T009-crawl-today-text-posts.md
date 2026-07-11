@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -101,6 +101,13 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 `TEST_MONGODB_URI` باید آزمایشی باشد؛ بازبینی دستی fixture فارسی و `git diff --check` الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Unit/Mapper متمرکز T009: `18 passed` و `0 skipped`.
+- مسیرهای Unit با `uv run pytest tests/unit/application/test_crawl_today_text_posts.py tests/unit/infrastructure/telegram/user/test_history_mapper.py tests/unit/infrastructure/telegram/user/test_history_adapter.py --basetemp <unique>` و Integration با `uv run pytest tests/integration/test_crawl_today_text_posts.py --basetemp <unique>` اجرا شدند.
+- Integration واقعی MongoDB: `3 passed` و `0 skipped`؛ بازهٔ `[شروع روز محلی، اکنون)`، pagination محدود، اجرای مجدد idempotent و round-trip متن فارسی/Entity اثبات شد.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرا؛ Branch Coverage برابر `90.02%` و همهٔ Quality Gateها موفق‌اند.
 
 ## به‌روزرسانی‌های مستندات
 

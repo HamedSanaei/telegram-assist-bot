@@ -22,6 +22,7 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryQuery,
     TelegramTextMessage,
 )
+from telegram_assist_bot.bootstrap.runtime import FoundationConfigurationError
 from telegram_assist_bot.bootstrap.text_ingestion import (
     SystemClock,
     TextIngestionApplication,
@@ -384,7 +385,7 @@ def test_cancellation_during_crawl_propagates_after_cleanup() -> None:
 
 @dataclass
 class RunApplication:
-    failure: Exception | None = None
+    failure: BaseException | None = None
     starts: int = 0
     waits: int = 0
     shutdowns: int = 0
@@ -429,6 +430,38 @@ def test_run_wrapper_maps_safe_startup_failure() -> None:
     )
 
     assert result.value == 3
+    assert fake.shutdowns == 1
+
+
+def test_run_wrapper_preserves_foundation_configuration_exit_code() -> None:
+    failure = TextIngestionStartupError()
+    failure.__cause__ = FoundationConfigurationError()
+    fake = RunApplication(failure=failure)
+
+    result = run(
+        run_text_ingestion_application(
+            cast("TextIngestionApplication", fake),
+            Path("synthetic.json"),
+            environ={},
+        )
+    )
+
+    assert result.value == 2
+    assert fake.shutdowns == 1
+
+
+def test_run_wrapper_propagates_cancellation_after_shutdown() -> None:
+    fake = RunApplication(failure=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        run(
+            run_text_ingestion_application(
+                cast("TextIngestionApplication", fake),
+                Path("synthetic.json"),
+                environ={},
+            )
+        )
+
     assert fake.shutdowns == 1
 
 

@@ -6,11 +6,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
-from tests.integration.test_crawl_today_text_posts import (
-    MongoTestSettings,
-    Resources,
-    resources,
-)
 
 from telegram_assist_bot.application import (
     IngestionOutcome,
@@ -20,6 +15,11 @@ from telegram_assist_bot.application import (
 )
 from telegram_assist_bot.application.ports import TelegramTextMessage
 from telegram_assist_bot.domain.posts import PostId
+from tests.integration.test_crawl_today_text_posts import (
+    MongoTestSettings,
+    Resources,
+    resources,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Mapping

@@ -6,10 +6,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
-from tests.integration.test_crawl_today_text_posts import (
-    MongoTestSettings,
-    resources,
-)
 
 from telegram_assist_bot.application import HandleLiveMessage, IngestPostIdempotently
 from telegram_assist_bot.application.ports import (
@@ -19,6 +15,10 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.domain.posts import PostId
 from telegram_assist_bot.shared.retry import RetryPolicy
 from telegram_assist_bot.workers import LiveTextListener
+from tests.integration.test_crawl_today_text_posts import (
+    MongoTestSettings,
+    resources,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Mapping

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -102,6 +102,14 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 بازبینی `.gitignore`، permission فایل آزمایشی، `git status --ignored` و `git diff --check` الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Unit/Contract متمرکز T007: `19 passed` و `0 skipped`.
+- مسیرهای T007 با `uv run pytest tests/unit/application/test_authenticate_telegram_session.py tests/unit/infrastructure/telegram/user/test_session_adapter.py tests/contract/telegram/test_session_contract.py --basetemp <unique>` در invocation متمرکز Milestone اجرا شدند.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرای ترتیبی؛ Branch Coverage برابر `90.02%`.
+- Ruff، format، mypy، text integrity، secret detection، build و distribution همگی موفق‌اند.
+- Session واقعی یا credential در Git نیست؛ مسیر `var/`، فایل‌های `*.session*` و lockهای runtime نادیده گرفته می‌شوند. محدودسازی permission در POSIX به‌صورت best-effort اعمال می‌شود و در Windows به ACL دایرکتوری runtime وابسته است.
 
 ## به‌روزرسانی‌های مستندات
 

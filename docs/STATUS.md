@@ -1,9 +1,9 @@
 # وضعیت فعلی
 
-- **Current milestone:** Milestone 1 — دریافت متن از Telegram User API
-- **Active task:** [T007 — ورود و ذخیرهٔ Session تلگرام](tasks/T007-telegram-session-authentication.md)
-- **Last completed task:** [T006 — Startup و Stabilization پایه](tasks/T006-foundation-startup-stabilization.md)
-- **Known blockers:** هیچ‌کدام؛ وابستگی T007 یعنی T006 کامل است.
-- **Failing tests:** هیچ‌کدام؛ `32` تست Unit متمرکز T006، `3` تست Integration واقعی T006 بدون skip و `570` تست کامل موفق‌اند؛ Branch Coverage برابر `90.94%` است.
-- **Last verified commit:** `f12b5c9`؛ آخرین Commit تکمیل T005 است. تغییرات کامل و راستی‌آزمایی‌شدهٔ T006 هنوز Commit نشده‌اند.
-- **Next recommended action:** T006 را review و Commit کنید؛ سپس فقط T007 فعال را طبق فایل Task آن پیاده‌سازی کنید.
+- **Current milestone:** Milestone 2 — Media و آماده‌سازی محتوا
+- **Active task:** [T013 — دانلود و ذخیره انواع Media](tasks/T013-media-download-storage.md)
+- **Last completed task:** [T012 — تست Restart و Stabilization دریافت](tasks/T012-ingestion-restart-stabilization.md)
+- **Known blockers:** هیچ‌کدام؛ Milestone 1 و وابستگی T013 یعنی T012 کامل‌اند.
+- **Failing tests:** هیچ‌کدام؛ `669` تست non-live در دو اجرای ترتیبی بدون skip موفق‌اند و Branch Coverage برابر `90.02%` است.
+- **Last verified commit:** `f0fa779`؛ پیاده‌سازی Milestone 1 در شاخه موجود است و اصلاح‌های نهایی lint/coverage و مستندات این راستی‌آزمایی هنوز Commit نشده‌اند.
+- **Next recommended action:** تغییرات نهایی Milestone 1 را review و Commit کنید؛ سپس فقط T013 فعال را طبق فایل Task آن پیاده‌سازی کنید.

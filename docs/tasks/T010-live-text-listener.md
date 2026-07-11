@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -93,6 +93,13 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 MongoDB باید test-only باشد؛ بازبینی lifecycle و fixture فارسی و `git diff --check` الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Unit/Contract متمرکز T010: `13 passed` و `0 skipped`.
+- مسیرهای متمرکز با `uv run pytest tests/unit/application/test_handle_live_message.py tests/unit/workers/test_live_text_listener.py tests/contract/telegram/test_live_message_contract.py tests/integration/test_live_text_listener.py --basetemp <unique>` اجرا شدند.
+- Integration واقعی MongoDB: `2 passed` و `0 skipped`؛ duplicate event، backpressure محدود، reconnect، unsubscribe و propagation لغو تست شد.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرا؛ Branch Coverage برابر `90.02%` و همهٔ Quality Gateها موفق‌اند.
 
 ## به‌روزرسانی‌های مستندات
 

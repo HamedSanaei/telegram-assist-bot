@@ -194,3 +194,36 @@
   exit code یا نام eventهای lifecycle تغییر قرارداد عمومی است. shutdown حین
   state `STARTING` رد می‌شود و cancellation خود Startup مسیر cleanup مالک همان
   lifecycle را اجرا می‌کند. هیچ retry تازه‌ای به MongoDB متصل نشده است.
+
+## ADR-014 — Telethon برای Telegram User API و Session فایل‌محور محافظت‌شده
+
+- **Status:** Accepted
+- **Context:** Milestone 1 به SDK ناهمگام نگهداری‌شده‌ای نیاز دارد که Session
+  پایدار، History، event زنده، Entity/Custom Emoji و توسعهٔ بعدی Media را پشتیبانی
+  کند، بدون نشت typeهای SDK به Application.
+- **Decision:** `Telethon 1.44.0` به‌صورت exact pin انتخاب شد. Adapterهای آن فقط در
+  `infrastructure/telegram/user` هستند و SDK objectها را به DTO و خطاهای
+  application-owned تبدیل می‌کنند. Session فقط زیر runtime ignored نگه‌داری و
+  mutation آن با lock محدود محافظت می‌شود. login تعاملی فقط command صریح `login`
+  است؛ startup و `ingest-text` هرگز prompt نمی‌زنند.
+- **Reason:** API کامل asyncio، Session پایدار، mapping Entityها و event handler
+  قابل حذف، نیاز Milestone را بدون framework چند-SDK برآورده می‌کند.
+- **Consequences:** تغییر SDK نیازمند Adapter و migration/re-authentication صریح
+  Session است. روی POSIX permissionهای `0700/0600` best-effort اعمال می‌شوند؛ روی
+  Windows حفاظت محرمانگی به ACL دایرکتوری runtime حساب کاربری وابسته است.
+
+## ADR-015 — مسیر واحد ingest، claim اتمیک و subscribe-before-crawl
+
+- **Status:** Accepted
+- **Context:** Crawl و Listener می‌توانند هم‌زمان یک identity را تحویل دهند و
+  restart ممکن است بین insert و claim رخ دهد. correctness نباید به lock محلی یا
+  check-then-insert وابسته باشد و gap میان crawl و listener باید محدود شود.
+- **Decision:** هر دو producer فقط `IngestPostIdempotently` را صدا می‌زنند.
+  unique source identity، بازگرداندن canonical Post ID و marker افزایشی claim با
+  عملیات اتمیک MongoDB منبع حقیقت‌اند. Composition Root ابتدا subscription محدود
+  را ایجاد، سپس crawl امروز را اجرا و بعد buffered listener را مصرف می‌کند.
+- **Reason:** duplicate delivery و restart بدون outbox یا broker تازه به یک document
+  و یک claim می‌رسند و eventهای حین crawl در buffer محدود باقی می‌مانند.
+- **Consequences:** schema version تغییر نکرده و خواندن سندهای قدیمی فاقد هر دو
+  marker claim سازگار است. claim فقط hand-off مرحلهٔ بعد را ثبت می‌کند و هیچ Media،
+  AI job یا downstream worker در Milestone 1 ایجاد نمی‌شود.

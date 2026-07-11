@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 import telegram_assist_bot.bootstrap.telegram_login as login_module
 from telegram_assist_bot.application.ports import (
     TelegramLoginStep,
@@ -20,8 +22,6 @@ from tests.unit.test_text_ingestion_bootstrap import loaded_configuration
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Mapping
-
-    import pytest
 
     from telegram_assist_bot.shared.observability import RedactedValue
 
@@ -180,6 +180,38 @@ def test_configuration_failure_creates_no_gateway(
     )
 
     assert result is FoundationExitCode.CONFIGURATION_ERROR
+
+
+def test_login_cancellation_closes_gateway_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(TelegramSessionStatus.MISSING)
+    patch_composition(monkeypatch, gateway)
+
+    class CancelledAuthentication:
+        def __init__(self, _gateway: object) -> None:
+            pass
+
+        async def execute(self, **_kwargs: object) -> None:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        login_module,
+        "AuthenticateTelegramSession",
+        CancelledAuthentication,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        run(
+            run_telegram_login(
+                Path("synthetic.json"),
+                environ={},
+                sink=Sink(),
+                login_input=Input(),
+            )
+        )
+
+    assert gateway.close_calls == 1
 
 
 def test_terminal_input_uses_injected_non_echoing_reader() -> None:

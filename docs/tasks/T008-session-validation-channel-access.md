@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -95,6 +95,14 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 بازبینی fixtureهای Telegram برای نبود شناسه/credential واقعی و `git diff --check` الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Unit/Contract متمرکز T008: `11 passed` و `0 skipped`.
+- مسیرهای T008 با `uv run pytest tests/unit/application/test_validate_telegram_session.py tests/unit/infrastructure/telegram/user/test_channel_access_adapter.py tests/contract/telegram/test_channel_access_contract.py --basetemp <unique>` در invocation متمرکز Milestone اجرا شدند.
+- اعتبار Session، Premium، canonical channel ID، دسترسی خواندن و مجوز انتشار بدون send/history زنده تست شد.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرا؛ Branch Coverage برابر `90.02%` و همهٔ Quality Gateها موفق‌اند.
+- تست زندهٔ Telegram اختیاری و اجرا نشده است؛ suite پیش‌فرض از fixtureهای مصنوعی و بدون credential استفاده می‌کند.
 
 ## به‌روزرسانی‌های مستندات
 
