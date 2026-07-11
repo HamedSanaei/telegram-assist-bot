@@ -335,15 +335,38 @@ Dynamic reload فقط برای فاز پنجم مطرح است؛ نسخه اول
 
 ### Logging
 
-Log ساختاریافته حداقل `timestamp`، `level`، `event_name`، `correlation_id` و شناسه‌های موجود Post/Channel/Destination/Admin/Job را دارد. Redaction پیش از Formatter اعمال می‌شود. متن Session، Secret و Credential هرگز Log نمی‌شود.
+Foundation پیاده‌شدهٔ T005 در `shared/observability` از logger یا state سراسری
+قابل‌تغییر استفاده نمی‌کند. `StructuredLogger`، Sink و Clock را تزریق می‌گیرد،
+حداقل level معتبر T002 را اعمال می‌کند و هر event تولیدشده حداقل `timestamp`
+UTC، `level`، `event_name` و `correlation_id` دارد. شناسه‌های اختیاری
+Task/Job/Post/Channel/Destination/Admin فقط از `CorrelationContext` frozen وارد
+می‌شوند. Binding با `ContextVar` و token reset، context را در `await` نگه می‌دارد
+و میان coroutineهای هم‌زمان جدا می‌کند.
+
+`Redactor` پیش از Sink و JSON روی یک کپی بازگشتی و depth-bounded اجرا می‌شود؛
+marker ثابت آن `[REDACTED]` است. sensitive key/value، Authorization، credential
+داخل URI، URLهای secret-bearing، Exception و کلیدهای محتوای کامل Telegram
+پوشانده می‌شوند، بدون تغییر object ورودی یا متن فارسی پیرامون Secret. Formatter
+JSON از `ensure_ascii=False` و JSON سخت‌گیرانه استفاده می‌کند.
 
 ### Retry
 
-- هر تماس خارجی Timeout صریح دارد.
-- خطاها به موقت، دائمی، Rate-limit/Flood-wait و Configuration تقسیم می‌شوند.
-- Retry فقط برای خطای موقت، محدود و با Exponential Backoff و Jitter است.
-- Retry Provider با Fallback بین Providerها جداست.
-- شکست نهایی در Document عملیات ثبت و در صورت لازم به بررسی دستی/DLQ منتقل می‌شود.
+- `shared/errors.py` ده category پایدار Validation، Configuration،
+  Authorization، Permission، Permanent، Transient، Timeout، Rate-limit،
+  Concurrency-conflict و Already-completed را تعریف می‌کند. فقط سه category
+  Transient/Timeout/Rate-limit retryable هستند؛ خطاهای موجود Config و
+  PostRepository با tag ساختاری خود، بدون برعکس‌کردن dependency، در همین taxonomy
+  طبقه‌بندی می‌شوند.
+- `ExternalOperationPolicy` وجود timeout مثبت و finite را به‌عنوان قرارداد
+  Adapter تثبیت می‌کند؛ T005 هیچ تماس خارجی تازه‌ای نمی‌سازد.
+- `RetryPolicy` حداکثر ۱۰ attempt، delay اولیه، multiplier، cap و jitter محدود را
+  immutable نگه می‌دارد. Sleeper و jitter source به executor تزریق می‌شوند.
+- `execute_with_retry` فقط وقتی اجرا می‌شود که caller امن/idempotent بودن operation
+  را صریحاً اعلام کند. هر retry و شکست نهایی event redacted دارد؛ exhaustion همان
+  Exception نهایی را حفظ می‌کند و `CancelledError` حین operation یا backoff فوراً
+  عبور می‌کند.
+- Retry Provider، Fallback، FloodWait adapter، Circuit Breaker، DLQ و اتصال retry
+  به MongoDB/Telegram/AI خارج از T005 و در Taskهای خود باقی می‌مانند.
 
 ### Idempotency
 
@@ -363,7 +386,9 @@ Log ساختاریافته حداقل `timestamp`، `level`، `event_name`، `co
 
 ## 15. راهبرد تست
 
-1. **Unit:** Domain rules، Transitionها، Normalize/Hash، Entity rebasing، Toggle، Slot calculation، Retry classification، AI schema/fallback و Permission.
+1. **Unit:** Domain rules، Transitionها، Normalize/Hash، Entity rebasing، Toggle،
+   Slot calculation، taxonomy/retry policy، structured logging، context isolation،
+   redaction امنیتی، AI schema/fallback و Permission.
 2. **Integration:** Adapter MongoDB روی database یکتای آزمایشی و loopback با
    Index/Atomicity/TTL semantics؛ سپس Media Storage، HTTP AI روی Fake server و
    تبدیل DTOهای Telegram در Taskهای خودشان.

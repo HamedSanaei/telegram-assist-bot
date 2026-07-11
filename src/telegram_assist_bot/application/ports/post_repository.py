@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from telegram_assist_bot.domain.posts import (
     Post,
@@ -33,9 +33,13 @@ __all__ = (
 class PostRepositoryError(Exception):
     """Base class for safe failures exposed by a post repository."""
 
+    error_category: ClassVar[str] = "permanent"
+
 
 class PostRepositoryUnavailableError(PostRepositoryError):
     """Report that post persistence is temporarily unavailable."""
+
+    error_category = "transient"
 
     def __init__(self) -> None:
         """Initialize an adapter-independent availability error."""
@@ -61,6 +65,8 @@ class PostNotFoundError(PostRepositoryError):
 class PostConcurrencyConflictError(PostRepositoryError):
     """Report a stale optimistic-concurrency transition request."""
 
+    error_category = "concurrency_conflict"
+
     def __init__(self) -> None:
         """Initialize a driver-independent concurrency error."""
         super().__init__("The post changed before the transition was persisted.")
@@ -68,6 +74,8 @@ class PostConcurrencyConflictError(PostRepositoryError):
 
 class InvalidPostRepositoryRequestError(PostRepositoryError):
     """Report a malformed application request without retaining raw input."""
+
+    error_category = "validation"
 
     def __init__(self) -> None:
         """Initialize a safe request-validation error."""

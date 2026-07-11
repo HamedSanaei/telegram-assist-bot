@@ -27,6 +27,16 @@ T004_MODULES = (
     "infrastructure.persistence.mongodb.post_mapper",
     "infrastructure.persistence.mongodb.post_repository",
 )
+T005_MODULES = (
+    "shared.errors",
+    "shared.observability",
+    "shared.observability.context",
+    "shared.observability.logging",
+    "shared.observability.redaction",
+    "shared.retry",
+    "shared.retry.executor",
+    "shared.retry.policy",
+)
 
 
 def test_distribution_metadata_matches_import_package() -> None:
@@ -51,5 +61,12 @@ def test_architecture_scaffolds_are_importable_and_documented() -> None:
 def test_t004_repository_modules_are_importable_and_documented() -> None:
     """Keep the T004 repository boundary and MongoDB adapter importable."""
     for module_name in T004_MODULES:
+        module = import_module(f"telegram_assist_bot.{module_name}")
+        assert module.__doc__
+
+
+def test_t005_foundation_modules_are_importable_and_documented() -> None:
+    """Keep the T005 observability and retry foundation importable."""
+    for module_name in T005_MODULES:
         module = import_module(f"telegram_assist_bot.{module_name}")
         assert module.__doc__

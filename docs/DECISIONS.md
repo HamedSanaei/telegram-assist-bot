@@ -141,3 +141,30 @@
   همچنان eventual است، پس queryهای Application-facing باید انقضا را منطقی و
   دقیق فیلتر کنند. retry قابل مشاهده و failure-aware در T005 تعریف می‌شود و
   Adapter نباید retry پنهان driver را دوباره فعال کند.
+
+## ADR-012 — Taxonomy خطا، Observability task-local و Retry صریح
+
+- **Status:** Accepted
+- **Context:** Adapterهای آینده به دسته‌بندی خطای مشترک، Log قابل‌همبستگی و Retry
+  محدود نیاز دارند، اما Foundation نباید به Telegram، MongoDB، AI/HTTP یا
+  Scheduler وابسته شود. Secret ممکن است در Mapping، Header، URI، Exception یا
+  ساختار nested باشد و context سراسری mutable میان coroutineها نشت می‌کند.
+- **Decision:** categoryهای پایدار عبارت‌اند از `validation`، `configuration`،
+  `authorization`، `permission`، `permanent`، `transient`، `timeout`،
+  `rate_limit`، `concurrency_conflict` و `already_completed`؛ فقط سه category
+  موقت، timeout و rate-limit retryable هستند. خطاهای boundary موجود با tag رشته‌ای
+  همین قرارداد، بدون dependency معکوس به Foundation متصل می‌شوند. Correlation
+  context یک value object frozen در `ContextVar` است. Structured event پیش از
+  Sink/JSON با marker ثابت `[REDACTED]` پاک می‌شود و JSON فارسی را با
+  `ensure_ascii=False` نگه می‌دارد. Retry حداکثر ۱۰ attempt دارد، sleeper و jitter
+  source تزریق می‌شوند و caller باید safe/idempotent بودن operation را صریح اعلام
+  کند. Cancellation حتی در cause chain فوراً عبور می‌کند؛ exhaustion همان
+  Exception نهایی را بازمی‌گرداند.
+- **Reason:** قراردادهای application-owned رفتار Adapterها را بدون SDK مشترک
+  می‌کنند؛ `ContextVar` isolation هم‌زمانی می‌دهد؛ redaction پیش از خروج، مسیرهای
+  نشت را متمرکز می‌کند؛ و opt-in بودن retry از تکرار side effect جلوگیری می‌کند.
+- **Consequences:** نام categoryها، fieldهای پایه Log، marker redaction و semantics
+  attempt قرارداد سازگاری‌اند و rename آن‌ها تصمیم/migration می‌خواهد. T005 هیچ
+  retry را به Adapter موجود وصل نمی‌کند و Fallback، FloodWait، Circuit Breaker،
+  DLQ و persistence شکست در Taskهای مربوط باقی می‌مانند. T006 فقط wiring و Sink
+  واقعی Startup را روی همین API می‌سازد.
