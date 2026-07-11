@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -111,6 +111,19 @@ uv run python scripts/check_text_integrity.py --changed
 - افزودن taxonomy، logger و retry modules به `docs/CODE_MAP.md`.
 - همگام‌سازی log schema و retry semantics با `docs/ARCHITECTURE.md`.
 - ثبت انتخاب logging library یا قرارداد event taxonomy در `docs/DECISIONS.md` فقط اگر تصمیم پایدار و غیرروتین است.
+
+## نتایج راستی‌آزمایی ثبت‌شده
+
+- `uv run pytest tests/unit/shared/observability tests/unit/shared/retry`: موفق؛ `83 passed` و هیچ sleep/network واقعی اجرا نشد.
+- `uv run pytest`: موفق؛ `534 passed` شامل MongoDB آزمایشی و بدون skip.
+- اجرای CI-style با Branch Coverage: موفق؛ `534 passed` و پوشش `93.56%`.
+- `uv run ruff check .` و `uv run ruff format --check .`: موفق؛ `61` فایل formatted.
+- `uv run mypy src tests scripts`: موفق؛ `61` فایل بدون خطا.
+- `uv run python scripts/check_text_integrity.py --changed`: موفق؛ `24` فایل و حالت `--all` نیز `139` فایل را تأیید کرد.
+- `uv lock --check`، Build wheel/sdist، `scripts/check_distribution.py` و smoke import رسمی Wheel: موفق.
+- Secret detection مطابق CI روی trackedها و scan تکمیلی فایل‌های جدید: موفق؛ baseline تغییر نکرد.
+- Log نمونه JSON با stream صریح UTF-8 بازبینی شد؛ متن فارسی/Emoji سالم و Cookie، Authorization و محتوای Post با marker ثابت پوشیده بودند.
+- جست‌وجوی Mojibake، فایل generated/Session tracked و `git diff --check`: موفق؛ موردی یافت نشد.
 
 ## تعریف انجام‌شدن
 

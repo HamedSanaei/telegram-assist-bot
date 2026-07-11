@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -79,6 +79,8 @@ class ConfigurationIssue:
 
 class ConfigurationError(Exception):
     """Base class for expected configuration startup failures."""
+
+    error_category: ClassVar[str] = "configuration"
 
 
 class ConfigurationFileNotFoundError(ConfigurationError):
