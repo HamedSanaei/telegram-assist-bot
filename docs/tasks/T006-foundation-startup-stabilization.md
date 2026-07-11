@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -106,6 +106,55 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 اجرای smoke entry point با Configuration آزمایشی، `git diff --check` و بازبینی Log redacted نیز الزامی است؛ فرمان دقیق smoke باید پس از تثبیت CLI در همین فایل ثبت شود.
+
+## قرارداد CLI نهایی
+
+- فرمان entry point: `uv run python -m telegram_assist_bot --config <path>`.
+- precedence مسیر: `--config PATH`، سپس `TAB_CONFIG_PATH` و در نهایت
+  `config/configuration.json` نسبت به working directory.
+- exit code پایدار: `0` برای Startup/Shutdown موفق، `2` برای CLI/Configuration
+  نامعتبر و `3` برای failure زیرساخت.
+- CLI فقط مسیر غیرحساس Config را می‌پذیرد و پس از رسیدن به readiness، چون Worker
+  محصولی در T006 وجود ندارد، همان resourceها را تمیز می‌بندد و خارج می‌شود.
+- فرمان smoke واقعی اجراشده:
+  `uv run python -m telegram_assist_bot --config $smokeConfig` که `$smokeConfig`
+  یک JSON موقت UTF-8 در `.uv-cache/t006-smoke/` و MongoDB آن database آزمایشی
+  guarded با پیشوند `tab_t004_` بود.
+
+## نتایج راستی‌آزمایی ثبت‌شده
+
+- `uv run pytest tests/unit/test_bootstrap.py --basetemp <unique>`: موفق؛
+  `32 passed`.
+- `uv run pytest tests/integration/test_foundation_startup.py --basetemp <unique>`:
+  موفق؛ `3 passed` با MongoDB واقعی loopback و بدون skip.
+- `uv run pytest --basetemp <unique>`: موفق؛ `570 passed` شامل تمام Integrationهای
+  MongoDB و بدون skip.
+- اجرای CI-style با Branch Coverage: موفق؛ `570 passed` و پوشش `90.94%`.
+- `uv run ruff check .`: موفق.
+- `uv run ruff format --check .`: پس از قالب‌بندی مکانیکی یک Test تازه، موفق؛
+  `67 files already formatted`.
+- `uv run mypy src tests`: موفق؛ `64 source files` بدون issue. اجرای نهایی قوی‌تر
+  `uv run mypy src tests scripts` نیز برای `67 source files` موفق بود.
+- smoke واقعی CLI برای exit codeهای `0`، `2` و `3`: موفق؛ ترتیب نه event، یک
+  correlation ID، shutdown کامل و نبود sentinelهای MongoDB/Telegram/AI در Log
+  تأیید شد و database آزمایشی حذف شد.
+- سناریوهای Unit، close دقیقاً یک‌باره، shutdown ترتیبی/هم‌زمان، رد shutdown حین
+  startup و propagation cancellation فقط پس از cleanup کامل را تأیید کردند.
+- تست معماری ثابت کرد هیچ Telegram، AI، Media، Scheduler یا Worker محصولی در
+  Composition Root ساخته یا import نشده است.
+- `uv run python scripts/check_text_integrity.py --changed`: موفق؛ `17` فایل
+  تغییرکرده UTF-8 و بدون Mojibake بودند؛ اجرای `--all` نیز `145` فایل را تأیید
+  کرد.
+- Secret detection مطابق GitHub Actions روی trackedها و scan تکمیلی همهٔ
+  candidateهای tracked/untracked: موفق؛ `.secrets.baseline` تغییر نکرد.
+- `uv lock --check`، Build wheel/sdist، `scripts/check_distribution.py` و smoke
+  import رسمی Wheel از virtualenv یکتای ignored: موفق.
+- `.uv-cache/` و `.pytest-tmp/` طبق `.gitignore` نادیده گرفته می‌شوند و هیچ cache،
+  Config موقت، database محلی، Log یا Session tracked نشده است.
+- `git diff --check` و بازبینی نهایی diff: موفق؛ تغییر خارج از T006 یافت نشد.
+- به‌دلیل ACL باقی‌مانده از اجرای قطع‌شدهٔ Windows، اجرای موفق pytest از
+  basetempهای یکتا و ignored زیر `.uv-cache/pytest-tmp/` استفاده کرد؛ هیچ Suite
+  موازی اجرا نشد و این محدودیت روی نتیجهٔ تست اثر ندارد.
 
 ## به‌روزرسانی‌های مستندات
 

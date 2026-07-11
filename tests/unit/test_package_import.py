@@ -37,6 +37,12 @@ T005_MODULES = (
     "shared.retry.executor",
     "shared.retry.policy",
 )
+T006_MODULES = (
+    "__main__",
+    "bootstrap",
+    "bootstrap.cli",
+    "bootstrap.runtime",
+)
 
 
 def test_distribution_metadata_matches_import_package() -> None:
@@ -68,5 +74,12 @@ def test_t004_repository_modules_are_importable_and_documented() -> None:
 def test_t005_foundation_modules_are_importable_and_documented() -> None:
     """Keep the T005 observability and retry foundation importable."""
     for module_name in T005_MODULES:
+        module = import_module(f"telegram_assist_bot.{module_name}")
+        assert module.__doc__
+
+
+def test_t006_startup_modules_are_importable_and_documented() -> None:
+    """Keep the T006 composition root and entry point import-safe."""
+    for module_name in T006_MODULES:
         module = import_module(f"telegram_assist_bot.{module_name}")
         assert module.__doc__
