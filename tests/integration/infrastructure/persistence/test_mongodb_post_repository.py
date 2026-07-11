@@ -11,6 +11,12 @@ from uuid import uuid4
 
 import pytest
 from pymongo import ASCENDING, AsyncMongoClient
+from tests.integration.infrastructure.persistence.conftest import (
+    MongoTestSettings as CleanupMongoTestSettings,
+)
+from tests.integration.infrastructure.persistence.conftest import (
+    drop_test_database,
+)
 
 from telegram_assist_bot.application.ports import (
     InsertPostOutcome,
@@ -45,10 +51,6 @@ from telegram_assist_bot.shared.config import (
     MongoConfig,
     ResolvedSecrets,
     SecretReference,
-)
-from tests.integration.infrastructure.persistence.conftest import (
-    MongoTestSettings as CleanupMongoTestSettings,
-    drop_test_database,
 )
 
 if TYPE_CHECKING:
@@ -234,9 +236,7 @@ def test_cleanup_drops_only_the_selected_isolated_database(
         config = _mongo_config(mongodb_test_settings)
         client = create_mongodb_client(
             config,
-            ResolvedSecrets(
-                {_MONGODB_URI_ENVIRONMENT_NAME: mongodb_test_settings.uri}
-            ),
+            ResolvedSecrets({_MONGODB_URI_ENVIRONMENT_NAME: mongodb_test_settings.uri}),
         )
         try:
             async with asyncio.timeout(config.connect_timeout_seconds):
@@ -249,15 +249,11 @@ def test_cleanup_drops_only_the_selected_isolated_database(
 
             async with asyncio.timeout(config.connect_timeout_seconds):
                 assert (
-                    await client[current.database_name]["sentinel"].count_documents(
-                        {}
-                    )
+                    await client[current.database_name]["sentinel"].count_documents({})
                     == 0
                 )
                 assert (
-                    await client[adjacent.database_name]["sentinel"].count_documents(
-                        {}
-                    )
+                    await client[adjacent.database_name]["sentinel"].count_documents({})
                     == 1
                 )
         finally:
