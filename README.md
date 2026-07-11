@@ -1,8 +1,9 @@
 # Telegram Assist Bot
 
 پایهٔ ماژولار یک دستیار مدیریت کانال‌های تلگرام با Python و معماری تمیز است.
-Scaffold معماری و سامانهٔ typed Configuration آماده‌اند، اما هنوز هیچ اتصال
-اجرایی به Telegram، MongoDB یا سرویس هوش مصنوعی ساخته نشده است.
+Scaffold معماری، سامانهٔ typed Configuration و مدل خالص چرخهٔ عمر Post
+آماده‌اند، اما هنوز هیچ اتصال اجرایی به Telegram، MongoDB یا سرویس هوش مصنوعی
+ساخته نشده است.
 
 ## پیش‌نیاز توسعه
 
@@ -70,8 +71,9 @@ immutable است و تغییر آن در نسخهٔ فعلی به Restart نیا
 
 کد Package زیر `src/telegram_assist_bot/` قرار دارد. زیرPackageهای `domain`،
 `application`، `infrastructure`، `presentation`، `workers`، `shared` و
-`bootstrap` در T001 importable شدند. رفتار T002 فقط در `shared/config` قرار دارد
-و هنوز هیچ Adapter یا Entry Point اجرایی وجود ندارد.
+`bootstrap` در T001 importable شدند. رفتار T002 فقط در `shared/config` و قرارداد
+pure Domain مربوط به T003 فقط در `domain/posts` قرار دارد. هنوز هیچ Repository،
+Adapter یا Entry Point اجرایی وجود ندارد.
 
 تست‌های پیش‌فرض شبکه، دیتابیس، credential یا سرویس زنده لازم ندارند. تست‌های
 آینده با Markerهای `integration`، `contract`، `e2e` و `live` دسته‌بندی می‌شوند؛

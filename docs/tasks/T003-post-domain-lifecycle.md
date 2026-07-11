@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -111,6 +111,44 @@ uv run python scripts/check_text_integrity.py --changed
 - افزودن مدل‌ها، invariantها و مسیرها به `docs/CODE_MAP.md`.
 - جایگزینی فهرست پیشنهادی با مدل واقعاً پیاده‌شده و جدول Transition در `docs/ARCHITECTURE.md`.
 - ثبت تصمیم مهم دربارهٔ status split یا واحد Entity در `docs/DECISIONS.md` در صورت نیاز.
+
+## نتایج راستی‌آزمایی
+
+- **Verified on:** 2026-07-11
+- **Toolchain:** `uv 0.11.28`، CPython `3.12.13` و `3.13.14`.
+- **Integration tests:** طبق Scope برابر N/A؛ این Task فقط Domain خالص و بدون
+  I/O، Adapter، شبکه، فایل‌سیستم یا پایگاه‌داده است.
+- **Remote CI:** اجرا نشد؛ آزمون‌ها، Ruff، format و mypy روی هر دو Minor
+  پشتیبانی‌شده به‌صورت محلی موفق شدند.
+
+| Command or check | Result |
+|---|---|
+| `uv run pytest tests/unit/domain/posts` | Pass روی Python 3.12 و 3.13؛ ۱۴۴ تست Domain |
+| `uv run pytest` | Pass روی Python 3.12 و 3.13؛ ۳۴۵ تست کامل non-live و بدون skip |
+| آزمون کامل با `--cov=telegram_assist_bot --cov-branch --cov-fail-under=90` | Pass روی هر دو Minor؛ پوشش کل ۹۵٫۲۱٪ و پوشش package پست ۱۰۰٪ statement/branch |
+| `uv run ruff check .` | Pass روی هر دو Minor |
+| `uv run ruff format --check .` | Pass روی هر دو Minor |
+| `uv run mypy src tests` و Gate کامل `mypy src tests scripts` | Pass در حالت strict روی هر دو Minor |
+| `uv run python scripts/check_text_integrity.py --changed` | Pass؛ تمام فایل‌های تغییرکرده و untracked غیرignored با UTF-8 سخت‌گیرانه بررسی شدند |
+| `uv run python scripts/check_text_integrity.py --all` | Pass؛ کل متن Git-visible مخزن بررسی شد |
+| `uv lock --check` و `uv sync --locked --group dev` | Pass؛ Lockfile بدون تغییر و ۳۰ Package قفل‌شده هماهنگ‌اند |
+| `uv build --no-build-isolation` و `check_distribution.py dist` | Pass؛ Wheel/sdist و پنج ماژول جدید Post Domain تأیید شدند |
+| Clean-wheel install/import | Pass روی Python 3.12؛ API عمومی `Post` و `TelegramEntity` از wheel تمیز import شد |
+| `detect-secrets-hook --baseline .secrets.baseline` | Pass برای همهٔ فایل‌های tracked و untracked غیرignored |
+| `git diff --check` و بازبینی دستی diff/متن فارسی | Pass؛ فارسی، نیم‌فاصله، خط‌شکست، Emoji و Custom Emoji metadata سالم ماندند |
+| Secret/Session/generated-file review | Pass؛ Secret، Configuration محلی، Session، cache یا artifact تولیدی Git-visible افزوده نشد |
+
+### بررسی معیارهای پذیرش
+
+| # | Result | Evidence |
+|---|---|---|
+| ۱ | Pass | `SourceMessageIdentity` هر دو جزء را در equality/hash و `as_tuple` به‌کار می‌برد؛ تفاوت هر جزء تست شده است. |
+| ۲ | Pass | زمان naive و conversion/overflow نامعتبر با Domain exception رد و زمان aware به UTC canonical می‌شود؛ انقضا دقیقاً ۱۴ روز است. |
+| ۳ | Pass | `Post`، `OriginalPostContent` و `TelegramEntity` frozen هستند و sequenceها defensive copy می‌شوند. |
+| ۴ | Pass | جدول immutable سه وضعیت، هر سه edge مجاز و همهٔ edgeهای ممنوع به‌صورت exhaustive تست شده‌اند. |
+| ۵ | Pass | هر Transition actor/reason/time/correlation، وضعیت قبلی/جدید و history کامل را نگه می‌دارد و version را یک واحد افزایش می‌دهد. |
+| ۶ | Pass | تست AST همهٔ فایل‌های Domain را فقط به stdlib/Domain محدود و import پویا یا SDK/لایهٔ بیرونی را رد می‌کند. |
+| ۷ | Pass | fixtureهای inline برابری byte-for-byte فارسی، ZWNJ، line break، Emoji، مختصات UTF-16 و `custom_emoji_id` را اثبات می‌کنند. |
 
 ## تعریف انجام‌شدن
 

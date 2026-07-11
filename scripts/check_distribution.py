@@ -85,6 +85,11 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/loader.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/models.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/entities.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/errors.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/models.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/status.py",
                 *{
                     f"{EXPECTED_IMPORT_PACKAGE}/{layer}/__init__.py"
                     for layer in (

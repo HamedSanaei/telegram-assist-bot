@@ -2,7 +2,9 @@
 
 ## 1. وضعیت و دامنه سند
 
-این سند طرح معماری پیش از شروع پیاده‌سازی است. منبع حقیقت نیازمندی‌های محصول فایل `docs/REQUIREMENTS.md` است و Taskها باید فقط به همین مسیر ارجاع دهند.
+این سند معماری پیاده‌شده و بخش‌های صریحاً برنامه‌ریزی‌شده برای Milestone فعال را
+توصیف می‌کند. منبع حقیقت نیازمندی‌های محصول فایل `docs/REQUIREMENTS.md` است و
+Taskها باید فقط به همین مسیر ارجاع دهند.
 
 معماری برای تحویل تدریجی طراحی شده است:
 
@@ -46,35 +48,59 @@ Presentation / Workers      Infrastructure Adapters
 
 ## 4. مدل Domain
 
-مدل‌ها باید مستقل از شکل Documentهای MongoDB و Objectهای SDK تلگرام باشند. فهرست اولیه:
+مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای
+پیاده‌شده در `domain.posts` عبارت‌اند از:
 
-| مدل | مسئولیت |
+| مدل | مسئولیت پیاده‌شده |
 |---|---|
-| `Post` | هویت منبع، متن/Caption اصلی، Entityها، دسته‌بندی، نتیجه پردازش، انقضا و وضعیت کلی |
-| `Media` | نوع، ترتیب، مشخصات فایل، Hash، مکان ذخیره، وضعیت دانلود و انقضا |
-| `SourceChannel` | شناسه پایدار، Username، فعال‌بودن و سیاست‌های پردازش/مقصدهای مجاز |
-| `DestinationChannel` | شناسه پایدار، Username و سیاست انتشار/فاصله زمانی |
-| `Admin` | شناسه عددی، فعال‌بودن، نقش و مجوزها |
-| `ApprovalReference` | محل پیام تأیید هر مدیر/گروه برای همگام‌سازی |
-| `DestinationSelection` | وضعیت مستقل هر `Post × Destination` و نسخه هم‌زمانی |
-| `Publication` | درخواست انتشار، کلید Idempotency، نتیجه و شناسه پیام مقصد |
-| `ScheduledPublication` | زمان برنامه‌ریزی، وضعیت Job، Lease، تلاش‌ها و نتیجه |
-| `AIJob` / `AIAnalysis` | عملیات AI پایدار، نسخه Prompt/Schema، تلاش‌ها و نتیجه استاندارد |
-| `AdvertisementCheckResult` | نتیجه، اطمینان، دلیل، مدل و نسخه Prompt |
-| `DuplicateCheckResult` | روش، شباهت، پست مشابه و تصمیم |
-| `AdvertisementCampaign` / `AdvertisementSlot` | تعریف تبلیغ و یک اجرای یکتای آن در مقصد و زمان |
-| `StatusTransition` | وضعیت قبلی/جدید، زمان، Actor، دلیل و Correlation ID |
+| `PostId` | شناسهٔ داخلی opaque و مستقل از نوع شناسهٔ پایگاه‌داده |
+| `SourceMessageIdentity` | کلید Idempotency برابر `(source_channel_id, source_message_id)` |
+| `TelegramEntity` | offset و length بر حسب UTF-16 code unit، نوع Entity و `custom_emoji_id` اختیاری |
+| `OriginalPostContent` | متن، Caption و tupleهای مستقل Entityهای هرکدام، بدون normalization |
+| `Post` | snapshot immutable هویت، اطلاعات منبع، محتوای اصلی، زمان‌ها، وضعیت، version و history |
+| `PostStatus` | وضعیت کلی حداقلی Post در Milestone 0 |
+| `StatusTransition` | وضعیت قبلی/جدید، زمان UTC، دسته Actor، دلیل و Correlation ID اختیاری |
 
-قواعد کلیدی Domain:
+مدل‌های `Media`، `SourceChannel`، `DestinationChannel`، `Admin`،
+`ApprovalReference`، `DestinationSelection`، `Publication`،
+`ScheduledPublication`، مدل‌های AI و مدل‌های Advertisement هنوز فقط برای
+Taskهای صریح بعدی برنامه‌ریزی شده‌اند و در T003 قرارداد اجرایی ندارند.
 
-- هویت پیام منبع برابر `(source_channel_id, source_message_id)` است.
-- متن اصلی و Entityهای اصلی Immutable هستند؛ نسخه پردازش‌شده برای هر مقصد مشتق می‌شود.
-- یک مقصد نمی‌تواند هم‌زمان در دو حالت فوری و زمان‌بندی‌شده باشد.
-- انتشار موفق Terminal است و درخواست تکراری نباید انتشار دوم بسازد.
-- همه زمان‌ها در Domain به‌صورت UTC آگاه از منطقه زمانی نگهداری و در مرزها به منطقه تنظیم‌شده تبدیل می‌شوند.
-- انقضای پست از `received_at + 14 days` محاسبه می‌شود.
+### چرخهٔ عمر Post در Milestone 0
 
-وضعیت‌های بخش `10` در `docs/REQUIREMENTS.md` نقطه شروع‌اند، اما پیش از پیاده‌سازی در T003 به Transitionهای مجاز و وضعیت مستقل هر مقصد تبدیل می‌شوند؛ یک Enum کلی به‌تنهایی برای انتشار جزئی چند مقصد کافی نیست.
+نام و مقدار persistence-facing وضعیت‌های فعلی دقیقاً `Discovered`، `Stored` و
+`Expired` است. Post با `Discovered`، `version = 0` و history خالی ساخته می‌شود.
+جدول کامل Transitionهای مجاز:
+
+| وضعیت قبلی | وضعیت جدید | قید زمانی |
+|---|---|---|
+| `Discovered` | `Stored` | `received_at <= occurred_at < expires_at` |
+| `Discovered` | `Expired` | `occurred_at >= expires_at` |
+| `Stored` | `Expired` | `occurred_at >= expires_at` |
+| `Expired` | — | Terminal |
+
+هر Transition باید `expected_version` جاری را دریافت کند، یک snapshot تازه
+برگرداند، version را دقیقاً یک واحد افزایش دهد و رکورد immutable جدید را به
+انتهای history پیوست کند. Transition تکراری، عقب‌گرد، زمان نامعتبر، version
+کهنه یا chain ناسازگار با Exception صریح Domain رد می‌شود. اعمال اتمیک شرط
+version در MongoDB مسئولیت T004 است.
+
+قواعد دیگر قرارداد فعلی:
+
+- برابری و hash خود `Post` با `PostId` پایدار است؛ Idempotency دریافت فقط با
+  `SourceMessageIdentity` سنجیده می‌شود.
+- همهٔ timestampها aware هستند، هنگام ساخت به UTC تبدیل می‌شوند و
+  `expires_at` دقیقاً `received_at + 14 days` است.
+- محتوای اصلی، ترتیب Entityها، فارسی، نیم‌فاصله، خط‌شکست و Emoji بدون تغییر
+  نگهداری می‌شوند. متن و Caption tupleهای Entity جدا دارند.
+- offset و length مدل Entity واحد UTF-16 دارند؛ Adapter آینده مسئول تبدیل
+  Objectهای SDK است. `custom_emoji_id` یک مقدار opaque است و فقط برای نوع
+  `custom_emoji` پذیرفته می‌شود.
+- snapshotها frozen هستند و دادهٔ اصلی با artifact پردازش‌شده یا مقصدی مخلوط
+  نمی‌شود. وضعیت آیندهٔ هر `Post × Destination` نیز مستقل از `PostStatus`
+  خواهد بود.
+- reason و Correlation ID فقط رشته‌های builtin محدود و غیرخالی‌اند و همراه
+  محتوای اصلی از `repr` حذف می‌شوند؛ object یا metadata دلخواه پذیرفته نمی‌شود.
 
 ## 5. Use Caseهای Application
 
@@ -280,7 +306,8 @@ Log ساختاریافته حداقل `timestamp`، `level`، `event_name`، `co
 ### Concurrency
 
 - Atomic update و Unique Index خط دفاع اول‌اند.
-- Transitionها شرط `expected_version/current_status` دارند.
+- Domain هر Transition را با `expected_version` و وضعیت فعلی اعتبارسنجی می‌کند؛
+  T004 همین شرط را در update اتمیک MongoDB enforce خواهد کرد.
 - Workerها Lease دارای انقضا می‌گیرند.
 - ویرایش پیام مدیران fan-out و best-effort است؛ شکست یک پیام مانع بقیه نیست.
 - قفل Process-local برای صحت توزیع‌شده کافی محسوب نمی‌شود.
