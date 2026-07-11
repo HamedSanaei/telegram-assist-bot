@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -51,6 +51,7 @@ Active
 - `src/telegram_assist_bot/infrastructure/persistence/mongodb/post_repository.py`
 - `src/telegram_assist_bot/infrastructure/persistence/mongodb/indexes.py`
 - `tests/unit/infrastructure/persistence/test_post_mapper.py`
+- `tests/unit/infrastructure/persistence/test_mongodb_post_repository_unit.py`
 - `tests/integration/infrastructure/persistence/test_mongodb_post_repository.py`
 - `tests/integration/infrastructure/persistence/conftest.py`
 - Configuration/fixtureهای تست موردنیاز مطابق قرارداد T001/T002.
@@ -120,6 +121,14 @@ uv run python scripts/check_text_integrity.py --changed
 - افزودن Port، Adapter، mapper، collection و مسیر تست به `docs/CODE_MAP.md`.
 - همگام‌سازی schema، index و رفتار TTL/atomicity در `docs/ARCHITECTURE.md`.
 - ثبت driver، حداقل MongoDB یا راهبرد schema evolution در `docs/DECISIONS.md` اگر تصمیم پایدار تازه‌ای گرفته شد.
+
+## نتایج راستی‌آزمایی ثبت‌شده
+
+- `uv run pytest tests/unit/application/ports/test_post_repository_contract.py`: موفق؛ `17 passed`.
+- `uv run pytest tests/unit/infrastructure/persistence/test_post_mapper.py tests/unit/infrastructure/persistence/test_mongodb_post_repository_unit.py`: موفق؛ `68 passed`.
+- `uv run pytest tests/integration/infrastructure/persistence/test_mongodb_post_repository.py` با `TEST_MONGODB_URI` آزمایشی loopback و بدون credential: موفق؛ `12 passed` و هیچ تستی skip نشد.
+- تعریف واقعی هر دو Index، راه‌اندازی تکرارشونده، رقابت درج و CAS، حذف منطقی رکورد منقضی، redaction خطا و round-trip فارسی/Emoji/Entity در تست‌های بالا بررسی شدند.
+- نتیجهٔ Gateهای کامل مخزن پس از اجرای نهایی ثبت می‌شود؛ این بخش نتیجه‌ای برای فرمان اجرا‌نشده ادعا نمی‌کند.
 
 ## تعریف انجام‌شدن
 

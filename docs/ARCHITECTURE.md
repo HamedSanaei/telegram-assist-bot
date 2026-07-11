@@ -145,7 +145,7 @@ Use Caseها تراکنش یا Atomic Operation لازم را از Port اختص
 
 | Port | قرارداد مورد انتظار |
 |---|---|
-| `PostRepository` | Upsert یکتا، دریافت بازه ۱۴روزه، Transition اتمیک و ثبت خطا |
+| `PostRepository` | insert مستقیم و یکتا با نتیجهٔ `Created/AlreadyExists`، دریافت بر اساس شناسه داخلی/هویت منبع، فهرست محدود غیرمنقضی و Transition اتمیک با expected version/status |
 | `ApprovalRepository` | نگهداری Referenceها و وضعیت همگام‌سازی |
 | `PublicationRepository` | ایجاد/Claim/تکمیل Idempotent انتشار |
 | `ScheduleRepository` | محاسبه Slot اتمیک، Claim با Lease، لغو و بازیابی |
@@ -190,9 +190,13 @@ Bot API برای انتشار نهایی به کانال مقصد استفاده
 
 ## 9. MongoDB و مدل ماندگاری
 
-MongoDB منبع حقیقت پردازش است. Collectionهای پیشنهادی اولیه:
+MongoDB منبع حقیقت پردازش است. Collection پیاده‌شدهٔ فعلی:
 
-- `posts`: Unique Index روی `source_channel_id + source_message_id` و TTL روی `expires_at`؛
+- `posts`: سند دقیق `schema_version = 1`، Unique Index روی
+  `source_channel_id + source_message_id` و TTL تک‌فیلدی روی `expires_at`.
+
+Collectionهای بعدی فقط برای Taskهای صریح آینده برنامه‌ریزی شده‌اند:
+
 - `approvals`: Reference پیام‌های تأیید و وضعیت آخرین Sync؛
 - `publications`: Unique Idempotency Key برای هر تصمیم انتشار؛
 - `scheduled_publications`: Index روی `status + due_at`، Unique Key و فیلدهای Lease؛
@@ -201,10 +205,55 @@ MongoDB منبع حقیقت پردازش است. Collectionهای پیشنهاد
 - `advertisement_campaigns` و `advertisement_slots`: تعریف و اجرای یکتای Slot؛
 - `callback_tokens`: Token کوتاه، Actor/Action/Post/Destination و زمان انقضا.
 
+### قرارداد پیاده‌شدهٔ `posts`
+
+Application مالک `PostRepository`، resultها و exceptionهای مستقل از driver
+است. Adapter `MongoPostRepository` و همهٔ نوع‌های PyMongo/BSON در Infrastructure
+می‌مانند. Mapper فقط Schema دقیق نسخهٔ ۱ را می‌پذیرد و این داده‌ها را ذخیره
+می‌کند:
+
+- `_id` برابر مقدار opaque `PostId`، به‌همراه هویت یکتای منبع و metadata کانال؛
+- `original_content` شامل متن، Caption و Entityهای جداگانه و مرتب هرکدام، بدون
+  Unicode normalization؛
+- زمان انتشار منبع، دریافت و انقضا به UTC، به‌همراه remainder لازم برای
+  بازسازی دقیق میکروثانیه؛
+- وضعیت، version و تمام transition history دامنه.
+
+BSON زمان را با دقت میلی‌ثانیه نگه می‌دارد. زمان‌های عادی رو به پایین و
+`expires_at` رو به بالا ذخیره می‌شوند و remainder جداگانه Mapper مقدار دقیق را
+بازسازی می‌کند؛ بنابراین TTL هیچ سندی را پیش از لحظهٔ Domain حذف نمی‌کند.
+readها افزون بر شرط coarse در Query، مرز exact `expires_at > as_of` را روی Post
+بازسازی‌شده اعمال می‌کنند.
+
+Indexهای مالکیت‌شده و نام‌های پایدار آن‌ها عبارت‌اند از:
+
+| نام | کلید | option |
+|---|---|---|
+| `uq_posts_source_identity_v1` | `source_channel_id: 1, source_message_id: 1` | `unique: true` |
+| `ttl_posts_expires_at_v1` | `expires_at: 1` | `expireAfterSeconds: 0` |
+
+Initializer در هر Startup قابل تکرار است، تعریف واقعی را پیش و پس از ساخت
+inspect می‌کند و Index هم‌نام یا هم‌کلید ناسازگار را بدون drop یا migration
+خودکار Fail-fast رد می‌کند.
+
+درج idempotent مستقیماً `insert_one` را فراخوانی می‌کند؛ check-then-insert وجود
+ندارد. فقط DuplicateKey دقیق هویت منبع `AlreadyExists` است. رقابت `_id_` فقط پس
+از خواندن رکورد و اثبات همان هویت منبع idempotent محسوب می‌شود؛ collision
+نامرتبط Data Error است و دادهٔ موجود overwrite نمی‌شود. Transition دامنه‌ای با
+یک `find_one_and_update` مشروط به `_id + schema_version + version + status`
+اعمال می‌شود و نبود رکورد از writer کهنه تفکیک می‌شود.
+
+Client رسمی `PyMongo AsyncMongoClient` است. عملیات شبکه‌ای ping، بررسی سازگاری،
+Index و read/write با timeout محدود Configuration اجرا می‌شوند و cleanup
+database تست نیز deadline محدود دارد. MongoDB 7.0 حداقل نسخهٔ پشتیبانی‌شده
+است، Stable API v1 به حالت strict استفاده می‌شود و retry داخلی driver برای
+read/write غیرفعال است؛ سیاست retry قابل مشاهده و طبقه‌بندی‌شده به T005 و
+Taskهای عملیاتی بعدی تعلق دارد.
+
 قواعد ماندگاری:
 
 - ایجاد Indexها بخشی از Startup/Migration صریح است و خطای آن Fail-fast می‌شود.
-- Upsert/`findOneAndUpdate` با شرط نسخه برای Idempotency و Optimistic Concurrency به‌کار می‌رود.
+- Unique insert و `findOneAndUpdate` با شرط نسخه/وضعیت برای Idempotency و Optimistic Concurrency به‌کار می‌روند.
 - TTL MongoDB حذف آنی را تضمین نمی‌کند؛ `expires_at` در Queryهای Application نیز اعمال می‌شود.
 - حذف TTL سند، فایل محلی را حذف نمی‌کند؛ Cleanup Worker مستقل Mediaهای منقضی و Orphan را پاک می‌کند.
 - Migrationهای سازگار با عقب و ثبت نسخه Schema لازم‌اند؛ راهکار دقیق در زمان Bootstrap انتخاب می‌شود.
@@ -307,7 +356,7 @@ Log ساختاریافته حداقل `timestamp`، `level`، `event_name`، `co
 
 - Atomic update و Unique Index خط دفاع اول‌اند.
 - Domain هر Transition را با `expected_version` و وضعیت فعلی اعتبارسنجی می‌کند؛
-  T004 همین شرط را در update اتمیک MongoDB enforce خواهد کرد.
+  Adapter T004 همین شرط را در update اتمیک MongoDB enforce می‌کند.
 - Workerها Lease دارای انقضا می‌گیرند.
 - ویرایش پیام مدیران fan-out و best-effort است؛ شکست یک پیام مانع بقیه نیست.
 - قفل Process-local برای صحت توزیع‌شده کافی محسوب نمی‌شود.
@@ -315,7 +364,9 @@ Log ساختاریافته حداقل `timestamp`، `level`، `event_name`، `co
 ## 15. راهبرد تست
 
 1. **Unit:** Domain rules، Transitionها، Normalize/Hash، Entity rebasing، Toggle، Slot calculation، Retry classification، AI schema/fallback و Permission.
-2. **Integration:** Adapter MongoDB با Index/Atomicity/TTL semantics، Media Storage، HTTP AI روی Fake server و تبدیل DTOهای Telegram.
+2. **Integration:** Adapter MongoDB روی database یکتای آزمایشی و loopback با
+   Index/Atomicity/TTL semantics؛ سپس Media Storage، HTTP AI روی Fake server و
+   تبدیل DTOهای Telegram در Taskهای خودشان.
 3. **Contract:** Fixtureهای ثبت‌شده برای User API/Bot API/Providerها بدون Secret واقعی.
 4. **End-to-end کنترل‌شده:** MongoDB واقعی آزمایشی و Gatewayهای Fake برای Crawl → Approval → Publish/Schedule؛ تست Sandbox تلگرام فقط با Configuration صریح و خارج از اجرای پیش‌فرض.
 5. **Restart/Concurrency:** خاموش‌کردن Worker پس از Claim، انقضای Lease، رویداد تکراری و چند Worker.

@@ -110,3 +110,34 @@
   normalization و Mapper MongoDB مسئول بازسازی UTC/history است. Atomic compare
   and set در T004 پیاده می‌شود و افزودن وضعیت یا workflow مقصد فقط در Task
   صریح مربوط مجاز است.
+
+## ADR-011 — قرارداد MongoDB پست، PyMongo async و هم‌زمانی اتمیک
+
+- **Status:** Accepted
+- **Context:** T004 باید هویت منبع را زیر رقابت واقعی یکتا کند، TTL چهارده‌روزه
+  را بدون حذف زودهنگام اعمال کند، timestamp و محتوای اصلی را دقیق بازسازی کند و
+  optimistic concurrency دامنه را بدون نشت نوع یا خطای MongoDB به Application
+  enforce کند. Driver async و حداقل نسخهٔ Server نیز پیش‌تر تثبیت نشده بودند.
+- **Decision:** Adapter رسمی از `PyMongo AsyncMongoClient` با dependency
+  `pymongo>=4.13,<5`، Stable API v1 strict و حداقل MongoDB 7.0 (wire version 21)
+  استفاده می‌کند. read/write retry داخلی driver غیرفعال و تمام عملیات با timeout
+  محدود Configuration اجرا می‌شوند. Collection پایدار `posts` فقط سند دقیق
+  `schema_version = 1` را می‌پذیرد. Indexهای مالکیت‌شده `uq_posts_source_identity_v1`
+  روی زوج شناسهٔ منبع با `unique: true` و `ttl_posts_expires_at_v1` روی
+  `expires_at` با `expireAfterSeconds: 0` هستند. درج مستقیم و DuplicateKey دقیق
+  جای check-then-insert را می‌گیرد؛ Transition با CAS روی شناسه، نسخهٔ Schema،
+  version و status انجام می‌شود. Mapper timestampهای BSON را با remainder
+  میکروثانیه بازسازی و `expires_at` را رو به بالا ذخیره می‌کند تا TTL پیش از مرز
+  Domain حذف نکند.
+- **Reason:** API async فعلی PyMongo از ورود API منسوخ به قرارداد جلوگیری
+  می‌کند؛ Unique Index و CAS صحت را میان Processها تأمین می‌کنند و timeout/retry
+  صریح رفتار خارجی را قابل‌کنترل نگه می‌دارد. Schema و Index نام‌دار نیز تغییر
+  ناسازگار را به‌جای فساد یا migration ضمنی آشکار می‌کنند.
+- **Consequences:** MongoDB قدیمی‌تر از 7.0 در startup رد می‌شود؛ Index ناسازگار
+  هرگز خودکار drop یا بازسازی نمی‌شود و migration صریح می‌خواهد. تغییر Schema،
+  نام collection/index، وضعیت persistence-facing یا encoding زمان نیازمند
+  migration و تصمیم سازگاری است. Application فقط Port/result/exception خود را
+  می‌بیند؛ PyMongo، BSON و جزئیات Query در Infrastructure باقی می‌مانند. TTL
+  همچنان eventual است، پس queryهای Application-facing باید انقضا را منطقی و
+  دقیق فیلتر کنند. retry قابل مشاهده و failure-aware در T005 تعریف می‌شود و
+  Adapter نباید retry پنهان driver را دوباره فعال کند.
