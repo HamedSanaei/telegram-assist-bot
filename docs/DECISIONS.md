@@ -168,3 +168,29 @@
   retry را به Adapter موجود وصل نمی‌کند و Fallback، FloodWait، Circuit Breaker،
   DLQ و persistence شکست در Taskهای مربوط باقی می‌مانند. T006 فقط wiring و Sink
   واقعی Startup را روی همین API می‌سازد.
+
+## ADR-013 — Composition Root یک‌مرحله‌ای و قرارداد lifecycle پایه
+
+- **Status:** Accepted
+- **Context:** Foundation به Entry point قابل‌اجرا نیاز داشت، ولی پیش از T007 هیچ
+  Worker محصولی وجود ندارد. Startup باید Config را پیش از I/O validate، مسیر
+  MongoDB و Index موجود را بدون duplication مصرف، تمام eventهای audit را حتی با
+  Log Level بالای Application ثبت و resource نیمه‌ساخته را زیر failure یا
+  cancellation آزاد کند.
+- **Decision:** `telegram_assist_bot.bootstrap.runtime` تنها Composition Root
+  concrete است و `python -m telegram_assist_bot` یک Startup check یک‌مرحله‌ای
+  اجرا می‌کند. مسیر Config با precedence ثابت CLI، سپس `TAB_CONFIG_PATH` و سپس
+  `config/configuration.json` resolve می‌شود. exit codeها `0`، `2` و `3` به‌ترتیب
+  success، Configuration و Infrastructure هستند. logger تنظیم‌شدهٔ Application
+  از Level Config پیروی می‌کند و logger audit lifecycle جداگانه با همان Sink،
+  correlation و Redactor، eventهای اجباری را بدون فیلتر Level ثبت می‌کند. Mongo
+  client تنها resource مالکیت‌دار است؛ shutdown task مشترک close را دقیقاً یک‌بار
+  اجرا و cancellation را فقط پس از join شدن cleanup عبور می‌دهد.
+- **Reason:** این قرارداد هم Startup واقعی Milestone 0 را قابل smoke می‌کند و هم
+  بدون daemon یا Worker جعلی، ترتیب، readiness، observability و cleanup را قطعی
+  و تست‌پذیر نگه می‌دارد.
+- **Consequences:** CLI فعلی پس از readiness فوراً shutdown می‌شود؛ T007 فقط با
+  command صریح می‌تواند رفتار authentication را اضافه کند. تغییر precedence،
+  exit code یا نام eventهای lifecycle تغییر قرارداد عمومی است. shutdown حین
+  state `STARTING` رد می‌شود و cancellation خود Startup مسیر cleanup مالک همان
+  lifecycle را اجرا می‌کند. هیچ retry تازه‌ای به MongoDB متصل نشده است.

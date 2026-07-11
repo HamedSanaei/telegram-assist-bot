@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T006 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T007 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -20,7 +20,7 @@
 | [T003](tasks/T003-post-domain-lifecycle.md) | مدل Domain و چرخه عمر Post | T001 | `3`، `5.4`، `10` | Completed |
 | [T004](tasks/T004-mongodb-idempotent-posts.md) | MongoDB و Persistence یکتای Post | T002، T003 | `5.3`، `5.4` | Completed |
 | [T005](tasks/T005-observability-retry-foundation.md) | Logging، خطا و Retry foundation | T001، T002 | `12`، `13`، `14` | Completed |
-| [T006](tasks/T006-foundation-startup-stabilization.md) | Startup و Stabilization پایه | T002، T004، T005 | `4`، `12`، `13` | Active |
+| [T006](tasks/T006-foundation-startup-stabilization.md) | Startup و Stabilization پایه | T002، T004، T005 | `4`، `12`، `13` | Completed |
 
 ## Milestone 1 — دریافت متن از Telegram User API
 
@@ -28,7 +28,7 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T007](tasks/T007-telegram-session-authentication.md) | ورود و ذخیره Session | T006 | `5.1`، `14` | Planned |
+| [T007](tasks/T007-telegram-session-authentication.md) | ورود و ذخیره Session | T006 | `5.1`، `14` | Active |
 | [T008](tasks/T008-session-validation-channel-access.md) | اعتبار Session، Premium و دسترسی کانال | T007 | `5.1`، `5.2` | Planned |
 | [T009](tasks/T009-crawl-today-text-posts.md) | خزش پیام‌های متنی امروز یک کانال | T004، T008 | `5.2` | Planned |
 | [T010](tasks/T010-live-text-listener.md) | Listener زنده پیام متنی | T009 | `5.2` | Planned |
