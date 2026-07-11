@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.31.0"]
+requires = ["editables==0.5", "hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -14,11 +14,15 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "pydantic>=2.12.0,<3",
+    "tzdata>=2025.2",
+]
 
 [dependency-groups]
 dev = [
     "detect-secrets>=1.5.0,<2",
+    "editables==0.5",
     "hatchling==1.31.0",
     "mypy>=1.15.0,<2",
     "pytest>=8.3.5,<9",
@@ -28,10 +32,12 @@ dev = [
 
 [tool.uv]
 required-version = "==0.11.28"
+no-build-isolation-package = ["telegram-assist-bot"]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/README.md",
+    "/config/configuration.example.json",
     "/pyproject.toml",
     "/scripts",
     "/src",

@@ -65,3 +65,25 @@
 - **Decision:** Git فقط Config نمونه بدون مقدار حساس دارد؛ Secretها از Environment/Secret Manager و Session/Media از مسیر Runtime خوانده می‌شوند.
 - **Reason:** الزام امنیتی صریح.
 - **Consequences:** `.gitignore` و Secret scanning در Bootstrap لازم‌اند؛ Log redaction اجباری است؛ Fixtureها باید مصنوعی باشند؛ Config ناقص Fail-fast می‌شود.
+
+## ADR-009 — Configuration Schema نسخه‌دار و Snapshot immutable
+
+- **Status:** Accepted
+- **Context:** کلیدهای Configuration قرارداد عمومی Taskهای بعدی‌اند و Startup
+  باید خطاهای nested، ارجاعی و Secret را پیش از اتصال خارجی، بدون coercion یا
+  افشای ورودی خام، به‌صورت تجمیعی گزارش کند. ZoneInfo سیستم نیز روی همهٔ
+  پلتفرم‌های پشتیبانی‌شده یکسان در دسترس نیست.
+- **Decision:** Schema اولیه عدد صحیح `1` است و مدل‌های آن با Pydantic v2 به‌صورت
+  frozen، strict و `extra="forbid"` ساخته می‌شوند. JSON فقط نام Environment
+  Variable را در `SecretReference` نگه می‌دارد؛ Loader یک Snapshot شامل
+  `ApplicationConfig` و `ResolvedSecrets` redacted می‌سازد. `tzdata` منبع IANA
+  قابل‌قفل برای محیط‌های فاقد tzdb سیستم است. نسخهٔ ناشناخته Fail-fast است و
+  Migration یا Dynamic reload در این مرحله وجود ندارد.
+- **Reason:** این قرارداد type-safe، deterministic و قابل‌آزمون است، typo و
+  coercion پنهان را رد می‌کند، متن Unicode را بدون normalization نگه می‌دارد و
+  Domain/Application را از JSON، Environment و کتابخانه‌های Adapter مستقل
+  نگه می‌دارد.
+- **Consequences:** تغییر ناسازگار کلیدها یا معنا به Schema جدید و Migration
+  صریح نیاز دارد؛ Pydantic و tzdata runtime dependencyهای قفل‌شده‌اند؛
+  Composition Root تنها مصرف‌کنندهٔ Loader است؛ Configuration پس از Startup
+  read-only است و تغییر آن Restart کنترل‌شده می‌خواهد.

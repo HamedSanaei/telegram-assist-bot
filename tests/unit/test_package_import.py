@@ -19,9 +19,14 @@ ARCHITECTURE_PACKAGES = (
 
 
 def test_distribution_metadata_matches_import_package() -> None:
-    """Keep the public package version synchronized with installed metadata."""
+    """Keep public package version and runtime requirements synchronized."""
     assert metadata.version(DISTRIBUTION_NAME) == telegram_assist_bot.__version__
-    assert metadata.requires(DISTRIBUTION_NAME) is None
+    assert frozenset(metadata.requires(DISTRIBUTION_NAME) or ()) == frozenset(
+        {
+            "pydantic<3,>=2.12.0",
+            "tzdata>=2025.2",
+        }
+    )
 
 
 def test_architecture_scaffolds_are_importable_and_documented() -> None:
