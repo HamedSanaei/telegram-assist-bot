@@ -46,6 +46,42 @@ Presentation / Workers      Infrastructure Adapters
 
 هیچ Import از `domain` یا `application` به `infrastructure`، `presentation` یا SDKهای خارجی مجاز نیست.
 
+### Composition Root و Startup پیاده‌شده
+
+Package `telegram_assist_bot.bootstrap` تنها محل import هم‌زمان Configuration،
+Observability، Port و Adapter concrete MongoDB است. `__main__.py` فقط تابع CLI را
+زیر guard اجرا می‌کند؛ import هیچ Config، Environment، Logger global یا resource
+خارجی را باز نمی‌کند.
+
+ترتیب واقعی lifecycle T006:
+
+```text
+--config PATH > TAB_CONFIG_PATH > config/configuration.json
+    -> load_configuration(path, environ snapshot)
+    -> configured application logger + unfiltered lifecycle audit logger
+    -> create_mongodb_client و ثبت فوری ownership
+    -> verify_mongodb_connection با timeout Config
+    -> get_posts_collection
+    -> initialize_post_indexes موجود T004
+    -> MongoPostRepository
+    -> application_ready
+    -> shutdown_begun -> close_mongodb_client -> resource_closed
+```
+
+Readiness تا پایان ping و Index setup false است. client تنها resource مستقل
+مالکیت‌دار است؛ Collection و Repository close جدا ندارند. failure یا cancellation
+پس از ساخت client همان shutdown task مشترک را اجرا می‌کند. Waiter لغوشده cleanup
+را با `shield` تا پایان join می‌کند و سپس cancellation عبور می‌کند. shutdown
+ترتیبی یا هم‌زمان close را دقیقاً یک‌بار اجرا می‌کند و فراخوانی هنگام
+`STARTING` برای جلوگیری از race با Startup رد می‌شود.
+
+Application logger Level تنظیم‌شده را حفظ می‌کند، ولی lifecycle audit logger با
+همان Sink، correlation و Secretهای resolveشده در Redactor، eventهای الزامی را
+حتی در Levelهای `ERROR` و `CRITICAL` ثبت می‌کند. خروجی CLI JSON خطی UTF-8 روی
+stderr است. exit codeهای پایدار `0` برای success، `2` برای Configuration و `3`
+برای Infrastructure هستند. Entry point فعلی یک Startup check است و چون هیچ
+Worker محصولی در T006 وجود ندارد، پس از readiness فوراً shutdown تمیز می‌شود.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای
@@ -390,11 +426,13 @@ JSON از `ensure_ascii=False` و JSON سخت‌گیرانه استفاده می
    Slot calculation، taxonomy/retry policy، structured logging، context isolation،
    redaction امنیتی، AI schema/fallback و Permission.
 2. **Integration:** Adapter MongoDB روی database یکتای آزمایشی و loopback با
-   Index/Atomicity/TTL semantics؛ سپس Media Storage، HTTP AI روی Fake server و
-   تبدیل DTOهای Telegram در Taskهای خودشان.
+   Index/Atomicity/TTL semantics؛ lifecycle پایه با Config موقت، Environment
+   مصنوعی، startup تکراری و target ناموجود bounded؛ سپس Media Storage، HTTP AI
+   روی Fake server و تبدیل DTOهای Telegram در Taskهای خودشان.
 3. **Contract:** Fixtureهای ثبت‌شده برای User API/Bot API/Providerها بدون Secret واقعی.
 4. **End-to-end کنترل‌شده:** MongoDB واقعی آزمایشی و Gatewayهای Fake برای Crawl → Approval → Publish/Schedule؛ تست Sandbox تلگرام فقط با Configuration صریح و خارج از اجرای پیش‌فرض.
-5. **Restart/Concurrency:** خاموش‌کردن Worker پس از Claim، انقضای Lease، رویداد تکراری و چند Worker.
+5. **Restart/Concurrency:** Startup/index تکراری، shutdown/cancellation lifecycle،
+   خاموش‌کردن Worker پس از Claim، انقضای Lease، رویداد تکراری و چند Worker.
 6. **Security:** Callback جعلی، Admin غیرمجاز، Secret redaction، Path traversal Media و Config نامعتبر.
 
 هر Task تست‌های متمرکز خود را دارد و Taskهای Stabilization سناریوهای بین‌لایه‌ای همان Milestone را تثبیت می‌کنند. تست زنده Provider/Telegram نباید شرط اجرای Unit Suite باشد.

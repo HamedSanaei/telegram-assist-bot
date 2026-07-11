@@ -101,7 +101,11 @@ def validate_wheel(wheel_path: Path) -> None:
 
             required_members = {
                 f"{EXPECTED_IMPORT_PACKAGE}/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/__main__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/py.typed",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/cli.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/runtime.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/loader.py",
