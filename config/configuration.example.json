@@ -25,6 +25,16 @@
         "environment_variable": "TAB_TELEGRAM_BOT_TOKEN"
       },
       "approval_chat_id": -1000000000001
+    },
+    "ingestion": {
+      "operation_timeout_seconds": 10,
+      "history_page_size": 100,
+      "history_max_pages": 100,
+      "live_buffer_size": 100,
+      "max_reconnect_attempts": 3,
+      "reconnect_initial_delay_seconds": 1,
+      "reconnect_max_delay_seconds": 30,
+      "maximum_flood_wait_seconds": 60
     }
   },
   "admins": [
@@ -41,6 +51,7 @@
     {
       "name": "منبع فارسی 📣",
       "telegram_channel_id": -1000000000101,
+      "username": "source_example",
       "enabled": true,
       "allowed_destination_names": [
         "destination-fa"
@@ -51,6 +62,7 @@
     {
       "name": "destination-fa",
       "telegram_channel_id": -1000000000201,
+      "username": "destination_example",
       "enabled": true
     }
   ],
