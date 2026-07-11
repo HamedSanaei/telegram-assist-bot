@@ -6,16 +6,16 @@
 
 - **Status:** Accepted
 - **Context:** نیازمندی، پروژه را Python تعریف کرده و اکوسیستم مناسبی برای Telegram، MongoDB، HTTP و پردازش Async لازم است.
-- **Decision:** Application با Python ساخته می‌شود؛ نسخه پشتیبانی‌شده در T001 تثبیت خواهد شد.
+- **Decision:** Application با Python ساخته می‌شود. Baseline رسمی CPython 3.12 و بازهٔ پشتیبانی‌شده `>=3.12,<3.14` است؛ CI روی 3.12 و 3.13 اجرا می‌شود. `uv 0.11.28` مدیریت و قفل dependencyها و `hatchling 1.31.0` ساخت Package را انجام می‌دهند.
 - **Reason:** انطباق مستقیم با نیازمندی و دسترسی به SDKها و ابزارهای تست بالغ.
-- **Consequences:** Type checking و مرزبندی ماژول‌ها باید صریح باشد؛ عملیات I/O نباید Event Loop را Block کند؛ نسخه Runtime و Dependencyها باید Pin شوند.
+- **Consequences:** Type checking و مرزبندی ماژول‌ها صریح است؛ عملیات I/O نباید Event Loop را Block کند؛ نسخه‌های resolveشده در `uv.lock` قرار می‌گیرند و Build CI از backend قفل‌شده بدون build isolation استفاده می‌کند. افزودن Minor جدید Python نیازمند عبور همهٔ Gateها و به‌روزرسانی metadata، CI، Lockfile و مستندات است.
 
 ## ADR-002 — MongoDB دیتابیس اصلی
 
 - **Status:** Accepted
 - **Context:** Postها، وضعیت‌های پردازش و Jobهای پایدار ساختار Document-oriented و Atomic update می‌خواهند.
 - **Decision:** MongoDB منبع حقیقت اصلی Post، Publication، Schedule، AI Job و Advertisement Job است.
-- **Reason:** الزام `REQUIREMENTS.md` و پشتیبانی از Unique/TTL Index و Claim اتمیک.
+- **Reason:** الزام `docs/REQUIREMENTS.md` و پشتیبانی از Unique/TTL Index و Claim اتمیک.
 - **Consequences:** Index setup و Schema evolution باید صریح باشند؛ TTL حذف دقیق در لحظه را تضمین نمی‌کند؛ Query و Mapperها پشت Port می‌مانند.
 
 ## ADR-003 — مرزهای Clean Architecture

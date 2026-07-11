@@ -1,0 +1,74 @@
+# Python bytecode and native extensions
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+
+# Virtual environments and dependency caches
+.venv/
+.venv*/
+venv/
+env/
+.cache/
+.uv-cache/
+
+# Test, type-check, lint, and coverage caches
+.pytest_cache/
+.pytest-tmp/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Build and packaging artifacts
+build/
+dist/
+wheelhouse/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Local environment, configuration, and secrets
+.env*
+!.env.example
+/config/configuration.json
+/config/configuration.local.json
+/config/configuration.*.local.json
+/config/*.secret.json
+/config/*.secrets.json
+!/config/configuration.example.json
+/secrets/
+**/credentials.json
+**/id_rsa*
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Telegram sessions and runtime data
+*.session*
+/var/
+/media/
+/logs/
+*.log
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Synthetic fixtures are reviewed repository inputs, never runtime credentials.
+!/tests/fixtures/
+!/tests/fixtures/**
