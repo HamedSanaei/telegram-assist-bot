@@ -1,0 +1,105 @@
+{
+  "configuration_schema_version": 1,
+  "mongodb": {
+    "uri": {
+      "environment_variable": "TAB_MONGODB_URI"
+    },
+    "database_name": "telegram_assist_bot",
+    "connect_timeout_seconds": 10
+  },
+  "telegram": {
+    "user": {
+      "api_id": {
+        "environment_variable": "TAB_TELEGRAM_API_ID"
+      },
+      "api_hash": {
+        "environment_variable": "TAB_TELEGRAM_API_HASH"
+      },
+      "phone_number": {
+        "environment_variable": "TAB_TELEGRAM_PHONE_NUMBER"
+      },
+      "session_path": "var/sessions/source_account.session"
+    },
+    "bot": {
+      "token": {
+        "environment_variable": "TAB_TELEGRAM_BOT_TOKEN"
+      },
+      "approval_chat_id": -1000000000001
+    }
+  },
+  "admins": [
+    {
+      "name": "مدیر‌نمونه\nشیفت شب 😀",
+      "telegram_user_id": 100000001,
+      "active": true,
+      "allowed_destination_names": [
+        "destination-fa"
+      ]
+    }
+  ],
+  "source_channels": [
+    {
+      "name": "منبع فارسی 📣",
+      "telegram_channel_id": -1000000000101,
+      "enabled": true,
+      "allowed_destination_names": [
+        "destination-fa"
+      ]
+    }
+  ],
+  "destination_channels": [
+    {
+      "name": "destination-fa",
+      "telegram_channel_id": -1000000000201,
+      "enabled": true
+    }
+  ],
+  "features": {
+    "advertisement_detection_enabled": true,
+    "duplicate_detection_enabled": false,
+    "ai_scoring_enabled": false
+  },
+  "publishing": {
+    "scheduled_publication_interval_seconds": 300
+  },
+  "timezone": "Asia/Tehran",
+  "logging": {
+    "level": "INFO"
+  },
+  "ai": {
+    "providers": [
+      {
+        "name": "synthetic-provider",
+        "enabled": true,
+        "api_key": {
+          "environment_variable": "TAB_AI_PROVIDER_KEY"
+        },
+        "base_url": "https://provider.example.invalid/v1"
+      }
+    ],
+    "routes": [
+      {
+        "task": "advertisement_detection",
+        "candidates": [
+          {
+            "provider_name": "synthetic-provider",
+            "model_name": "synthetic-model",
+            "priority": 0,
+            "timeout_seconds": 15,
+            "max_attempts": 2
+          }
+        ]
+      }
+    ]
+  },
+  "advertisements": {
+    "routes": [
+      {
+        "name": "آگهی‌نمونه ✨",
+        "destination_names": [
+          "destination-fa"
+        ]
+      }
+    ]
+  }
+}

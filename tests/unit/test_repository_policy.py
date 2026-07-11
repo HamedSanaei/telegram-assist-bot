@@ -23,6 +23,7 @@ _IGNORED_PATHS = (
     "dist/telegram_assist_bot.whl",
     "config/configuration.json",
     "config/configuration.local.json",
+    "config/configuration.production.json",
     "config/production.secrets.json",
     "credentials.json",
     "deploy/client.p12",

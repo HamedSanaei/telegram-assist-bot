@@ -1,8 +1,8 @@
 # Telegram Assist Bot
 
-پایهٔ ماژولار یک دستیار مدیریت کانال‌های تلگرام با Python و معماری تمیز است. در
-وضعیت فعلی فقط Scaffold و ابزارهای توسعه وجود دارند و هیچ اتصال اجرایی به
-Telegram، MongoDB یا سرویس هوش مصنوعی ساخته نشده است.
+پایهٔ ماژولار یک دستیار مدیریت کانال‌های تلگرام با Python و معماری تمیز است.
+Scaffold معماری و سامانهٔ typed Configuration آماده‌اند، اما هنوز هیچ اتصال
+اجرایی به Telegram، MongoDB یا سرویس هوش مصنوعی ساخته نشده است.
 
 ## پیش‌نیاز توسعه
 
@@ -44,11 +44,34 @@ git status --short
 می‌کند. حالت `--all` همهٔ فایل‌های متنی tracked و untracked غیرignored را با
 UTF-8 سخت‌گیرانه اسکن می‌کند و برای CI مناسب است.
 
+## Configuration محلی
+
+فایل [نمونهٔ امن](config/configuration.example.json) قرارداد Schema نسخهٔ ۱ را
+نشان می‌دهد. این فایل فقط نام Environment Variableها را نگه می‌دارد؛ مقدار
+MongoDB URI، Telegram credential، Bot token و AI key باید در Environment قرار
+گیرد. برای اجرای محلی، یک فایل ignored مانند
+`config/configuration.local.json` بسازید و مقادیر واقعی را Commit نکنید.
+
+API متمرکز Composition Root چنین است:
+
+```python
+from pathlib import Path
+
+from telegram_assist_bot.shared.config import load_configuration
+
+loaded = load_configuration(Path("config/configuration.local.json"))
+```
+
+Loader فایل را با UTF-8 سخت‌گیرانه می‌خواند، همهٔ خطاهای مستقل را با مسیر فیلد
+گزارش می‌کند و پیش از هر اتصال خارجی متوقف می‌شود. Configuration پس از Startup
+immutable است و تغییر آن در نسخهٔ فعلی به Restart نیاز دارد.
+
 ## ساختار اولیه
 
 کد Package زیر `src/telegram_assist_bot/` قرار دارد. زیرPackageهای `domain`،
 `application`، `infrastructure`، `presentation`، `workers`، `shared` و
-`bootstrap` در T001 عمداً فقط importable هستند و رفتار محصولی ندارند.
+`bootstrap` در T001 importable شدند. رفتار T002 فقط در `shared/config` قرار دارد
+و هنوز هیچ Adapter یا Entry Point اجرایی وجود ندارد.
 
 تست‌های پیش‌فرض شبکه، دیتابیس، credential یا سرویس زنده لازم ندارند. تست‌های
 آینده با Markerهای `integration`، `contract`، `e2e` و `live` دسته‌بندی می‌شوند؛
@@ -58,5 +81,6 @@ Marker `live` در اجرای پیش‌فرض غیرفعال است.
 
 Token، API key، فایل Session، Config محلی، Media، Log و داده‌های `var/` نباید
 Commit شوند. `.gitignore` مانع معمول را فراهم می‌کند و baseline ابزار
-`detect-secrets` در Quality Gate بررسی می‌شود. فایل نمونهٔ Configuration در
-Task بعدی تعریف خواهد شد.
+`detect-secrets` در Quality Gate بررسی می‌شود. فقط
+`config/configuration.example.json` برای Commit مجاز است و Configurationهای
+محلی/محیطی طبق `.gitignore` خارج از Git می‌مانند.
