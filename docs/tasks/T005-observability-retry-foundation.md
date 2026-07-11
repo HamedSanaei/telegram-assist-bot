@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Active
 
 ## هدف
 
