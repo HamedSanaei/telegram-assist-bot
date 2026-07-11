@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -93,6 +93,14 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 Test Integration نباید skip شود؛ MongoDB test-only، تکرار چندبارهٔ test رقابتی و `git diff --check` الزامی‌اند.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Unit متمرکز T011: `4 passed` و `0 skipped`.
+- Unit با `uv run pytest tests/unit/application/test_ingest_post_idempotently.py --basetemp <unique>` و رقابت واقعی سه بار با `uv run pytest tests/integration/test_concurrent_idempotent_ingestion.py --basetemp <unique>` اجرا شد.
+- Integration رقابتی MongoDB: هر بار `4 passed` و `0 skipped` در سه اجرای ترتیبی؛ barrier قطعی یک document، یک canonical Post ID و دقیقاً یک claim را اثبات کرد و identityهای متفاوت lock سراسری ندارند.
+- همهٔ writeهای Crawl و Listener از `IngestPostIdempotently` عبور می‌کنند؛ uniqueness و claim اتمیک در MongoDB برقرار است و duplicate-key نتیجهٔ idempotent محسوب می‌شود.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرا؛ Branch Coverage برابر `90.02%` و همهٔ Quality Gateها موفق‌اند.
 
 ## به‌روزرسانی‌های مستندات
 

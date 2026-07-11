@@ -109,7 +109,7 @@ class TelegramLoginStep(StrEnum):
     """Describe the next step after submitting a verification code."""
 
     AUTHORIZED = "Authorized"
-    TWO_FACTOR_PASSWORD_REQUIRED = "TwoFactorPasswordRequired"  # noqa: S105
+    TWO_FACTOR_PASSWORD_REQUIRED = "TwoFactorPasswordRequired"  # noqa: S105  # pragma: allowlist secret
 
 
 class TelegramChannelRole(StrEnum):

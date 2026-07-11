@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -92,6 +92,16 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 Integration/E2E کنترل‌شده و MongoDB نباید skip شوند؛ اجرای suite دوبار برای کشف flakiness، `git diff --check` و بازبینی Log الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- Integration/E2E متمرکز T012: هر بار `3 passed` و `0 skipped` در دو اجرای ترتیبی با MongoDB واقعی آزمایشی.
+- هر دو اجرا با `uv run pytest tests/integration/test_ingestion_recovery.py tests/e2e/test_text_ingestion_restart.py --basetemp <unique>` انجام شدند.
+- restart با Session/database مشترک، overlap listener-before-crawl، disconnect، failure پیش/پس از insert/claim، shutdown بدون task معلق و عدم prompt مجدد اثبات شد.
+- Suite کامل non-live: `669 passed` و `0 skipped` در دو اجرای ترتیبی؛ Branch Coverage برابر `90.02%`.
+- `uv lock --check`، `uv sync --locked --group dev`، Ruff، format، mypy، هر دو text-integrity check، secret detection، build، distribution، import، `git diff --check` و artifact audit موفق‌اند.
+- دو فرمان suite نهایی به‌ترتیب `uv run pytest -m "not live" --cov=telegram_assist_bot --cov-branch --cov-report=term-missing --cov-fail-under=90 --basetemp <unique>` و `uv run pytest -m "not live" --basetemp <unique>` بودند.
+- تست زندهٔ Telegram اجرا نشده و طبق Task اختیاری است؛ هیچ credential یا channel واقعی در suite وجود ندارد.
 
 ## به‌روزرسانی‌های مستندات
 

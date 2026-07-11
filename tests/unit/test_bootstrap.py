@@ -830,6 +830,52 @@ def test_cli_returns_stable_exit_codes_with_an_injected_application_factory(
     assert received_environment is not environment
 
 
+@pytest.mark.parametrize(
+    ("command", "expected_code"),
+    [
+        ("login", FoundationExitCode.SUCCESS),
+        ("ingest-text", FoundationExitCode.INFRASTRUCTURE_ERROR),
+    ],
+)
+def test_cli_dispatches_explicit_telegram_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    command: Literal["login", "ingest-text"],
+    expected_code: FoundationExitCode,
+) -> None:
+    calls: list[tuple[str, Path]] = []
+    ingestion_application = object()
+
+    async def login(path: Path, **_kwargs: object) -> FoundationExitCode:
+        calls.append(("login", path))
+        return FoundationExitCode.SUCCESS
+
+    async def ingest(
+        application: object,
+        path: Path,
+        **_kwargs: object,
+    ) -> FoundationExitCode:
+        assert application is ingestion_application
+        calls.append(("ingest-text", path))
+        return FoundationExitCode.INFRASTRUCTURE_ERROR
+
+    monkeypatch.setattr(cli_module, "run_telegram_login", login)
+    monkeypatch.setattr(
+        cli_module,
+        "create_text_ingestion_application",
+        lambda *, sink: ingestion_application,
+    )
+    monkeypatch.setattr(cli_module, "run_text_ingestion_application", ingest)
+
+    result = cli_module.main(
+        [command, "--config", "telegram.json"],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+
+    assert result == expected_code
+    assert calls == [(command, Path("telegram.json"))]
+
+
 def test_import_and_reload_do_not_execute_startup_or_open_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

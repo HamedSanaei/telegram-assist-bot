@@ -116,9 +116,7 @@ def test_two_lifecycles_reuse_session_database_and_overlap_without_duplicates(
         rich_message = replace(
             source_message(1),
             text="سلام‌پایدار\nPremium 😀",
-            text_entities=(
-                TelegramEntity(13, 2, "custom_emoji", "987654"),
-            ),
+            text_entities=(TelegramEntity(13, 2, "custom_emoji", "987654"),),
         )
         first_gateway = Gateway(
             history=(rich_message,),
@@ -154,9 +152,7 @@ def test_two_lifecycles_reuse_session_database_and_overlap_without_duplicates(
                 == 1
             )
             first_document = next(
-                document
-                for document in documents
-                if document["source_message_id"] == 1
+                document for document in documents if document["source_message_id"] == 1
             )
             original = cast("dict[str, object]", first_document["original_content"])
             assert original["text"] == "سلام‌پایدار\nPremium 😀"

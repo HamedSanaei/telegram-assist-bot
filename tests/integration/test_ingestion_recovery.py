@@ -5,14 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
-from tests.e2e.test_text_ingestion_restart import (
-    Sink,
-    create_application,
-    environment,
-    write_configuration,
-)
-from tests.integration.test_crawl_today_text_posts import MongoTestSettings, resources
-from tests.unit.test_text_ingestion_bootstrap import Gateway, source_message
 
 from telegram_assist_bot.application.ports import (
     TelegramAccount,
@@ -22,6 +14,14 @@ from telegram_assist_bot.application.ports import (
 )
 from telegram_assist_bot.bootstrap.text_ingestion import TextIngestionStartupError
 from telegram_assist_bot.shared.errors import TransientOperationError
+from tests.e2e.test_text_ingestion_restart import (
+    Sink,
+    create_application,
+    environment,
+    write_configuration,
+)
+from tests.integration.test_crawl_today_text_posts import MongoTestSettings, resources
+from tests.unit.test_text_ingestion_bootstrap import Gateway, source_message
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine

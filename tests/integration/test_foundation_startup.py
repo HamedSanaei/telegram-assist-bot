@@ -29,11 +29,10 @@ from telegram_assist_bot.shared.config import load_configuration
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from telegram_assist_bot.shared.observability import EventSink, StructuredEvent
     from tests.integration.infrastructure.persistence.conftest import (
         MongoTestSettings,
     )
-
-    from telegram_assist_bot.shared.observability import EventSink, StructuredEvent
 
 pytestmark = pytest.mark.integration
 
