@@ -15,6 +15,9 @@ from telegram_assist_bot.application.ports import (
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
+    PostClaimOutcome,
+    PostClaimRequest,
+    PostClaimResult,
     PostConcurrencyConflictError,
     PostNotFoundError,
     PostRepositoryDataError,
@@ -112,6 +115,18 @@ def _restore_post(document: object) -> Post:
     return post
 
 
+def _same_source_payload(existing: Post, candidate: Post) -> bool:
+    """Compare immutable source facts while ignoring local receipt metadata."""
+    return (
+        existing.source_identity == candidate.source_identity
+        and existing.source_channel_username == candidate.source_channel_username
+        and existing.source_channel_display_name
+        == candidate.source_channel_display_name
+        and existing.original_content == candidate.original_content
+        and existing.source_published_at == candidate.source_published_at
+    )
+
+
 @dataclass(slots=True)
 class MongoPostRepository:
     """Persist post documents with database-enforced idempotency and CAS."""
@@ -133,16 +148,19 @@ class MongoPostRepository:
             raise InvalidPostRepositoryRequestError
         document = post_to_document(post)
         outcome: InsertPostOutcome | None = None
+        canonical_post_id: PostId | None = None
         unavailable = False
         data_conflict = False
         diagnose_identifier_conflict = False
+        diagnose_source_conflict = False
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 await self._collection.insert_one(document)
             outcome = InsertPostOutcome.CREATED
+            canonical_post_id = post.post_id
         except DuplicateKeyError as error:
             if _is_source_identity_duplicate(error):
-                outcome = InsertPostOutcome.ALREADY_EXISTS
+                diagnose_source_conflict = True
             elif _is_internal_id_duplicate(error):
                 diagnose_identifier_conflict = True
             else:
@@ -150,19 +168,33 @@ class MongoPostRepository:
         except (PyMongoError, TimeoutError):
             unavailable = True
 
-        if diagnose_identifier_conflict:
+        if diagnose_identifier_conflict or diagnose_source_conflict:
             existing_document: MongoDocument | None = None
             try:
                 async with asyncio.timeout(self._timeout_seconds):
                     existing_document = await self._collection.find_one(
                         {"_id": post.post_id.value}
+                        if diagnose_identifier_conflict
+                        else {
+                            "source_channel_id": (
+                                post.source_identity.source_channel_id
+                            ),
+                            "source_message_id": (
+                                post.source_identity.source_message_id
+                            ),
+                        }
                     )
             except (PyMongoError, TimeoutError):
                 unavailable = True
             if not unavailable and existing_document is not None:
                 existing = _restore_post(existing_document)
                 if existing.source_identity == post.source_identity:
-                    outcome = InsertPostOutcome.ALREADY_EXISTS
+                    canonical_post_id = existing.post_id
+                    outcome = (
+                        InsertPostOutcome.ALREADY_EXISTS
+                        if _same_source_payload(existing, post)
+                        else InsertPostOutcome.CONFLICT
+                    )
                 else:
                     data_conflict = True
             elif not unavailable:
@@ -170,9 +202,62 @@ class MongoPostRepository:
 
         if data_conflict:
             raise PostRepositoryDataError
-        if unavailable or outcome is None:
+        if unavailable or outcome is None or canonical_post_id is None:
             raise PostRepositoryUnavailableError
-        return InsertPostResult(outcome)
+        return InsertPostResult(outcome, canonical_post_id)
+
+    async def claim_for_next_stage(self, request: PostClaimRequest) -> PostClaimResult:
+        """Atomically set one durable next-stage marker outside Domain state."""
+        if type(request) is not PostClaimRequest:
+            raise InvalidPostRepositoryRequestError
+        claimed_at = _canonical_as_of(request.claimed_at)
+        persisted_claimed_at = _floor_to_millisecond(claimed_at)
+        query: MongoDocument = {
+            "_id": request.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "source_channel_id": request.source_identity.source_channel_id,
+            "source_message_id": request.source_identity.source_message_id,
+            "status": "Stored",
+            "next_stage_claimed_at": None,
+        }
+        update: MongoDocument = {
+            "$set": {
+                "next_stage_claimed_at": persisted_claimed_at,
+                "next_stage_claim_correlation_id": request.correlation_id,
+            }
+        }
+        updated: MongoDocument | None = None
+        current: MongoDocument | None = None
+        unavailable = False
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    update,
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                if updated is None:
+                    current = await self._collection.find_one(
+                        {"_id": request.post_id.value}
+                    )
+        except (PyMongoError, TimeoutError):
+            unavailable = True
+        if unavailable:
+            raise PostRepositoryUnavailableError
+        if updated is not None:
+            _restore_post(updated)
+            return PostClaimResult(PostClaimOutcome.CLAIMED, request.post_id)
+        if current is None:
+            raise PostNotFoundError
+        current_post = _restore_post(current)
+        if current_post.source_identity != request.source_identity:
+            return PostClaimResult(PostClaimOutcome.CONFLICT, current_post.post_id)
+        if current.get("next_stage_claimed_at") is not None:
+            return PostClaimResult(
+                PostClaimOutcome.ALREADY_CLAIMED, current_post.post_id
+            )
+        return PostClaimResult(PostClaimOutcome.CONFLICT, current_post.post_id)
 
     async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
         """Return one visible, non-expired post by its application identifier."""

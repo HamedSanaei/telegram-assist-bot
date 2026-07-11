@@ -20,6 +20,9 @@ __all__ = (
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
+    "PostClaimOutcome",
+    "PostClaimRequest",
+    "PostClaimResult",
     "PostConcurrencyConflictError",
     "PostNotFoundError",
     "PostRepository",
@@ -87,6 +90,7 @@ class InsertPostOutcome(StrEnum):
 
     CREATED = "Created"
     ALREADY_EXISTS = "AlreadyExists"
+    CONFLICT = "Conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,10 +98,63 @@ class InsertPostResult:
     """Return the deterministic outcome of one idempotent insert attempt."""
 
     outcome: InsertPostOutcome
+    post_id: PostId
 
     def __post_init__(self) -> None:
         """Require the application-owned outcome enum without coercion."""
         if type(self.outcome) is not InsertPostOutcome:
+            raise InvalidPostRepositoryRequestError
+        if type(self.post_id) is not PostId:
+            raise InvalidPostRepositoryRequestError
+
+
+class PostClaimOutcome(StrEnum):
+    """Describe whether one caller atomically won the next-stage marker."""
+
+    CLAIMED = "Claimed"
+    ALREADY_CLAIMED = "AlreadyClaimed"
+    CONFLICT = "Conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class PostClaimRequest:
+    """Request one durable next-stage marker for a canonical stored post."""
+
+    post_id: PostId
+    source_identity: SourceMessageIdentity
+    claimed_at: datetime
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        """Validate safe application-owned claim inputs."""
+        if type(self.post_id) is not PostId:
+            raise InvalidPostRepositoryRequestError
+        if type(self.source_identity) is not SourceMessageIdentity:
+            raise InvalidPostRepositoryRequestError
+        if self.claimed_at.tzinfo is None or self.claimed_at.utcoffset() is None:
+            raise InvalidPostRepositoryRequestError
+        if (
+            type(self.correlation_id) is not str
+            or not self.correlation_id
+            or self.correlation_id.isspace()
+            or len(self.correlation_id) > 128
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@dataclass(frozen=True, slots=True)
+class PostClaimResult:
+    """Return one canonical post identity and atomic marker outcome."""
+
+    outcome: PostClaimOutcome
+    post_id: PostId
+
+    def __post_init__(self) -> None:
+        """Require exact application-owned result types."""
+        if (
+            type(self.outcome) is not PostClaimOutcome
+            or type(self.post_id) is not PostId
+        ):
             raise InvalidPostRepositoryRequestError
 
 
@@ -167,4 +224,8 @@ class PostRepository(Protocol):
 
     async def transition(self, request: PostTransitionRequest) -> Post:
         """Atomically persist and return one domain-validated next snapshot."""
+        ...
+
+    async def claim_for_next_stage(self, request: PostClaimRequest) -> PostClaimResult:
+        """Atomically create one durable next-stage marker for a stored post."""
         ...

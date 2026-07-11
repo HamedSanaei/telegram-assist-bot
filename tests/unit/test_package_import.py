@@ -50,9 +50,10 @@ def test_distribution_metadata_matches_import_package() -> None:
     assert metadata.version(DISTRIBUTION_NAME) == telegram_assist_bot.__version__
     assert frozenset(metadata.requires(DISTRIBUTION_NAME) or ()) == frozenset(
         {
-            "pydantic<3,>=2.12.0",
-            "pymongo<5,>=4.13.0",
-            "tzdata>=2025.2",
+                "pydantic<3,>=2.12.0",
+                "pymongo<5,>=4.13.0",
+                "telethon==1.44.0",
+                "tzdata>=2025.2",
         }
     )
 
