@@ -42,6 +42,8 @@ _ROOT_FIELDS: Final[frozenset[str]] = frozenset(
         "status",
         "version",
         "transition_history",
+        "next_stage_claimed_at",
+        "next_stage_claim_correlation_id",
     }
 )
 _CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -306,12 +308,22 @@ def post_to_document(post: Post) -> dict[str, object]:
             status_transition_to_document(transition)
             for transition in post.transition_history
         ],
+        "next_stage_claimed_at": None,
+        "next_stage_claim_correlation_id": None,
     }
 
 
 def post_from_document(value: object) -> Post:
     """Reconstruct and validate a post from the exact version-1 document schema."""
-    document = _require_mapping(value, rule="invalid_document")
+    raw_document = _require_mapping(value, rule="invalid_document")
+    document = dict(raw_document)
+    has_claim_time = "next_stage_claimed_at" in document
+    has_claim_correlation = "next_stage_claim_correlation_id" in document
+    if has_claim_time is not has_claim_correlation:
+        raise InvalidPostDocumentError("invalid_claim")
+    if not has_claim_time:
+        document["next_stage_claimed_at"] = None
+        document["next_stage_claim_correlation_id"] = None
     _require_exact_fields(document, _ROOT_FIELDS)
     if (
         document["schema_version"] != POST_DOCUMENT_SCHEMA_VERSION
@@ -321,6 +333,13 @@ def post_from_document(value: object) -> Post:
     history_value = document["transition_history"]
     if type(history_value) is not list:
         raise InvalidPostDocumentError
+    claimed_at = document["next_stage_claimed_at"]
+    claim_correlation_id = document["next_stage_claim_correlation_id"]
+    if (claimed_at is None) is not (claim_correlation_id is None):
+        raise InvalidPostDocumentError("invalid_claim")
+    if claimed_at is not None:
+        _canonical_document_datetime(claimed_at)
+        _require_string(claim_correlation_id)
     expires_at = _restore_ceil_datetime(
         document["expires_at"],
         document["expires_at_microsecond_remainder"],

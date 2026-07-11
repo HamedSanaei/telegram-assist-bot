@@ -71,11 +71,12 @@ def test_insert_result_is_frozen_and_uses_exact_public_outcomes() -> None:
     assert tuple(InsertPostOutcome) == (
         InsertPostOutcome.CREATED,
         InsertPostOutcome.ALREADY_EXISTS,
+        InsertPostOutcome.CONFLICT,
     )
     assert InsertPostOutcome.CREATED.value == "Created"
     assert InsertPostOutcome.ALREADY_EXISTS.value == "AlreadyExists"
 
-    result = InsertPostResult(InsertPostOutcome.CREATED)
+    result = InsertPostResult(InsertPostOutcome.CREATED, PostId("canonical-post"))
     assert is_dataclass(result)
     assert result.outcome is InsertPostOutcome.CREATED
     with pytest.raises(FrozenInstanceError):
@@ -84,7 +85,10 @@ def test_insert_result_is_frozen_and_uses_exact_public_outcomes() -> None:
 
 def test_insert_result_rejects_coerced_or_foreign_outcomes() -> None:
     with pytest.raises(InvalidPostRepositoryRequestError):
-        InsertPostResult(cast("InsertPostOutcome", "Created"))
+        InsertPostResult(
+            cast("InsertPostOutcome", "Created"),
+            PostId("canonical-post"),
+        )
 
 
 def test_transition_request_accepts_one_domain_validated_step() -> None:
@@ -197,6 +201,7 @@ def test_repository_protocol_declares_only_task_owned_operations() -> None:
         "insert_idempotently",
         "list_unexpired",
         "transition",
+        "claim_for_next_stage",
     }
     assert getattr(PostRepository, "_is_runtime_protocol", False)
 
@@ -248,16 +253,45 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "Clock",
         "InsertPostOutcome",
         "InsertPostResult",
         "InvalidPostRepositoryRequestError",
         "PostConcurrencyConflictError",
+        "PostClaimOutcome",
+        "PostClaimRequest",
+        "PostClaimResult",
         "PostNotFoundError",
         "PostRepository",
         "PostRepositoryDataError",
         "PostRepositoryError",
         "PostRepositoryUnavailableError",
         "PostTransitionRequest",
+        "ResolvedTelegramChannel",
+        "TelegramAccount",
+        "TelegramAuthenticationGateway",
+        "TelegramChannelNotFoundError",
+        "TelegramChannelPermissionError",
+        "TelegramChannelReference",
+        "TelegramChannelRole",
+        "TelegramGatewayError",
+        "TelegramHistoryGateway",
+        "TelegramHistoryPage",
+        "TelegramHistoryQuery",
+        "TelegramInvalidCodeError",
+        "TelegramInvalidPasswordError",
+        "TelegramLiveGateway",
+        "TelegramLiveSubscription",
+        "TelegramLoginStep",
+        "TelegramOperationTimeoutError",
+        "TelegramRateLimitError",
+        "TelegramSessionInvalidError",
+        "TelegramSessionMutationConflictError",
+        "TelegramSessionStatus",
+        "TelegramSourceGateway",
+        "TelegramTextMessage",
+        "TelegramTransientError",
+        "TelegramValidationGateway",
     }
 
     assert inspect.getdoc(ports)

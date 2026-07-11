@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,6 +13,8 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 from telegram_assist_bot.application.ports import (
     InsertPostOutcome,
     InvalidPostRepositoryRequestError,
+    PostClaimOutcome,
+    PostClaimRequest,
     PostConcurrencyConflictError,
     PostNotFoundError,
     PostRepositoryDataError,
@@ -251,13 +253,88 @@ def test_insert_is_direct_and_returns_created_without_a_pre_read() -> None:
 
 
 def test_exact_source_identity_duplicate_is_an_idempotent_outcome() -> None:
-    collection = _FakeCollection(insert_failure=_source_duplicate_error())
+    post = _make_post()
+    collection = _FakeCollection(
+        insert_failure=_source_duplicate_error(),
+        find_one_results=[post_to_document(post)],
+    )
 
-    result = _run(_repository(collection).insert_idempotently(_make_post()))
+    result = _run(_repository(collection).insert_idempotently(post))
 
     assert result.outcome is InsertPostOutcome.ALREADY_EXISTS
+    assert result.post_id == post.post_id
     assert len(collection.inserted_documents) == 1
-    assert collection.find_one_queries == []
+    assert collection.find_one_queries == [
+        {
+            "source_channel_id": post.source_identity.source_channel_id,
+            "source_message_id": post.source_identity.source_message_id,
+        }
+    ]
+
+
+def test_same_identity_with_different_source_payload_is_conflict() -> None:
+    incoming = _make_post()
+    existing = replace(incoming, source_channel_display_name="Different source")
+    collection = _FakeCollection(
+        insert_failure=_source_duplicate_error(),
+        find_one_results=[post_to_document(existing)],
+    )
+
+    result = _run(_repository(collection).insert_idempotently(incoming))
+
+    assert result.outcome is InsertPostOutcome.CONFLICT
+    assert result.post_id == existing.post_id
+
+
+def test_next_stage_claim_is_one_atomic_conditional_update() -> None:
+    post = _stored_post()
+    claimed_at = post.received_at + timedelta(seconds=2)
+    updated = post_to_document(post)
+    persisted_claimed_at = claimed_at.replace(microsecond=789000)
+    updated["next_stage_claimed_at"] = persisted_claimed_at
+    updated["next_stage_claim_correlation_id"] = "corr-claim"
+    collection = _FakeCollection(update_result=updated)
+    request = PostClaimRequest(
+        post.post_id,
+        post.source_identity,
+        claimed_at,
+        "corr-claim",
+    )
+
+    result = _run(_repository(collection).claim_for_next_stage(request))
+
+    assert result.outcome is PostClaimOutcome.CLAIMED
+    assert result.post_id == post.post_id
+    query, update, upsert, return_document = collection.update_calls[0]
+    assert query["next_stage_claimed_at"] is None
+    assert query["status"] == "Stored"
+    assert update["$set"] == {
+        "next_stage_claimed_at": persisted_claimed_at,
+        "next_stage_claim_correlation_id": "corr-claim",
+    }
+    assert upsert is False
+    assert return_document is ReturnDocument.AFTER
+
+
+def test_losing_next_stage_claim_returns_already_claimed() -> None:
+    post = _stored_post()
+    claimed = post_to_document(post)
+    claimed["next_stage_claimed_at"] = (
+        post.received_at + timedelta(seconds=2)
+    ).replace(microsecond=789000)
+    claimed["next_stage_claim_correlation_id"] = "winner"
+    collection = _FakeCollection(find_one_results=[claimed])
+    request = PostClaimRequest(
+        post.post_id,
+        post.source_identity,
+        post.received_at + timedelta(seconds=3),
+        "loser",
+    )
+
+    result = _run(_repository(collection).claim_for_next_stage(request))
+
+    assert result.outcome is PostClaimOutcome.ALREADY_CLAIMED
+    assert result.post_id == post.post_id
 
 
 def test_internal_id_race_is_idempotent_only_after_source_identity_diagnosis() -> None:

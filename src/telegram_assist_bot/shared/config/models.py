@@ -194,11 +194,31 @@ class TelegramBotConfig(_FrozenConfigModel):
     )
 
 
+class TelegramIngestionConfig(_FrozenConfigModel):
+    """Bound history, live buffering, reconnect, and FloodWait behavior."""
+
+    operation_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=120)] = 10
+    history_page_size: Annotated[StrictInt, Field(ge=1, le=1000)] = 100
+    history_max_pages: Annotated[StrictInt, Field(ge=1, le=1000)] = 100
+    live_buffer_size: Annotated[StrictInt, Field(ge=1, le=10_000)] = 100
+    max_reconnect_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
+    reconnect_initial_delay_seconds: Annotated[
+        StrictInt,
+        Field(ge=0, le=300),
+    ] = 1
+    reconnect_max_delay_seconds: Annotated[StrictInt, Field(ge=0, le=600)] = 30
+    maximum_flood_wait_seconds: Annotated[StrictInt, Field(ge=0, le=3600)] = 60
+
+
 class TelegramConfig(_FrozenConfigModel):
     """Group the separate Telegram User API and Bot API settings."""
 
     user: TelegramUserConfig = Field(description="Telegram User API configuration.")
     bot: TelegramBotConfig = Field(description="Telegram Bot API configuration.")
+    ingestion: TelegramIngestionConfig = Field(
+        default_factory=TelegramIngestionConfig,
+        description="Bounded Telegram text-ingestion behavior.",
+    )
 
 
 class AdminConfig(_FrozenConfigModel):
@@ -225,6 +245,10 @@ class SourceChannelConfig(_FrozenConfigModel):
     telegram_channel_id: TelegramEntityId = Field(
         description="Non-zero Telegram identifier of the source channel."
     )
+    username: NonBlankString | None = Field(
+        default=None,
+        description="Optional public Telegram username used during resolution.",
+    )
     enabled: StrictBool = Field(
         description="Whether collection from this source channel is enabled."
     )
@@ -239,6 +263,10 @@ class DestinationChannelConfig(_FrozenConfigModel):
     name: NonBlankString = Field(description="Stable destination-channel name.")
     telegram_channel_id: TelegramEntityId = Field(
         description="Non-zero Telegram identifier of the destination channel."
+    )
+    username: NonBlankString | None = Field(
+        default=None,
+        description="Optional public Telegram username used during resolution.",
     )
     enabled: StrictBool = Field(
         description="Whether publication to this destination is enabled."
@@ -395,5 +423,6 @@ __all__ = [
     "SourceChannelConfig",
     "TelegramBotConfig",
     "TelegramConfig",
+    "TelegramIngestionConfig",
     "TelegramUserConfig",
 ]

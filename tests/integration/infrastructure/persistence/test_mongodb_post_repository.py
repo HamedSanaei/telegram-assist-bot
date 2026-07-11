@@ -345,7 +345,8 @@ def test_duplicate_does_not_overwrite_original_document(
             )
 
             assert created.outcome is InsertPostOutcome.CREATED
-            assert duplicate.outcome is InsertPostOutcome.ALREADY_EXISTS
+            assert duplicate.outcome is InsertPostOutcome.CONFLICT
+            assert duplicate.post_id == original.post_id
             assert await resources.collection.count_documents({}) == 1
             assert stored is not None
             _assert_post_fields_equal(stored, original)

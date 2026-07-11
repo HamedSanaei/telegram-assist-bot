@@ -37,6 +37,7 @@ from telegram_assist_bot.shared.config.models import (
     SourceChannelConfig,
     TelegramBotConfig,
     TelegramConfig,
+    TelegramIngestionConfig,
     TelegramUserConfig,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "SourceChannelConfig",
     "TelegramBotConfig",
     "TelegramConfig",
+    "TelegramIngestionConfig",
     "TelegramUserConfig",
     "UnsupportedConfigurationSchemaVersionError",
     "load_configuration",

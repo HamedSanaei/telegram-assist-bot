@@ -118,6 +118,17 @@ def test_document_uses_stable_version_one_schema_and_indexable_identity_fields()
     ]
 
 
+def test_pre_t011_version_one_document_defaults_missing_claim_marker() -> None:
+    post = _make_post()
+    document = post_to_document(post)
+    del document["next_stage_claimed_at"]
+    del document["next_stage_claim_correlation_id"]
+
+    restored = post_from_document(document)
+
+    _assert_post_fields_equal(restored, post)
+
+
 def test_mapper_preserves_entity_order_text_line_breaks_emoji_and_zwnj() -> None:
     post = _make_post()
     document = post_to_document(post)

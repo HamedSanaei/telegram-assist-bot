@@ -21,6 +21,11 @@ from telegram_assist_bot.bootstrap.runtime import (
     JsonLineEventSink,
     create_foundation_application,
 )
+from telegram_assist_bot.bootstrap.telegram_login import run_telegram_login
+from telegram_assist_bot.bootstrap.text_ingestion import (
+    create_text_ingestion_application,
+    run_text_ingestion_application,
+)
 from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.observability import (
     CorrelationContext,
@@ -99,8 +104,16 @@ async def run_foundation_application(
 def _parser() -> _SafeArgumentParser:
     parser = _SafeArgumentParser(
         prog="python -m telegram_assist_bot",
-        description=(
-            "Validate configuration, verify MongoDB, initialize indexes, and exit."
+        description=("Run the foundation check or explicit Telegram session login."),
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("check", "login", "ingest-text"),
+        default="check",
+        help=(
+            "Use 'login' for explicit authentication or 'ingest-text' for the "
+            "Milestone 1 worker."
         ),
     )
     parser.add_argument(
@@ -168,14 +181,32 @@ def main(
             _report_cli_failure(sink=sink, redactor=redactor, error=error)
         return int(FoundationExitCode.CONFIGURATION_ERROR)
 
-    application = create_foundation_application(sink=sink)
-    exit_code = asyncio.run(
-        run_foundation_application(
-            application,
-            configuration_path,
-            environ=environment_snapshot,
+    if arguments.command == "login":
+        exit_code = asyncio.run(
+            run_telegram_login(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+            )
         )
-    )
+    elif arguments.command == "ingest-text":
+        ingestion_application = create_text_ingestion_application(sink=sink)
+        exit_code = asyncio.run(
+            run_text_ingestion_application(
+                ingestion_application,
+                configuration_path,
+                environ=environment_snapshot,
+            )
+        )
+    else:
+        foundation_application = create_foundation_application(sink=sink)
+        exit_code = asyncio.run(
+            run_foundation_application(
+                foundation_application,
+                configuration_path,
+                environ=environment_snapshot,
+            )
+        )
     return int(exit_code)
 
 

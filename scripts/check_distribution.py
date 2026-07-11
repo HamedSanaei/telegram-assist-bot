@@ -16,6 +16,7 @@ EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
     {
         "pydantic<3,>=2.12.0",
         "pymongo<5,>=4.13.0",
+        "telethon==1.44.0",
         "tzdata>=2025.2",
     }
 )
@@ -106,6 +107,9 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/cli.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/runtime.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/telegram_login.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/telegram_validation.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/text_ingestion.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/loader.py",
@@ -124,7 +128,15 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/models.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/domain/posts/status.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ports/clock.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/post_repository.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ports/telegram_source_gateway.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/authenticate_telegram_session.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/crawl_today_text_posts.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/handle_live_message.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ingest_post_idempotently.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/text_ingestion.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/validate_telegram_session.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/client.py",
@@ -132,6 +144,15 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/indexes.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/post_mapper.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/post_repository.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/__init__.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/history_adapter.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/live_adapter.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/message_mapper.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/session_adapter.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/text_ingestion_gateway.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/workers/crawl_once.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/workers/live_text_listener.py",
                 *{
                     f"{EXPECTED_IMPORT_PACKAGE}/{layer}/__init__.py"
                     for layer in (

@@ -272,6 +272,7 @@ class FoundationApplication:
     __slots__ = (
         "_application_logger",
         "_client",
+        "_configuration",
         "_context",
         "_dependencies",
         "_logger",
@@ -286,6 +287,7 @@ class FoundationApplication:
         self._dependencies = dependencies
         self._state = _LifecycleState.NEW
         self._client: AsyncMongoClient[MongoDocument] | None = None
+        self._configuration: LoadedConfiguration | None = None
         self._timeout_seconds: int | None = None
         self._repository: PostRepository | None = None
         self._application_logger: StructuredLogger | None = None
@@ -304,6 +306,13 @@ class FoundationApplication:
         if not self.is_ready or self._repository is None:
             raise FoundationLifecycleError
         return self._repository
+
+    @property
+    def configuration(self) -> LoadedConfiguration:
+        """Return the immutable loaded snapshot only while ready."""
+        if not self.is_ready or self._configuration is None:
+            raise FoundationLifecycleError
+        return self._configuration
 
     @property
     def logger(self) -> StructuredLogger:
@@ -388,6 +397,7 @@ class FoundationApplication:
                     fields={"minimum_level": loaded.settings.logging.level.value},
                 )
                 await self._start_mongodb(loaded)
+                self._configuration = loaded
             except asyncio.CancelledError as cancellation:
                 self._state = _LifecycleState.FAILED
                 self._best_effort_emit(
