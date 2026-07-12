@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Never
 from uuid import uuid4
 
+from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
 from telegram_assist_bot.bootstrap.runtime import (
     BinaryEventStream,
     FoundationApplication,
@@ -113,11 +114,19 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("check", "login", "ingest-text", "schedule-worker"),
+        choices=(
+            "check",
+            "login",
+            "ingest",
+            "ingest-text",
+            "media-cleanup",
+            "schedule-worker",
+        ),
         default="check",
         help=(
-            "Use 'login' for explicit authentication or 'ingest-text' for the "
-            "Milestone 1 worker; use 'schedule-worker' for durable publication."
+            "Use 'login' for explicit authentication, 'ingest' (or the compatible "
+            "'ingest-text' alias) for full ingestion, 'media-cleanup' for one "
+            "cleanup batch, or 'schedule-worker' for durable publication."
         ),
     )
     parser.add_argument(
@@ -193,13 +202,21 @@ def main(
                 sink=sink,
             )
         )
-    elif arguments.command == "ingest-text":
+    elif arguments.command in {"ingest", "ingest-text"}:
         ingestion_application = create_text_ingestion_application(sink=sink)
         exit_code = asyncio.run(
             run_text_ingestion_application(
                 ingestion_application,
                 configuration_path,
                 environ=environment_snapshot,
+            )
+        )
+    elif arguments.command == "media-cleanup":
+        exit_code = asyncio.run(
+            run_media_cleanup(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
             )
         )
     elif arguments.command == "schedule-worker":

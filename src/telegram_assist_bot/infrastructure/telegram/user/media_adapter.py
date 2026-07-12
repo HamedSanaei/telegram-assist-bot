@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from telethon.errors import (  # type: ignore[import-untyped]
+    ChannelPrivateError,
+    FloodWaitError,
+    MessageIdInvalidError,
+)
+
 from telegram_assist_bot.application.ports import (
     MediaPermanentError,
+    MediaRateLimitError,
     MediaTransientError,
 )
 
@@ -52,6 +59,10 @@ class TelethonMediaSource:
             raise MediaPermanentError("Telegram media reference is invalid.")
         try:
             message = await self._client.get_messages(channel_id, ids=message_id)
+        except FloodWaitError as error:
+            raise MediaRateLimitError(max(0, int(error.seconds))) from error
+        except (ChannelPrivateError, MessageIdInvalidError) as error:
+            raise MediaPermanentError("Telegram media is inaccessible.") from error
         except Exception as error:
             raise MediaTransientError(
                 "Telegram media could not be resolved."
@@ -59,4 +70,21 @@ class TelethonMediaSource:
         media = getattr(message, "media", None)
         if media is None:
             raise MediaPermanentError("Telegram media no longer exists.")
-        return self._client.iter_download(media, chunk_size=self._chunk_size)
+        provider_stream = self._client.iter_download(media, chunk_size=self._chunk_size)
+
+        async def stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in provider_stream:
+                    yield chunk
+            except GeneratorExit:
+                raise
+            except FloodWaitError as error:
+                raise MediaRateLimitError(max(0, int(error.seconds))) from error
+            except (ChannelPrivateError, MessageIdInvalidError) as error:
+                raise MediaPermanentError("Telegram media is inaccessible.") from error
+            except Exception as error:
+                raise MediaTransientError(
+                    "Telegram media stream was interrupted."
+                ) from error
+
+        return stream()

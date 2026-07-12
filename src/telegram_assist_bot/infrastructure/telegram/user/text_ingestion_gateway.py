@@ -25,6 +25,10 @@ from telegram_assist_bot.infrastructure.telegram.user.live_adapter import (
     TelethonEventClient,
     TelethonLiveAdapter,
 )
+from telegram_assist_bot.infrastructure.telegram.user.media_adapter import (
+    TelethonMediaClient,
+    TelethonMediaSource,
+)
 from telegram_assist_bot.infrastructure.telegram.user.session_adapter import (
     TelethonClientProtocol,
     TelethonSessionAdapter,
@@ -38,6 +42,7 @@ class TelethonTextClient(
     TelethonClientProtocol,
     TelethonHistoryClient,
     TelethonEventClient,
+    TelethonMediaClient,
     Protocol,
 ):
     """Combine only SDK surfaces required after validation."""
@@ -122,6 +127,10 @@ class TelethonTextIngestionGateway:
             channel.username,
             channel.display_name,
         ).subscribe(source_channel_id, buffer_size=buffer_size)
+
+    def media_source(self) -> TelethonMediaSource:
+        """Build a provider-neutral streamer over the already-owned client."""
+        return TelethonMediaSource(self._require_client())
 
     async def close(self) -> None:
         """Close the shared client and release its session lock exactly once."""

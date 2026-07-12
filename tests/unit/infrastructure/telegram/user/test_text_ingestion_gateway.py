@@ -84,6 +84,19 @@ class Client:
         assert event is self.builder
         return 1
 
+    async def get_messages(self, entity: int, *, ids: int) -> object:
+        assert (entity, ids) == (-1001, 7)
+        return SimpleNamespace(media=object())
+
+    def iter_download(self, file: object, *, chunk_size: int) -> AsyncIterator[bytes]:
+        assert file is not None
+        assert chunk_size == 64 * 1024
+
+        async def stream() -> AsyncIterator[bytes]:
+            yield b"shared-client-media"
+
+        return stream()
+
 
 @dataclass
 class Session:
@@ -181,6 +194,10 @@ def test_combined_gateway_delegates_validation_history_live_and_close() -> None:
         )
         pages = [page async for page in gateway.iter_history_pages(query)]
         subscription = await gateway.subscribe(-1001, buffer_size=1)
+        media = gateway.media_source()
+        assert [chunk async for chunk in await media.open("-1001:7:0")] == [
+            b"shared-client-media"
+        ]
         callback = client.callback
         assert callable(callback)
         await callback(SimpleNamespace(message=raw(2)))

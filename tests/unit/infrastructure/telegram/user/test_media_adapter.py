@@ -24,9 +24,15 @@ class Client:
     """Synthetic media client."""
 
     def __init__(
-        self, message: object = Message(object()), *, failure: bool = False
+        self,
+        message: object = Message(object()),
+        *,
+        failure: bool = False,
+        stream_failure: bool = False,
     ) -> None:
-        self.message, self.failure = message, failure
+        self.message = message
+        self.failure = failure
+        self.stream_failure = stream_failure
 
     async def get_messages(self, entity: int, *, ids: int) -> object:
         assert (entity, ids) == (-100, 7)
@@ -39,6 +45,8 @@ class Client:
         assert chunk_size == 4096
 
         async def stream() -> AsyncIterator[bytes]:
+            if self.stream_failure:
+                raise OSError("synthetic provider detail")
             yield b"data"
 
         return stream()
@@ -55,6 +63,11 @@ def test_stream_and_error_mapping() -> None:
             await TelethonMediaSource(Client(Message(None))).open("-100:7:0")
         with pytest.raises(MediaTransientError, match="resolved"):
             await TelethonMediaSource(Client(failure=True)).open("-100:7:0")
+        interrupted = await TelethonMediaSource(
+            Client(stream_failure=True), chunk_size=4096
+        ).open("-100:7:0")
+        with pytest.raises(MediaTransientError, match="interrupted"):
+            await anext(interrupted)
 
     asyncio.run(scenario())
 

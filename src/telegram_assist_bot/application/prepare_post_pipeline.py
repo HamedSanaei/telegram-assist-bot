@@ -50,7 +50,7 @@ class PreparationInput:
     """Provide immutable inputs to the implemented preparation stages."""
 
     post_id: PostId
-    text: str
+    text: str | None
     caption: str | None
     entities: tuple[TelegramEntity, ...]
     source_username: str
@@ -98,7 +98,7 @@ class PreparePostPipeline:
         category = await self._repository.get_category_result(request.post_id)
         if category is None or request.manual_category is not None:
             category = categorize_post(
-                text=request.text,
+                text=request.text or request.caption or "",
                 categories=request.categories,
                 rules=request.category_rules,
                 source_default_category_id=request.source_default_category_id,
@@ -117,7 +117,7 @@ class PreparePostPipeline:
                 artifacts.append(existing)
                 continue
             prepared = prepare_destination_content(
-                text=request.text,
+                text=request.text or request.caption or "",
                 entities=request.entities,
                 source_username=request.source_username,
                 destination_username=destination.username,

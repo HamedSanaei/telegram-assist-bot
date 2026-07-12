@@ -81,9 +81,14 @@ Application logger Level تنظیم‌شده را حفظ می‌کند، ولی 
 stderr است. exit codeهای پایدار `0` برای success، `2` برای Configuration و `3`
 برای Infrastructure هستند. command پیش‌فرض همان Startup check T006 است و پس از
 readiness فوراً shutdown می‌شود. command صریح `login` تنها مسیر prompt ورود است.
-command `ingest-text` پس از Foundation و validation، subscription را پیش از crawl
-می‌سازد تا gap حداقل شود، crawl امروز را اجرا و سپس Listener را تا cancellation
-مصرف می‌کند؛ shutdown resourceهای مالکیت‌دار را در ترتیب معکوس می‌بندد.
+command عمومی `ingest` و alias سازگار `ingest-text` پس از Foundation و validation،
+subscription را پیش از crawl می‌سازند تا gap حداقل شود. همان Telethon client/session
+برای History، Listener و `TelethonMediaSource` reuse می‌شود. هر DTO از مسیر مشترک
+`RuntimeMessageIngestor` به Post canonical، دانلود/reuse محدود Media، Album پایدار و
+`PreparePostPipeline` می‌رسد. یک task محدود deadlineهای Album را از MongoDB poll می‌کند؛
+timer حافظه‌ای منبع حقیقت نیست. shutdown taskها، subscription، client/session lock و
+MongoDB را در ترتیب معکوس و دقیقاً یک‌بار می‌بندد. command `media-cleanup` نیز یک batch
+محدود و one-shot را با همان Config، repository و storage اجرا می‌کند.
 command `schedule-worker` نیز Foundation را reuse می‌کند، Session/Premium/دسترسی
 مقصد را non-interactive می‌سنجد، Indexهای Publication/Schedule را می‌سازد، payload
 آمادهٔ متن/Media/Album را بار می‌کند و Worker پایدار را تا cancellation اجرا می‌کند.

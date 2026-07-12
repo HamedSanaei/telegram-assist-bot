@@ -47,6 +47,10 @@ async def initialize_content_preparation_indexes(
         unique=True,
         name="uq_media_group_identity_v1",
     )
+    await groups.create_index(
+        [("finalized_at", ASCENDING), ("finalize_after", ASCENDING)],
+        name="ix_media_group_finalization_v1",
+    )
     await preparations.create_index(
         [
             ("duplicate_result.content_hash", ASCENDING),
@@ -263,6 +267,22 @@ class MongoContentPreparationRepository:
             {"_id": group_key, "finalized_at": None}, {"$set": {"finalized_at": at}}
         )
         return result.modified_count == 1
+
+    async def list_due_groups(
+        self, *, now: datetime, limit: int
+    ) -> tuple[MediaGroup, ...]:
+        """Load a bounded deterministic batch whose persisted quiet window elapsed."""
+        cursor = (
+            self._groups.find({"finalized_at": None, "finalize_after": {"$lte": now}})
+            .sort([("finalize_after", ASCENDING), ("_id", ASCENDING)])
+            .limit(limit)
+        )
+        groups: list[MediaGroup] = []
+        async for document in cursor:
+            loaded = await self.get_group(str(document["_id"]))
+            if loaded is not None:
+                groups.append(loaded)
+        return tuple(groups)
 
     async def find_duplicate(
         self, *, content_hash: str, post_id: PostId, since: datetime

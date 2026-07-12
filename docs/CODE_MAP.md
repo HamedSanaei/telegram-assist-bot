@@ -149,11 +149,12 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 |---|---|
 | `src/telegram_assist_bot/__init__.py` | metadata عمومی Package و نسخه `0.1.0` |
 | `src/telegram_assist_bot/__main__.py` | Entry point بدون side effect برای `python -m telegram_assist_bot` |
-| `bootstrap/cli.py` | parsing امن `--config`، commandهای default/`login`/`ingest-text`/`schedule-worker` و exit codeهای `0/2/3` |
+| `bootstrap/cli.py` | parsing امن `--config`، commandهای default/`login`/`ingest`/`ingest-text`/`media-cleanup`/`schedule-worker` و exit codeهای `0/2/3` |
 | `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client |
 | `bootstrap/telegram_login.py` | Composition Root ورود صریح و prompt امن بدون Secret در CLI/log |
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
-| `bootstrap/text_ingestion.py` | orchestration کامل Foundation، validation، subscribe-before-crawl، Listener و shutdown معکوس |
+| `bootstrap/text_ingestion.py` | orchestration کامل Foundation، validation، subscribe-before-crawl، Post/Media/preparation، Album finalizer محدود، Listener و shutdown معکوس با یک Session |
+| `bootstrap/media_cleanup.py` | Composition Root یک‌مرحله‌ای cleanup محدود Media با reuse تنظیمات، repository و storage موجود |
 | `bootstrap/scheduling.py` | Composition Root عملیاتی Session/Premium، MongoDB، Publisher و Worker پایدار |
 | `bootstrap/__init__.py` | API عمومی Composition Root و CLI بدون اجرای Startup هنگام import |
 | `domain/posts/models.py` | `PostId`، هویت منبع، محتوای اصلی و aggregate frozen `Post` با انقضای ۱۴روزه |
@@ -183,6 +184,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/content/` و `prepare_destination_content.py` | تبدیل خالص مقصد با edit span و rebasing Entityهای UTF-16؛ policy نسخه ۱ |
 | `application/categorize_post.py` | precedence دستی، keyword قطعی و default منبع؛ policy نسخه ۱ |
 | `application/prepare_post_pipeline.py` | resume مرحله‌ای از MongoDB، artifact مستقل مقصد و readiness اتمیک |
+| `application/runtime_ingestion.py` | مسیر مشترک History/Live از Post canonical تا دانلود/reuse Media، Album پایدار و content preparation idempotent |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
 | `infrastructure/persistence/mongodb/indexes.py` | تعریف، ساخت تکرارشونده و Fail-fast دو Index دقیق `uq_posts_source_identity_v1` و `ttl_posts_expires_at_v1` |
@@ -197,7 +199,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16 |
 | `infrastructure/telegram/user/history_adapter.py` | pagination و query bounded History بدون token SDK در Application |
 | `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، reconnect/FloodWait و unsubscribe cancellation-safe |
-| `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History و Listener |
+| `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener و ساخت MediaSource روی همان client |
 | `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji و ارسال متن/Media/Album با Telethon User API |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |
@@ -297,7 +299,7 @@ python -m telegram_assist_bot --config PATH
 هر event Startup/Shutdown همان `CorrelationContext` را دارد و پیش از Sink از
 Redactor دارای Secretهای resolveشده عبور می‌کند. failure Config exit `2` و هیچ
 client نمی‌سازد؛ failure اتصال/Index exit `3` است. cancellation پس از cleanup
-کامل عبور می‌کند. در command `ingest-text` پس از Foundation این مسیر افزوده می‌شود:
+کامل عبور می‌کند. در command `ingest` و alias `ingest-text` پس از Foundation این مسیر افزوده می‌شود:
 
 ```text
 Session موجود -> validation Premium/Source/Destination

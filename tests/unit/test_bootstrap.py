@@ -834,12 +834,13 @@ def test_cli_returns_stable_exit_codes_with_an_injected_application_factory(
     ("command", "expected_code"),
     [
         ("login", FoundationExitCode.SUCCESS),
+        ("ingest", FoundationExitCode.INFRASTRUCTURE_ERROR),
         ("ingest-text", FoundationExitCode.INFRASTRUCTURE_ERROR),
     ],
 )
 def test_cli_dispatches_explicit_telegram_commands(
     monkeypatch: pytest.MonkeyPatch,
-    command: Literal["login", "ingest-text"],
+    command: Literal["login", "ingest", "ingest-text"],
     expected_code: FoundationExitCode,
 ) -> None:
     calls: list[tuple[str, Path]] = []
@@ -855,7 +856,7 @@ def test_cli_dispatches_explicit_telegram_commands(
         **_kwargs: object,
     ) -> FoundationExitCode:
         assert application is ingestion_application
-        calls.append(("ingest-text", path))
+        calls.append((command, path))
         return FoundationExitCode.INFRASTRUCTURE_ERROR
 
     monkeypatch.setattr(cli_module, "run_telegram_login", login)
@@ -874,6 +875,27 @@ def test_cli_dispatches_explicit_telegram_commands(
 
     assert result == expected_code
     assert calls == [(command, Path("telegram.json"))]
+
+
+def test_cli_dispatches_one_shot_media_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    async def cleanup(path: Path, **_kwargs: object) -> FoundationExitCode:
+        calls.append(path)
+        return FoundationExitCode.SUCCESS
+
+    monkeypatch.setattr(cli_module, "run_media_cleanup", cleanup)
+
+    result = cli_module.main(
+        ["media-cleanup", "--config", "media.json"],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [Path("media.json")]
 
 
 def test_import_and_reload_do_not_execute_startup_or_open_resources(

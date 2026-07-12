@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from telegram_assist_bot.application.download_post_media import DownloadPostMedia
-from telegram_assist_bot.application.ports import MediaDownloadSpec, MediaTransientError
+from telegram_assist_bot.application.ports import (
+    MediaDownloadSpec,
+    MediaRateLimitError,
+    MediaTransientError,
+)
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
 from tests.unit.application.m2_fakes import FakePreparationRepository
@@ -158,3 +162,62 @@ def test_timeout_and_cancellation_cleanup_partial(tmp_path: Path) -> None:
         assert not tuple((tmp_path / ".tmp").glob("*.partial"))
 
     asyncio.run(scenario())
+
+
+def test_rate_limit_wait_is_capped_and_retry_is_bounded(tmp_path: Path) -> None:
+    class RateLimitedSource(Source):
+        async def open(self, opaque_reference: str) -> AsyncIterator[bytes]:
+            self.opens += 1
+            if self.opens == 1:
+                raise MediaRateLimitError(30)
+            assert opaque_reference == "opaque"
+
+            async def stream() -> AsyncIterator[bytes]:
+                yield b"media"
+
+            return stream()
+
+    async def scenario() -> None:
+        delays: list[float] = []
+        source = RateLimitedSource()
+        use_case = DownloadPostMedia(
+            source,
+            LocalMediaStorage(tmp_path),
+            FakePreparationRepository(),
+            maximum_bytes=100,
+            timeout_seconds=1,
+            maximum_attempts=2,
+            maximum_rate_limit_delay_seconds=2,
+            sleeper=lambda delay: _record_delay(delay, delays),
+        )
+        await use_case.execute(
+            MediaDownloadSpec(
+                MediaIdentity(-100, 10),
+                MediaType.PHOTO,
+                "opaque",
+                None,
+                None,
+                datetime.now(UTC) + timedelta(days=14),
+            )
+        )
+        assert delays == [2]
+        assert source.opens == 2
+
+    async def _record_delay(delay: float, delays: list[float]) -> None:
+        delays.append(delay)
+
+    asyncio.run(scenario())
+
+    for invalid in (-1, 1.5):
+        with pytest.raises(ValueError, match="non-negative integer"):
+            MediaRateLimitError(invalid)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="bounds"):
+        DownloadPostMedia(
+            Source(),
+            LocalMediaStorage(tmp_path / "invalid"),
+            FakePreparationRepository(),
+            maximum_bytes=1,
+            timeout_seconds=1,
+            maximum_rate_limit_delay_seconds=-1,
+        )
