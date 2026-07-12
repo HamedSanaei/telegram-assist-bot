@@ -529,7 +529,13 @@ async def _create_runtime_ingestor(
     preparations = database["content_preparations"]
     await initialize_content_preparation_indexes(media, groups, preparations)
     repository = MongoContentPreparationRepository(media, groups, preparations)
-    storage = LocalMediaStorage(settings.media.root)
+    storage = LocalMediaStorage(
+        settings.media.root,
+        preview_enabled=settings.media.preview_enabled,
+    )
+    if settings.media.preview_enabled:
+        await storage.prepare_preview_directory()
+        await storage.backfill_previews(await repository.list_media_for_preview())
     downloader = DownloadPostMedia(
         media_gateway.media_source(),
         storage,

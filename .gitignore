@@ -30,6 +30,8 @@ htmlcov/
 # Build and packaging artifacts
 build/
 dist/
+/data/media-preview/
+/data/media/
 wheelhouse/
 *.egg-info/
 .eggs/

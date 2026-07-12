@@ -35,6 +35,9 @@ class FakePreparationRepository:
     async def save_media_if_absent(self, media: StoredMedia) -> StoredMedia:
         return self.media.setdefault(media.identity.key, media)
 
+    async def list_media_for_preview(self) -> tuple[StoredMedia, ...]:
+        return tuple(self.media[key] for key in sorted(self.media))
+
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:

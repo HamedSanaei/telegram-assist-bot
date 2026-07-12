@@ -143,6 +143,11 @@ class MongoContentPreparationRepository:
                 raise ValueError("Media identity has conflicting content.") from None
             return canonical
 
+    async def list_media_for_preview(self) -> tuple[StoredMedia, ...]:
+        """Load all current media records in deterministic identity order."""
+        cursor = self._media.find({"cleaned_at": None}).sort("_id", ASCENDING)
+        return tuple([_media_from(document) async for document in cursor])
+
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:

@@ -144,6 +144,10 @@ class ContentPreparationRepository(Protocol):
         """Insert or return one canonical media record."""
         ...
 
+    async def list_media_for_preview(self) -> tuple[StoredMedia, ...]:
+        """List non-cleaned media records for an idempotent preview backfill."""
+        ...
+
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:

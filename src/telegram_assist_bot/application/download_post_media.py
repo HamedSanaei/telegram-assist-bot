@@ -66,6 +66,7 @@ class DownloadPostMedia:
         """Return an existing healthy item or atomically download it once."""
         existing = await self._repository.get_media(spec.identity)
         if existing is not None and await self._storage.exists(existing.storage_path):
+            await self._ensure_preview(existing)
             return existing
         last_error: BaseException | None = None
         for attempt in range(1, self._attempts + 1):
@@ -85,7 +86,9 @@ class DownloadPostMedia:
                     storage_path=path,
                     expires_at=spec.expires_at,
                 )
-                return await self._repository.save_media_if_absent(media)
+                stored = await self._repository.save_media_if_absent(media)
+                await self._ensure_preview(stored)
+                return stored
             except asyncio.CancelledError:
                 raise
             except (TimeoutError, MediaTransientError) as error:
@@ -102,3 +105,8 @@ class DownloadPostMedia:
         if last_error is None:
             raise RuntimeError("Media retry loop ended unexpectedly.")
         raise last_error
+
+    async def _ensure_preview(self, media: StoredMedia) -> None:
+        preview = getattr(self._storage, "ensure_preview", None)
+        if preview is not None:
+            await preview(media)
