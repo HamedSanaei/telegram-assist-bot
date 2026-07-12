@@ -192,6 +192,15 @@ uv run --python 3.12 python -m telegram_assist_bot ingest --config config/config
 uv run --python 3.12 python -m telegram_assist_bot ingest-text --config config/configuration.local.json
 ```
 
+### Optional media previews
+
+Set `media.preview_enabled` to `true` in your ignored local configuration to
+create viewable copies in `data/media-preview`. Set it to `false` (the default)
+to disable preview creation and startup backfill. Canonical extensionless files
+under the configured `media.root` remain authoritative; previews are only
+normal copies for local viewing and are never used for deduplication,
+preparation, or publishing.
+
 توقف `ingest` یا `ingest-text` با cancellation/interrupt، subscription، Telegram client،
 Session lock و MongoDB clientهای مالکیت‌دار را در ترتیب معکوس می‌بندد. اجرای عادی
 هرگز prompt ورود نمایش نمی‌دهد و Session نامعتبر با exit code غیرصفر متوقف می‌شود.

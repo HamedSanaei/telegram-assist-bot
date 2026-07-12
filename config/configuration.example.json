@@ -96,6 +96,7 @@
   },
   "media": {
     "root": "var/media",
+    "preview_enabled": false,
     "maximum_bytes": 104857600,
     "download_timeout_seconds": 300,
     "download_max_attempts": 3,

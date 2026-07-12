@@ -336,6 +336,7 @@ class MediaStorageConfig(_FrozenConfigModel):
     """Configure bounded private local media handling."""
 
     root: Path = Field(default=Path("var/media"))
+    preview_enabled: StrictBool = False
     maximum_bytes: Annotated[StrictInt, Field(ge=1, le=2_147_483_648)] = 104_857_600
     download_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 300
     download_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
