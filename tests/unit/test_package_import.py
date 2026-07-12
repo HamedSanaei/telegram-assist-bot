@@ -59,6 +59,17 @@ def test_distribution_metadata_matches_import_package() -> None:
     )
 
 
+def test_distribution_metadata_supports_python_314() -> None:
+    """Declare the supported CPython range in installed package metadata."""
+    package_metadata = metadata.metadata(DISTRIBUTION_NAME)
+
+    assert frozenset(
+        part.strip()
+        for part in package_metadata["Requires-Python"].split(",")
+        if part.strip()
+    ) == frozenset({">=3.12", "<3.15"})
+
+
 def test_architecture_scaffolds_are_importable_and_documented() -> None:
     """Expose every planned layer without adding product behavior."""
     for package_name in ARCHITECTURE_PACKAGES:

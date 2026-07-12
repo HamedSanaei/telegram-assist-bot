@@ -90,10 +90,14 @@
 ## Python version policy
 
 - Baseline رسمی پروژه `CPython 3.12` است.
-- محدودهٔ metadata باید `>=3.12,<3.14` باشد؛ Python 3.12 و 3.13 نسخه‌های پشتیبانی‌شده‌اند.
-- CI باید حداقل روی آخرین Patch در شاخه‌های 3.12 و 3.13 اجرا شود.
+- محدودهٔ metadata باید `>=3.12,<3.15` باشد؛ Python 3.12، 3.13 و 3.14 نسخه‌های پشتیبانی‌شده‌اند.
+- CI باید حداقل روی آخرین Patch در شاخه‌های 3.12، 3.13 و 3.14 اجرا شود.
 - نسخهٔ Patch قفل نمی‌شود، اما نسخهٔ Minor خارج از این بازه تا زمان عبور همهٔ Quality Gateها و ثبت تصمیم سازگاری پشتیبانی‌شده نیست.
 - استفاده از قابلیت‌های مخصوص یک Minor بالاتر از 3.12 ممنوع است، مگر با Guard روشن و تست روی تمام نسخه‌های پشتیبانی‌شده.
+
+> یادداشت نگه‌داری: اجرای اصلی T001 فقط روی Python 3.12 و 3.13 راستی‌آزمایی
+> شده بود. پشتیبانی Python 3.14 بعداً با به‌روزرسانی metadata، CI، Lockfile و
+> Quality Gateهای همان نسخه افزوده شد؛ سیاست فعلی در ADR-001 ثبت است.
 - تغییر این سیاست نیازمند به‌روزرسانی `pyproject.toml`، CI، Lockfile، مستندات و در صورت اثر معماری یک ADR است.
 
 ## Dependency management approach
@@ -180,7 +184,7 @@
 10. تست UTF-8 برابری دقیق نمونهٔ فارسی، نیم‌فاصله و Emoji و serialization خوانای JSON را ثابت می‌کند.
 11. اسکریپت سلامت متن، UTF-8 نامعتبر و نمونهٔ mojibake مصنوعی را رد می‌کند و فایل سالم فارسی را می‌پذیرد.
 12. `.gitignore` از Secret/Session/Config محلی/Media/Log/Artifact جلوگیری می‌کند و template/fixture مجاز را Ignore نمی‌کند.
-13. CI همان Quality Gateهای محلی را روی Python 3.12 و 3.13 اجرا می‌کند و به Secret نیاز ندارد.
+13. CI همان Quality Gateهای محلی را روی Python 3.12، 3.13 و 3.14 اجرا می‌کند و به Secret نیاز ندارد.
 14. `git diff --check` عبور می‌کند و هیچ فایل کاربردی، generated session یا credential افزوده نشده است.
 
 ## Required unit tests
@@ -263,7 +267,7 @@ git status --short
 - تمام Scope و ۱۴ معیار پذیرش بالا برآورده شده‌اند.
 - هیچ مورد Out-of-scope پیاده‌سازی نشده است.
 - تمام Unit Testها، packaging check، lint، format، type check، text-integrity check و build واقعاً اجرا و موفق شده‌اند.
-- نتیجهٔ CI برای Python 3.12 و 3.13 موفق است یا اجرای معادل هر دو نسخه مستند شده است.
+- نتیجهٔ CI برای Python 3.12، 3.13 و 3.14 موفق است یا اجرای معادل هر سه نسخه مستند شده است.
 - Diff نهایی فقط Bootstrap/Tooling و مستندات الزامی آن را شامل می‌شود.
 - هیچ Secret، Session، Config محلی، Media خصوصی یا Artifact تولیدشده Commit نشده است.
 - UTF-8 و متن نمایندهٔ فارسی دستی و خودکار بررسی شده و normalization یا mojibake رخ نداده است.

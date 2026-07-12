@@ -372,9 +372,9 @@ Configuration، Authorization، Permission، Permanent، Conflict و Already-com
 
 | مسیر | مسئولیت |
 |---|---|
-| `pyproject.toml` | metadata، Python `>=3.12,<3.14`، PyMongo async، Telethon `1.44.0`، Hatchling و تنظیم pytest/Ruff/mypy/coverage |
+| `pyproject.toml` | metadata، Python `>=3.12,<3.15`، PyMongo async، Telethon `1.44.0`، Hatchling و تنظیم pytest/Ruff/mypy/coverage |
 | `uv.lock` | نسخه‌های دقیق runtime، توسعه و build backend |
-| `.github/workflows/quality.yml` | اجرای Gateها روی Python 3.12 و 3.13 با MongoDB موقت نسخه‌ثابت، URI آزمایشی loopback و بدون Secret |
+| `.github/workflows/quality.yml` | اجرای Gateها روی Python 3.12، 3.13 و 3.14 با MongoDB موقت نسخه‌ثابت، URI آزمایشی loopback و بدون Secret |
 | `.editorconfig` و `.gitattributes` | UTF-8، LF و قواعد پایدار متن |
 | `.gitignore` | جلوگیری از Track عادی Secret، Session، Config محلی، Runtime data و Artifact |
 | `.secrets.baseline` | policy خالی و بازبینی‌شده برای Secret scanner آفلاین |
