@@ -53,6 +53,7 @@
       "telegram_channel_id": -1000000000101,
       "username": "source_example",
       "enabled": true,
+      "default_category_id": "general",
       "allowed_destination_names": [
         "destination-fa"
       ]
@@ -67,7 +68,7 @@
     }
   ],
   "features": {
-    "advertisement_detection_enabled": true,
+    "advertisement_detection_enabled": false,
     "duplicate_detection_enabled": false,
     "ai_scoring_enabled": false
   },
@@ -77,6 +78,32 @@
   "timezone": "Asia/Tehran",
   "logging": {
     "level": "INFO"
+  },
+  "media": {
+    "root": "var/media",
+    "maximum_bytes": 104857600,
+    "download_timeout_seconds": 300,
+    "download_max_attempts": 3,
+    "cleanup_batch_size": 100,
+    "orphan_grace_seconds": 3600,
+    "album_quiet_seconds": 3,
+    "album_maximum_wait_seconds": 30
+  },
+  "categorization": {
+    "categories": [
+      {
+        "category_id": "general",
+        "display_name": "عمومی"
+      }
+    ],
+    "keyword_rules": [
+      {
+        "rule_id": "technology-example",
+        "category_id": "general",
+        "keyword": "فناوری",
+        "priority": 100
+      }
+    ]
   },
   "ai": {
     "providers": [

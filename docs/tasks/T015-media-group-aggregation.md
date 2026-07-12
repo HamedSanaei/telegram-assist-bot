@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -98,6 +98,12 @@ uv run python scripts/check_text_integrity.py --changed
 
 تست race/restart نباید skip شود؛ بازبینی دستی caption فارسی، Persian diff و `git diff --check` الزامی است.
 
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/test_assemble_media_group.py --basetemp .pytest-tmp/m2-t015-final-20260712-100830-998 -q`؛ نتیجه `1 passed` و `0 skipped` بود. Integration واقعی MongoDB نیز در اجرای `m2-focused-final-20260712-100724-136` برابر `1 passed` بود.
+- replay/out-of-order، ترتیب قطعی، deadline پایدار، restart، finalizer واحد، late-member و caption/Custom Emoji پاس شدند.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
+
 ## به‌روزرسانی‌های مستندات
 
 - ثبت Status/verification و به‌روزرسانی T015 در `docs/ROADMAP.md` و `docs/STATUS.md`.
@@ -112,4 +118,3 @@ uv run python scripts/check_text_integrity.py --changed
 - یک گروه یک Post منطقی و یک readiness دارد.
 - Quality Gate، UTF-8 و storage safety پاس شده‌اند.
 - ارسال/انتشار Album وارد Task نشده است.
-

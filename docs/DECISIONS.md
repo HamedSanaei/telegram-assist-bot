@@ -227,3 +227,38 @@
 - **Consequences:** schema version تغییر نکرده و خواندن سندهای قدیمی فاقد هر دو
   marker claim سازگار است. claim فقط hand-off مرحلهٔ بعد را ثبت می‌کند و هیچ Media،
   AI job یا downstream worker در Milestone 1 ایجاد نمی‌شود.
+
+## ADR-016 — Media خصوصی content-addressed و state پایدار آماده‌سازی
+
+- **Status:** Accepted
+- **Context:** Milestone 2 باید دانلود Media و مرحله‌های آماده‌سازی را زیر crash،
+  restart و workerهای هم‌زمان بدون ذخیرهٔ binary در MongoDB یا اتکا به timer/lock
+  درون process ایمن کند.
+- **Decision:** `LocalMediaStorage` فقط زیر root خصوصی پیکربندی‌شده، با stream،
+  hash/size هم‌زمان، temp یکتا و rename اتمیک می‌نویسد. MongoDB metadata، Album،
+  duplicate/category، artifact مقصد و readiness را نگه می‌دارد. Album deadlineهای
+  quiet/max-wait و finalization CAS دارد؛ عضو دیررس پس از finalization نادیده گرفته
+  می‌شود. Pipeline هر نتیجهٔ پایدار را پیش از اجرای مرحله reload و readiness را
+  مشروط ایجاد می‌کند.
+- **Reason:** فایل committed سالم از شکست پایگاه‌داده جان سالم به در می‌برد و در
+  restart بدون truncate بازیابی می‌شود؛ state پایدار و عملیات اتمیک نیز correctness
+  چند worker را بدون singleton، timer منبع حقیقت یا check-then-write تأمین می‌کند.
+- **Consequences:** binary Media خارج MongoDB و خارج Git است؛ backup باید MongoDB
+  و root خصوصی را هماهنگ پوشش دهد. POSIX permissionها best-effort و محرمانگی Windows
+  وابسته به ACL است. Object Storage و orchestration محصولی خارج از Milestone 2 است.
+
+## ADR-017 — سیاست‌های نسخه‌دار و قطعی آماده‌سازی محتوا
+
+- **Status:** Accepted
+- **Context:** duplicate، pruning مقصد و دسته‌بندی باید restart-safe، قابل audit و
+  مستقل از runtime باشند و محتوای اصلی فارسی/Entityها را تغییر ندهند.
+- **Decision:** normalization و content hash نسخه `1` حداقلی است و هیچ تبدیل
+  `ی/ي`، `ک/ك` یا ZWNJ انجام نمی‌دهد؛ hashهای Media مرتب وارد serialization قطعی
+  می‌شوند. destination-content policy نسخه `1` و مختصات UTF-16 با edit spanهای
+  non-overlap استفاده می‌کند. category policy نسخه `1` precedence ثابت manual
+  override، keyword و source default دارد و tie-break از ترتیب mapping مستقل است.
+- **Reason:** versionها امکان مقایسه و migration صریح را می‌دهند و artifactهای
+  مشتق‌شده بدون mutation متن/Caption/Entity اصلی بازتولیدپذیر می‌مانند.
+- **Consequences:** تغییر هر normalization، serialization، entity clipping، pruning
+  یا precedence نیازمند version تازه و migration/recompute صریح است. semantic/fuzzy
+  duplicate، AI categorization و publication در این تصمیم و milestone وجود ندارند.

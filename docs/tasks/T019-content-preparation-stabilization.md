@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -105,6 +105,13 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 Integration/E2E و MongoDB نباید skip شوند؛ suite دو بار برای flakiness، بازبینی دستی Persian/Entity diff، فهرست فایل‌ها و `git diff --check` الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/integration/test_content_preparation_pipeline.py tests/e2e/test_content_preparation_restart.py --basetemp <unique>`؛ هر بار `2 passed` و `0 skipped` در دو اجرای ترتیبی و concurrency داخل Integration تکرار شد. اجرای نهایی مشترک T013–T019 نیز با `--basetemp .pytest-tmp/m2-focused-final-20260712-100724-136` برابر `25 passed` و `0 skipped` بود.
+- MongoDB منبع حقیقت stage result/readiness است؛ restart نتایج duplicate/category/artifact را reload می‌کند و readiness اتمیک فقط یک‌بار ساخته می‌شود.
+- AIهای پیاده‌نشده در حالت خاموش `NotRequested` و در حالت روشن fail-fast هستند؛ هیچ Provider صدا زده نشد.
+- دو suite نهایی هر بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%`. Ruff، format، mypy، text integrity، secrets، build و distribution موفق‌اند.
 
 ## به‌روزرسانی‌های مستندات
 

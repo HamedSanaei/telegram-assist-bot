@@ -18,6 +18,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    model_validator,
 )
 
 SUPPORTED_CONFIGURATION_SCHEMA_VERSION: Final[int] = 1
@@ -255,6 +256,9 @@ class SourceChannelConfig(_FrozenConfigModel):
     allowed_destination_names: Annotated[
         tuple[NonBlankString, ...], Field(min_length=1)
     ] = Field(description="Destination names permitted for collected posts.")
+    default_category_id: NonBlankString | None = Field(
+        default=None, description="Stable default category for baseline categorization."
+    )
 
 
 class DestinationChannelConfig(_FrozenConfigModel):
@@ -299,6 +303,42 @@ class LoggingConfig(_FrozenConfigModel):
     """Hold the minimum logging configuration required at startup."""
 
     level: StrictLogLevel = Field(description="Minimum application logging level.")
+
+
+class MediaStorageConfig(_FrozenConfigModel):
+    """Configure bounded private local media handling."""
+
+    root: Path = Field(default=Path("var/media"))
+    maximum_bytes: Annotated[StrictInt, Field(ge=1, le=2_147_483_648)] = 104_857_600
+    download_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 300
+    download_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
+    cleanup_batch_size: Annotated[StrictInt, Field(ge=1, le=1000)] = 100
+    orphan_grace_seconds: Annotated[StrictInt, Field(ge=60, le=604800)] = 3600
+    album_quiet_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 3
+    album_maximum_wait_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 30
+
+
+class CategoryConfig(_FrozenConfigModel):
+    """Configure one stable category identity and display label."""
+
+    category_id: NonBlankString
+    display_name: NonBlankString
+
+
+class CategoryKeywordRuleConfig(_FrozenConfigModel):
+    """Configure one deterministic bounded keyword rule."""
+
+    rule_id: NonBlankString
+    category_id: NonBlankString
+    keyword: Annotated[NonBlankString, Field(max_length=128)]
+    priority: Annotated[StrictInt, Field(ge=0, le=10000)]
+
+
+class CategorizationConfig(_FrozenConfigModel):
+    """Hold the baseline category catalog and keyword rules."""
+
+    categories: tuple[CategoryConfig, ...] = ()
+    keyword_rules: tuple[CategoryKeywordRuleConfig, ...] = ()
 
 
 class AiProviderConfig(_FrozenConfigModel):
@@ -396,10 +436,39 @@ class ApplicationConfig(_FrozenConfigModel):
         description="Validated application IANA timezone."
     )
     logging: LoggingConfig = Field(description="Application logging configuration.")
+    media: MediaStorageConfig = Field(default_factory=MediaStorageConfig)
+    categorization: CategorizationConfig = Field(default_factory=CategorizationConfig)
     ai: AiConfig = Field(description="AI provider and routing configuration.")
     advertisements: AdvertisementConfig = Field(
         description="Advertisement routing configuration."
     )
+
+    @model_validator(mode="after")
+    def validate_milestone_two_references(self) -> ApplicationConfig:
+        """Validate category identities, rules and source defaults deterministically."""
+        category_ids = [item.category_id for item in self.categorization.categories]
+        rule_ids = [item.rule_id for item in self.categorization.keyword_rules]
+        if len(category_ids) != len(set(category_ids)):
+            raise ValueError("categorization category_id values must be unique")
+        if len(rule_ids) != len(set(rule_ids)):
+            raise ValueError("categorization rule_id values must be unique")
+        known = set(category_ids)
+        if any(
+            rule.category_id not in known for rule in self.categorization.keyword_rules
+        ):
+            raise ValueError(
+                "categorization keyword rule references an unknown category"
+            )
+        defaults = [
+            source.default_category_id
+            for source in self.source_channels
+            if source.default_category_id is not None
+        ]
+        if any(value not in known for value in defaults):
+            raise ValueError(
+                "source default_category_id references an unknown category"
+            )
+        return self
 
 
 __all__ = [

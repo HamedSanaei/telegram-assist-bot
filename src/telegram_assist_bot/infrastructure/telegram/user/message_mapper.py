@@ -6,7 +6,11 @@ import re
 from datetime import UTC, datetime
 from typing import Final
 
-from telegram_assist_bot.application.ports import TelegramTextMessage
+from telegram_assist_bot.application.ports import (
+    TelegramMediaReference,
+    TelegramTextMessage,
+)
+from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import TelegramEntity
 
 _CAMEL_BOUNDARY: Final[re.Pattern[str]] = re.compile(r"(?<!^)(?=[A-Z])")
@@ -75,7 +79,37 @@ def map_telethon_message(
     if not isinstance(raw_entities, list | tuple):
         raise InvalidTelegramMessageError
     entities = tuple(_map_entity(entity) for entity in raw_entities)
-    has_media = getattr(raw_message, "media", None) is not None
+    raw_media = getattr(raw_message, "media", None)
+    has_media = raw_media is not None
+    media: tuple[TelegramMediaReference, ...] = ()
+    if has_media:
+        document = getattr(raw_message, "document", None)
+        photo = getattr(raw_message, "photo", None)
+        if document is not None:
+            mime_type = getattr(document, "mime_type", None)
+            media_type = _document_media_type(
+                mime_type, getattr(document, "attributes", ())
+            )
+            size = getattr(document, "size", None)
+            filename = _document_filename(getattr(document, "attributes", ()))
+        elif photo is not None:
+            media_type, mime_type, filename = MediaType.PHOTO, "image/jpeg", None
+            sizes = getattr(photo, "sizes", ())
+            size = max((getattr(item, "size", 0) for item in sizes), default=None)
+        else:
+            media_type, mime_type, filename, size = MediaType.DOCUMENT, None, None, None
+        grouped_id = getattr(raw_message, "grouped_id", None)
+        media = (
+            TelegramMediaReference(
+                media_type,
+                0,
+                size if type(size) is int and size >= 0 else None,
+                mime_type if type(mime_type) is str else None,
+                filename,
+                f"{source_channel_id}:{message_id}:0",
+                str(grouped_id) if grouped_id is not None else None,
+            ),
+        )
     is_service = (
         type(raw_message).__name__ == "MessageService"
         or getattr(raw_message, "action", None) is not None
@@ -92,7 +126,38 @@ def map_telethon_message(
         source_published_at=published_at,
         is_service=is_service,
         has_media=has_media,
+        media=media,
     )
+
+
+def _document_filename(attributes: object) -> str | None:
+    for attribute in attributes if isinstance(attributes, list | tuple) else ():
+        value = getattr(attribute, "file_name", None)
+        if type(value) is str:
+            return value
+    return None
+
+
+def _document_media_type(mime_type: object, attributes: object) -> MediaType:
+    items = attributes if isinstance(attributes, list | tuple) else ()
+    names = {type(item).__name__ for item in items}
+    if "DocumentAttributeSticker" in names:
+        return MediaType.STICKER
+    if "DocumentAttributeVideo" in names:
+        return (
+            MediaType.ANIMATION
+            if "DocumentAttributeAnimated" in names
+            else MediaType.VIDEO
+        )
+    if "DocumentAttributeAudio" in names:
+        return (
+            MediaType.VOICE
+            if any(getattr(item, "voice", False) for item in items)
+            else MediaType.AUDIO
+        )
+    if mime_type == "video/mp4" and "DocumentAttributeAnimated" in names:
+        return MediaType.ANIMATION
+    return MediaType.DOCUMENT
 
 
 __all__ = ("InvalidTelegramMessageError", "map_telethon_message")
