@@ -12,7 +12,6 @@ from telegram_assist_bot.application import (
 )
 from telegram_assist_bot.application.ports import (
     TelegramLoginStep,
-    TelegramSessionInvalidError,
     TelegramSessionStatus,
 )
 
@@ -120,19 +119,20 @@ def test_reuses_authorized_session_without_prompting() -> None:
     assert login_input.calls == []
 
 
-def test_invalid_session_requires_explicit_reauthentication() -> None:
+def test_invalid_session_is_recovered_by_explicit_reauthentication() -> None:
     gateway = FakeGateway(TelegramSessionStatus.INVALID)
+    login_input = FakeInput()
 
-    with pytest.raises(TelegramSessionInvalidError) as captured:
-        run(
-            AuthenticateTelegramSession(gateway).execute(
-                phone_number="synthetic-phone",
-                login_input=FakeInput(),
-            )
+    result = run(
+        AuthenticateTelegramSession(gateway).execute(
+            phone_number="synthetic-phone",
+            login_input=login_input,
         )
+    )
 
-    assert "synthetic-phone" not in str(captured.value)
-    assert gateway.calls == ["inspect"]
+    assert result.outcome is AuthenticationOutcome.SESSION_CREATED
+    assert gateway.calls == ["inspect", "begin", "code", "abort"]
+    assert login_input.calls == ["code"]
 
 
 def test_prompt_failure_always_releases_pending_login() -> None:

@@ -93,7 +93,9 @@ async def run_telegram_login(
         runtime_root=Path("var/sessions"),
         api_id=int(secret_values[0]),
         api_hash=secret_values[1],
-        timeout_seconds=float(loaded.settings.mongodb.connect_timeout_seconds),
+        timeout_seconds=float(
+            loaded.settings.telegram.ingestion.operation_timeout_seconds
+        ),
     )
     with bind_log_context(context):
         logger.emit(level=LogLevel.INFO, event_name="telegram_login_begun")

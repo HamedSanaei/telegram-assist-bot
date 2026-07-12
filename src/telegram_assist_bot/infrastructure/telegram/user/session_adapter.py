@@ -221,6 +221,7 @@ class TelethonSessionAdapter:
     _client: TelethonClientProtocol | None = field(default=None, init=False, repr=False)
     _lock: _SessionFileLock | None = field(default=None, init=False, repr=False)
     _phone_number: str | None = field(default=None, init=False, repr=False)
+    _recover_unauthorized_session: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate bounded settings and the approved private runtime path."""
@@ -292,13 +293,15 @@ class TelethonSessionAdapter:
         try:
             await self._bounded(client.connect())
             authorized = await self._bounded(client.is_user_authorized())
-            return (
-                TelegramSessionStatus.AUTHORIZED
-                if authorized
-                else TelegramSessionStatus.INVALID
-            )
+            if authorized:
+                self._recover_unauthorized_session = False
+                return TelegramSessionStatus.AUTHORIZED
+            self._recover_unauthorized_session = True
+            return TelegramSessionStatus.INVALID
         except (AuthKeyUnregisteredError, UnauthorizedError) as error:
-            raise TelegramSessionInvalidError(cause=error) from error
+            del error
+            self._recover_unauthorized_session = True
+            return TelegramSessionStatus.INVALID
         except Exception as error:
             raise self._map_error(error) from error
         finally:
@@ -411,15 +414,18 @@ class TelethonSessionAdapter:
         if type(phone_number) is not str or not phone_number or phone_number.isspace():
             raise ValueError("phone_number must be a non-blank string")
         await self._acquire_lock()
-        client = self.client_factory(
-            self.session_path,
-            self.api_id,
-            self.api_hash,
-            float(self.timeout_seconds),
-        )
-        self._client = client
-        self._phone_number = phone_number
         try:
+            if self._recover_unauthorized_session:
+                self._discard_unauthorized_session()
+                self._recover_unauthorized_session = False
+            client = self.client_factory(
+                self.session_path,
+                self.api_id,
+                self.api_hash,
+                float(self.timeout_seconds),
+            )
+            self._client = client
+            self._phone_number = phone_number
             await self._bounded(client.connect())
             await self._bounded(client.send_code_request(phone_number))
         except Exception as error:
@@ -513,6 +519,13 @@ class TelethonSessionAdapter:
         self._set_private_permissions(self.session_path.parent, 0o700)
         if self.session_path.exists():
             self._set_private_permissions(self.session_path, 0o600)
+
+    def _discard_unauthorized_session(self) -> None:
+        """Remove only a session proven unauthorized while the mutation lock is held."""
+        for suffix in ("", "-journal", "-shm", "-wal"):
+            path = Path(f"{self.session_path}{suffix}")
+            with suppress(FileNotFoundError):
+                path.unlink()
 
     @staticmethod
     def _set_private_permissions(path: Path, mode: int) -> None:
