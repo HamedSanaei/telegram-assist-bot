@@ -23,6 +23,9 @@ from telegram_assist_bot.application.ports import (
     TelegramSessionStatus,
     TelegramTransientError,
 )
+from telegram_assist_bot.infrastructure.telegram.user import (
+    session_adapter as session_adapter_module,
+)
 from telegram_assist_bot.infrastructure.telegram.user.session_adapter import (
     TelethonSessionAdapter,
     create_telethon_client,
@@ -139,9 +142,20 @@ def test_missing_session_does_not_create_client(tmp_path: Path) -> None:
     assert factory.clients == []
 
 
-def test_concrete_client_factory_is_inert_and_uses_bounded_settings(
-    tmp_path: Path,
+def test_concrete_client_factory_uses_bounded_connection_resilience(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    captured: dict[str, object] = {}
+
+    class CapturingClient:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def disconnect(self) -> None:
+            return None
+
+    monkeypatch.setattr(session_adapter_module, "TelegramClient", CapturingClient)
+
     async def scenario() -> None:
         client = create_telethon_client(
             tmp_path / "factory.session",
@@ -152,6 +166,12 @@ def test_concrete_client_factory_is_inert_and_uses_bounded_settings(
         await client.disconnect()
 
     run(scenario())
+    assert captured["timeout"] == 1.0
+    assert captured["connection_retries"] == 1
+    assert captured["request_retries"] == 1
+    assert captured["retry_delay"] == 1
+    assert captured["auto_reconnect"] is False
+    assert captured["receive_updates"] is False
 
 
 def test_existing_unauthorized_session_reports_invalid_status(tmp_path: Path) -> None:
@@ -160,6 +180,20 @@ def test_existing_unauthorized_session_reports_invalid_status(tmp_path: Path) ->
     result = run(adapter(tmp_path, FakeFactory(SessionState())).inspect_session())
 
     assert result is TelegramSessionStatus.INVALID
+
+
+def test_unauthorized_partial_session_can_request_one_new_code(tmp_path: Path) -> None:
+    session_path = tmp_path / "source.session"
+    session_path.write_text("synthetic-partial", encoding="utf-8")
+    factory = FakeFactory(SessionState())
+    gateway = adapter(tmp_path, factory)
+
+    assert run(gateway.inspect_session()) is TelegramSessionStatus.INVALID
+    run(gateway.begin_login("synthetic-phone"))
+
+    assert factory.clients[-1].calls == ["connect", "send_code"]
+    assert not session_path.exists()
+    run(gateway.abort_login())
 
 
 def test_create_then_reuse_synthetic_session(tmp_path: Path) -> None:
@@ -202,6 +236,23 @@ def test_network_failure_preserves_existing_session_bytes(tmp_path: Path) -> Non
         run(gateway.inspect_session())
 
     assert session_path.read_text(encoding="utf-8") == "existing-synthetic-session"
+
+
+def test_one_transient_connection_failure_can_be_retried_explicitly(
+    tmp_path: Path,
+) -> None:
+    state = SessionState(connect_error=ConnectionError("offline"))
+    factory = FakeFactory(state)
+    gateway = adapter(tmp_path, factory)
+
+    with pytest.raises(TelegramTransientError):
+        run(gateway.begin_login("synthetic-phone"))
+
+    state.connect_error = None
+    run(gateway.begin_login("synthetic-phone"))
+
+    assert factory.clients[-1].calls == ["connect", "send_code"]
+    run(gateway.abort_login())
 
 
 def test_open_authorized_client_holds_lock_until_idempotent_close(
