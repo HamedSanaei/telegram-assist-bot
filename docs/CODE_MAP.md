@@ -205,7 +205,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `workers/live_text_listener.py` | consumer محدود subscription با retry طبقه‌بندی‌شده و shutdown امن |
 | `workers/scheduled_publication_worker.py` | loop polling محدود بدون نگهداری صف در حافظه |
 | `shared/config/models.py` | Schema نسخهٔ ۱ و مدل‌های Pydantic frozen برای همهٔ بخش‌های Config |
-| `shared/config/loader.py` | خواندن UTF-8/JSON، تجمیع validation، resolve امن Secret و API واحد Composition Root |
+| `shared/config/loader.py` | خواندن UTF-8/JSON، تجمیع validation، resolve امن Environment/Local Secret و API واحد Composition Root |
 | `shared/config/errors.py` | Exceptionها و issueهای immutable، pathدار، secret-safe و دارای category ساختاری Configuration |
 | `shared/config/__init__.py` | سطح عمومی مدل‌ها، خطاها و `load_configuration` |
 | `shared/errors.py` | taxonomy پایدار ده‌گانه، classification immutable و برچسب retryable مستقل از Provider |
@@ -273,7 +273,7 @@ MongoDB را فعال می‌کند، ولی همهٔ readهای Application-fac
 configuration.local.json (ignored, UTF-8) + Environment Mapping
     -> load_configuration(...)
     -> strict JSON/schema/semantic/reference validation
-    -> SecretReference resolution
+    -> Environment یا Local Secret resolution
     -> LoadedConfiguration(ApplicationConfig, ResolvedSecrets)
     -> Composition Root T006/T012
 ```
@@ -380,7 +380,7 @@ Configuration، Authorization، Permission، Permanent، Conflict و Already-com
 | `.secrets.baseline` | policy خالی و بازبینی‌شده برای Secret scanner آفلاین |
 | `scripts/check_text_integrity.py` | اسکن read-only فایل‌های changed/all برای UTF-8 و corruption |
 | `scripts/check_distribution.py` | اعتبارسنجی دقیق Wheel، sdist، metadata و حضور ماژول‌های Config/Post Domain/Observability/Retry/Bootstrap |
-| `README.md` | workflow رسمی نصب، Build و Quality Gateها |
+| `README.md` | workflow رسمی نصب، Build، Quality Gateها و استفاده امن از Local Config مستقیم |
 
 Build رسمی CI از `hatchling==1.31.0` موجود در گروه قفل‌شدهٔ توسعه و گزینه
 `--no-build-isolation` استفاده می‌کند. `uv 0.11.28` نسخهٔ ابزار الزامی است.

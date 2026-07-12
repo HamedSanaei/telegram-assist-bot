@@ -62,9 +62,9 @@
 
 - **Status:** Accepted
 - **Context:** Telegram credentials، Session، Bot token، Mongo password و AI key بسیار حساس‌اند.
-- **Decision:** Git فقط Config نمونه بدون مقدار حساس دارد؛ Secretها از Environment/Secret Manager و Session/Media از مسیر Runtime خوانده می‌شوند.
+- **Decision:** Git فقط Config نمونه بدون مقدار حساس دارد. Secretها در Production از Environment/Secret Manager و برای اجرای محلی فقط از فایل ignored با نام `configuration.local.json` یا `configuration.<profile>.local.json` خوانده می‌شوند. Session/Media از مسیر Runtime خوانده می‌شوند.
 - **Reason:** الزام امنیتی صریح.
-- **Consequences:** `.gitignore` و Secret scanning در Bootstrap لازم‌اند؛ Log redaction اجباری است؛ Fixtureها باید مصنوعی باشند؛ Config ناقص Fail-fast می‌شود.
+- **Consequences:** `.gitignore` و Secret scanning در Bootstrap لازم‌اند؛ Config محلی plaintext است و جای ACL یا رمزگذاری سیستم‌عامل را نمی‌گیرد؛ Log redaction اجباری است؛ Fixtureها باید مصنوعی باشند؛ Config ناقص Fail-fast می‌شود.
 
 ## ADR-009 — Configuration Schema نسخه‌دار و Snapshot immutable
 
@@ -74,9 +74,11 @@
   افشای ورودی خام، به‌صورت تجمیعی گزارش کند. ZoneInfo سیستم نیز روی همهٔ
   پلتفرم‌های پشتیبانی‌شده یکسان در دسترس نیست.
 - **Decision:** Schema اولیه عدد صحیح `1` است و مدل‌های آن با Pydantic v2 به‌صورت
-  frozen، strict و `extra="forbid"` ساخته می‌شوند. JSON فقط نام Environment
-  Variable را در `SecretReference` نگه می‌دارد؛ Loader یک Snapshot شامل
-  `ApplicationConfig` و `ResolvedSecrets` redacted می‌سازد. `tzdata` منبع IANA
+  frozen، strict و `extra="forbid"` ساخته می‌شوند. Config نمونه و غیرمحلی فقط نام
+  Environment Variable را در `SecretReference` نگه می‌دارند؛ Local Config می‌تواند
+  literalهای Secret را داشته باشد که Loader پیش از ساخت Model به binding opaque
+  تبدیل می‌کند. Loader یک Snapshot شامل `ApplicationConfig` و `ResolvedSecrets`
+  redacted می‌سازد. `tzdata` منبع IANA
   قابل‌قفل برای محیط‌های فاقد tzdb سیستم است. نسخهٔ ناشناخته Fail-fast است و
   Migration یا Dynamic reload در این مرحله وجود ندارد.
 - **Reason:** این قرارداد type-safe، deterministic و قابل‌آزمون است، typo و

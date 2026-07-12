@@ -122,6 +122,12 @@
 | [T056](tasks/T056-refine-phase-four-scope.md) | تعریف محصولی تحلیل عملکرد | T054 | `8` | Planned |
 | [T057](tasks/T057-refine-phase-five-scope.md) | تعریف محصولی پنل و اتوماسیون | T054 | `9`، `14` | Planned |
 
+## Maintenance
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T058](tasks/T058-local-inline-secret-configuration.md) | Secret مستقیم در Local Config | T002 | `4`، `14` | Completed |
+
 ## بازبینی وابستگی‌ها
 
 - هیچ Task به Task با شماره بزرگ‌تر وابسته نیست.
