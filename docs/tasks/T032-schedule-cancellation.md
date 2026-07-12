@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -94,6 +94,12 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `9` تست واحد و `3` تست MongoDB مستقیم موفق، `0` skip.
+- `preserve`، `recompact`، مقصد مستقل و race لغو/claim چندبار تأیید شدند.
+- Sync فقط پس از commit موفق اجرا می‌شود.
 
 - ثبت Decision default/scope Recompaction در `docs/DECISIONS.md`.
 - ثبت الگوریتم، statusها و رقابت Cancel/Claim در `docs/ARCHITECTURE.md` و مسیرها در `docs/CODE_MAP.md`.

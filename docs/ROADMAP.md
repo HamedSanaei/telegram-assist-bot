@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T027 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T034 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -63,19 +63,19 @@
 | [T025](tasks/T025-multi-admin-synchronization.md) | همگام‌سازی پیام تمام مدیران | T022، T024 | `5.16` | Completed |
 | [T026](tasks/T026-approval-flow-stabilization.md) | Stabilization جریان تأیید | T021–T025 | `5.12–5.16` | Completed |
 
-## Milestone 4 — انتشار فوری و زمان‌بندی پایدار
+## Milestone 4 — انتشار فوری و زمان‌بندی پایدار — Completed
 
 هدف: انتشار User API برای متن/Media و صف مستقل هر مقصد با بازیابی Restart.
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T027](tasks/T027-immediate-text-publication.md) | انتشار فوری متن با User API | T008، T017، T026 | `5.17` | Active |
-| [T028](tasks/T028-immediate-media-album-publication.md) | انتشار Media/Album و Premium Emoji | T015، T027 | `5.5–5.7`، `5.17` | Planned |
-| [T029](tasks/T029-publication-idempotency-retry.md) | Idempotency و Retry انتشار | T004، T005، T027، T028 | `5.17`، `13` | Planned |
-| [T030](tasks/T030-destination-schedule-calculation.md) | محاسبه اتمیک صف هر مقصد | T002، T004، T024 | `5.18` | Planned |
-| [T031](tasks/T031-persistent-schedule-worker.md) | Worker پایدار، Lease و بازیابی | T008، T029، T030 | `5.18` | Planned |
-| [T032](tasks/T032-schedule-cancellation.md) | لغو و سیاست Recompaction | T025، T030، T031 | `5.19` | Planned |
-| [T033](tasks/T033-scheduling-restart-stabilization.md) | Stabilization زمان‌بندی/Restart | T031، T032 | `5.18–5.19`، `16.18–16.21` | Planned |
+| [T027](tasks/T027-immediate-text-publication.md) | انتشار فوری متن با User API | T008، T017، T026 | `5.17` | Completed |
+| [T028](tasks/T028-immediate-media-album-publication.md) | انتشار Media/Album و Premium Emoji | T015، T027 | `5.5–5.7`، `5.17` | Completed |
+| [T029](tasks/T029-publication-idempotency-retry.md) | Idempotency و Retry انتشار | T004، T005، T027، T028 | `5.17`، `13` | Completed |
+| [T030](tasks/T030-destination-schedule-calculation.md) | محاسبه اتمیک صف هر مقصد | T002، T004، T024 | `5.18` | Completed |
+| [T031](tasks/T031-persistent-schedule-worker.md) | Worker پایدار، Lease و بازیابی | T008، T029، T030 | `5.18` | Completed |
+| [T032](tasks/T032-schedule-cancellation.md) | لغو و سیاست Recompaction | T025، T030، T031 | `5.19` | Completed |
+| [T033](tasks/T033-scheduling-restart-stabilization.md) | Stabilization زمان‌بندی/Restart | T031، T032 | `5.18–5.19`، `16.18–16.21` | Completed |
 
 ## Milestone 5 — پلتفرم AI و قابلیت‌های فاز اول
 
@@ -83,7 +83,7 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Planned |
+| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Active |
 | [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Planned |
 | [T036](tasks/T036-first-ai-provider-adapter.md) | Adapter اولین Provider منتخب | T005، T034 | `11.2–11.5` | Planned |
 | [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Planned |

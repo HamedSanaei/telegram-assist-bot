@@ -17,11 +17,15 @@ from telegram_assist_bot.infrastructure.telegram.user.session_adapter import (
 from telegram_assist_bot.infrastructure.telegram.user.text_ingestion_gateway import (
     TelethonTextIngestionGateway,
 )
+from telegram_assist_bot.infrastructure.telegram.user_publisher import (
+    TelethonPublisherGateway,
+)
 
 __all__ = (
     "InvalidTelegramMessageError",
     "TelethonHistoryAdapter",
     "TelethonLiveAdapter",
+    "TelethonPublisherGateway",
     "TelethonSessionAdapter",
     "TelethonTextIngestionGateway",
     "create_telethon_client",

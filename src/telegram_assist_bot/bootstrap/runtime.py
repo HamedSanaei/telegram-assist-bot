@@ -308,6 +308,13 @@ class FoundationApplication:
         return self._repository
 
     @property
+    def mongodb_client(self) -> AsyncMongoClient[MongoDocument]:
+        """Return the owned client only to concrete composition while ready."""
+        if not self.is_ready or self._client is None:
+            raise FoundationLifecycleError
+        return self._client
+
+    @property
     def configuration(self) -> LoadedConfiguration:
         """Return the immutable loaded snapshot only while ready."""
         if not self.is_ready or self._configuration is None:

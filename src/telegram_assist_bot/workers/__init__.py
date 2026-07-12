@@ -5,5 +5,13 @@ from telegram_assist_bot.workers.live_text_listener import (
     LiveListenerResult,
     LiveTextListener,
 )
+from telegram_assist_bot.workers.scheduled_publication_worker import (
+    ScheduledPublicationWorker,
+)
 
-__all__ = ("CrawlOnceWorker", "LiveListenerResult", "LiveTextListener")
+__all__ = (
+    "CrawlOnceWorker",
+    "LiveListenerResult",
+    "LiveTextListener",
+    "ScheduledPublicationWorker",
+)

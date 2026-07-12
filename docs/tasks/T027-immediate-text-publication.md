@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -93,6 +93,12 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `11` تست واحد انتشار متن و `4` تست Adapter متن موفق، `0` skip.
+- full suite نهایی `806 passed` و Branch Coverage برابر `90.12%` است.
+- Ruff، format، mypy، UTF-8، secrets، build و distribution موفق‌اند.
 
 - افزودن Use Case، Port، Adapter و مدل Publication به `docs/CODE_MAP.md`.
 - همگام‌سازی بخش User API/Publication در `docs/ARCHITECTURE.md` با پیاده‌سازی واقعی.
