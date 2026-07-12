@@ -73,3 +73,4 @@ Thumbs.db
 # Synthetic fixtures are reviewed repository inputs, never runtime credentials.
 !/tests/fixtures/
 !/tests/fixtures/**
+config/configuration.local.env

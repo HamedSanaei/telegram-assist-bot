@@ -174,7 +174,6 @@ def test_semantic_and_secret_errors_are_aggregated_together(
         "admins[1].name",
         "admins[0].allowed_destination_names[1]",
         "admins[0].allowed_destination_names[2]",
-        "source_channels[1].telegram_channel_id",
         "source_channels[1].name",
         "source_channels[0].allowed_destination_names[1]",
         "source_channels[0].allowed_destination_names[2]",
@@ -461,7 +460,6 @@ def test_numeric_range_boundaries_are_accepted(
         (("telegram", "bot", "approval_chat_id"), 0),
         (("admins", 0, "telegram_user_id"), 0),
         (("admins", 0, "telegram_user_id"), -1),
-        (("source_channels", 0, "telegram_channel_id"), 0),
         (("destination_channels", 0, "telegram_channel_id"), 0),
     ],
 )
@@ -482,6 +480,39 @@ def test_numeric_values_outside_ranges_are_rejected(
         )
 
     assert _format_test_path(field_path) in _paths(captured.value)
+
+
+def test_source_channel_accepts_legacy_numeric_identifier(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Keep existing source configurations compatible during username migration."""
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source["telegram_channel_id"] = -1000000000101
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.source_channels[0].telegram_channel_id == -1000000000101
+
+
+def test_source_channel_requires_username(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Require an address that startup can resolve without manual IDs."""
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("username")
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload), environ=synthetic_environ
+        )
+
+    assert "source_channels[0].username" in _paths(captured.value)
 
 
 @pytest.mark.parametrize("timezone_name", ["Asia/Tehran", "UTC"])
@@ -534,10 +565,7 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
     if duplicate_case.startswith("source_"):
         items = _as_list(payload["source_channels"])
         duplicate = _as_object(deepcopy(items[0]))
-        if duplicate_case == "source_id":
-            duplicate["name"] = "second-source"
-        else:
-            duplicate["telegram_channel_id"] = -1000000000102
+        duplicate["username"] = "second-source"
         items.append(duplicate)
         return
     if duplicate_case.startswith("destination_"):
@@ -552,9 +580,7 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
     if duplicate_case.startswith("cross_channel_"):
         source = _as_object(_as_list(payload["source_channels"])[0])
         destination = _as_object(_as_list(payload["destination_channels"])[0])
-        field_name = (
-            "telegram_channel_id" if duplicate_case == "cross_channel_id" else "name"
-        )
+        field_name = "name"
         destination[field_name] = source[field_name]
         return
 
@@ -589,11 +615,6 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
     [
         ("admin_id", "admins[1].telegram_user_id", "duplicate_value"),
         ("admin_name", "admins[1].name", "duplicate_value"),
-        (
-            "source_id",
-            "source_channels[1].telegram_channel_id",
-            "duplicate_value",
-        ),
         ("source_name", "source_channels[1].name", "duplicate_value"),
         (
             "destination_id",
@@ -603,11 +624,6 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
         (
             "destination_name",
             "destination_channels[1].name",
-            "duplicate_value",
-        ),
-        (
-            "cross_channel_id",
-            "destination_channels[0].telegram_channel_id",
             "duplicate_value",
         ),
         (

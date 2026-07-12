@@ -121,7 +121,7 @@ class Session:
     ) -> ResolvedTelegramChannel:
         self.calls.append("resolve")
         return ResolvedTelegramChannel(
-            reference.configured_channel_id,
+            reference.configured_channel_id or -1000000000101,
             reference.configured_username,
             reference.config_name,
             True,

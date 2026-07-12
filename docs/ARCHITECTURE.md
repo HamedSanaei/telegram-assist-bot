@@ -96,7 +96,7 @@ command `schedule-worker` نیز Foundation را reuse می‌کند، Session/P
 | مدل | مسئولیت پیاده‌شده |
 |---|---|
 | `PostId` | شناسهٔ داخلی opaque و مستقل از نوع شناسهٔ پایگاه‌داده |
-| `SourceMessageIdentity` | کلید Idempotency برابر `(source_channel_id, source_message_id)` |
+| `SourceMessageIdentity` | کلید Idempotency برابر `(source_channel_id, source_message_id)`؛ شناسه کانال مبدا در startup از username resolve می‌شود |
 | `TelegramEntity` | offset و length بر حسب UTF-16 code unit، نوع Entity و `custom_emoji_id` اختیاری |
 | `OriginalPostContent` | متن، Caption و tupleهای مستقل Entityهای هرکدام، بدون normalization |
 | `Post` | snapshot immutable هویت، اطلاعات منبع، محتوای اصلی، زمان‌ها، وضعیت، version و history |

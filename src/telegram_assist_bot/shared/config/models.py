@@ -250,12 +250,15 @@ class SourceChannelConfig(_FrozenConfigModel):
     """Describe one source channel and its permitted destination routes."""
 
     name: NonBlankString = Field(description="Stable source-channel name.")
-    telegram_channel_id: TelegramEntityId = Field(
-        description="Non-zero Telegram identifier of the source channel."
+    username: NonBlankString = Field(
+        description="Public Telegram username used to resolve this source channel."
     )
-    username: NonBlankString | None = Field(
+    telegram_channel_id: TelegramEntityId | None = Field(
         default=None,
-        description="Optional public Telegram username used during resolution.",
+        description=(
+            "Optional legacy source identifier. When omitted, startup resolves "
+            "the canonical identifier from username."
+        ),
     )
     enabled: StrictBool = Field(
         description="Whether collection from this source channel is enabled."

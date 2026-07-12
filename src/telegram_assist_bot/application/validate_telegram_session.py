@@ -116,7 +116,10 @@ class ValidateTelegramSession:
         reference: TelegramChannelReference,
         resolved: ResolvedTelegramChannel,
     ) -> TelegramChannelValidationIssue | None:
-        if resolved.channel_id != reference.configured_channel_id:
+        if (
+            reference.configured_channel_id is not None
+            and resolved.channel_id != reference.configured_channel_id
+        ):
             return TelegramChannelValidationIssue(
                 reference.configuration_path,
                 "canonical_id_mismatch",

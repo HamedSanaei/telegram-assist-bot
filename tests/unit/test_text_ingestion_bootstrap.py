@@ -195,7 +195,7 @@ class Gateway:
     ) -> ResolvedTelegramChannel:
         self.order.append(f"resolve_{reference.role.value}")
         return ResolvedTelegramChannel(
-            reference.configured_channel_id,
+            reference.configured_channel_id or -1000000000101,
             reference.configured_username,
             reference.config_name,
             True,

@@ -362,11 +362,13 @@ class TelethonSessionAdapter:
             await self._bounded(client.connect())
             if not await self._bounded(client.is_user_authorized()):
                 raise TelegramSessionInvalidError
-            identifier: str | int = (
+            identifier: str | int | None = (
                 reference.configured_username.removeprefix("@")
                 if reference.configured_username is not None
                 else reference.configured_channel_id
             )
+            if identifier is None:
+                raise AssertionError("validated channel reference has no identifier")
             entity = await self._bounded(client.get_entity(identifier))
             channel_id = self.peer_id_resolver(entity)
             if type(channel_id) is not int or channel_id == 0:
