@@ -55,7 +55,7 @@ class FakeValidationGateway:
 
 def reference(
     name: str,
-    channel_id: int,
+    channel_id: int | None,
     role: TelegramChannelRole,
     *,
     username: str | None = None,
@@ -105,6 +105,18 @@ def test_validates_premium_account_and_all_channel_roles() -> None:
 
     assert report.account_id == 42
     assert [item.channel.channel_id for item in report.channels] == [-1001, -1002]
+
+
+def test_username_only_source_accepts_the_resolved_canonical_identifier() -> None:
+    source = reference("source", None, TelegramChannelRole.SOURCE, username="source")
+    gateway = FakeValidationGateway(
+        TelegramAccount(42, True),
+        {"source": channel(-1001, username="source")},
+    )
+
+    report = run(ValidateTelegramSession(gateway).execute((source,)))
+
+    assert report.channels[0].channel.channel_id == -1001
 
 
 def test_rejects_non_premium_account_before_channel_resolution() -> None:

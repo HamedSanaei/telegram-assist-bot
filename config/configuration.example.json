@@ -58,7 +58,6 @@
   "source_channels": [
     {
       "name": "منبع فارسی 📣",
-      "telegram_channel_id": -1000000000101,
       "username": "source_example",
       "enabled": true,
       "default_category_id": "general",

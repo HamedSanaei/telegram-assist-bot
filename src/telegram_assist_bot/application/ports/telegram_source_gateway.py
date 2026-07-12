@@ -140,7 +140,7 @@ class TelegramChannelReference:
     """Describe one configured channel without an SDK entity."""
 
     config_name: str
-    configured_channel_id: int
+    configured_channel_id: int | None
     configured_username: str | None
     role: TelegramChannelRole
     configuration_path: str
@@ -149,7 +149,7 @@ class TelegramChannelReference:
         """Validate identifiers while preserving their exact configured values."""
         if not self.config_name or self.config_name.isspace():
             raise ValueError("config_name must not be blank")
-        if (
+        if self.configured_channel_id is not None and (
             type(self.configured_channel_id) is not int
             or self.configured_channel_id == 0
         ):
@@ -158,6 +158,8 @@ class TelegramChannelReference:
             not self.configured_username or self.configured_username.isspace()
         ):
             raise ValueError("configured_username must be non-blank when present")
+        if self.configured_channel_id is None and self.configured_username is None:
+            raise ValueError("a channel identifier or username is required")
         if type(self.role) is not TelegramChannelRole:
             raise TypeError("role must be TelegramChannelRole")
         if not self.configuration_path or self.configuration_path.isspace():

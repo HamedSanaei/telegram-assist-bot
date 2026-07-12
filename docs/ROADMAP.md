@@ -127,6 +127,7 @@
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
 | [T058](tasks/T058-local-inline-secret-configuration.md) | Secret مستقیم در Local Config | T002 | `4`، `14` | Completed |
+| [T059](tasks/T059-source-channel-username-only.md) | کانال مبدا فقط با Username | T008، T012 | `5.1`، `5.2`، `14` | Completed |
 
 ## بازبینی وابستگی‌ها
 
