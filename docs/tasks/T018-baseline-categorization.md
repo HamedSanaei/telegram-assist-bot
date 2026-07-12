@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -93,6 +93,12 @@ uv run python scripts/check_text_integrity.py --changed
 
 بازبینی manual Persian fixtures، Persian diff، Config نمونه و `git diff --check` الزامی است.
 
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/test_categorize_post.py tests/unit/shared/config/test_category_validation.py --basetemp .pytest-tmp/m2-t018-final-20260712-100830-998 -q`؛ نتیجه `4 passed` و `0 skipped` بود. Integration assignment نیز در اجرای مشترک `m2-focused-final-20260712-100724-136` برابر `1 passed` بود.
+- precedence manual/keyword/default، tie-break، Persian/ZWNJ/Latin case، reference validation و حفاظت manual assignment پاس شدند؛ هیچ AI فراخوانی نشد.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
+
 ## به‌روزرسانی‌های مستندات
 
 - ثبت Status/verification و به‌روزرسانی T018 در `docs/ROADMAP.md` و `docs/STATUS.md`.
@@ -107,4 +113,3 @@ uv run python scripts/check_text_integrity.py --changed
 - Quality Gate و UTF-8 پاس شده‌اند.
 - manual baseline overwrite race کنترل شده است.
 - AI و UI دستی خارج Scope باقی مانده‌اند.
-

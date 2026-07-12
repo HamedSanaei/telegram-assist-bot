@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T013 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T020 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -35,19 +35,19 @@
 | [T011](tasks/T011-concurrent-idempotent-ingestion.md) | هم‌زمانی Crawl/Listener و Idempotency | T009، T010 | `5.3`، `5.21` | Completed |
 | [T012](tasks/T012-ingestion-restart-stabilization.md) | تست Restart و Stabilization دریافت | T011 | `5.1–5.4`، `16.1–16.5` | Completed |
 
-## Milestone 2 — Media و آماده‌سازی محتوا
+## Milestone 2 — Media و آماده‌سازی محتوا — Completed
 
 هدف: Post کامل تا مرحله آماده برای تأیید، با Media، Album، Duplicate و Entity درست.
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T013](tasks/T013-media-download-storage.md) | دانلود و ذخیره انواع Media | T012 | `5.5` | Active |
-| [T014](tasks/T014-media-retention-cleanup.md) | انقضا و Cleanup فایل‌های Media | T004، T013 | `5.4`، `5.5` | Planned |
-| [T015](tasks/T015-media-group-aggregation.md) | تجمیع Album/Media Group | T011، T013 | `5.6` | Planned |
-| [T016](tasks/T016-exact-duplicate-detection.md) | Normalize و Duplicate دقیق | T004، T012 | `5.9` | Planned |
-| [T017](tasks/T017-destination-text-pruning-entities.md) | پاک‌سازی مقصدی و بازسازی Entity | T003 | `5.7`، `5.10` | Planned |
-| [T018](tasks/T018-baseline-categorization.md) | دسته‌بندی پایه و Override | T002، T003 | `5.11` | Planned |
-| [T019](tasks/T019-content-preparation-stabilization.md) | Stabilization آماده‌سازی محتوا | T014–T018 | `5.4–5.11`، `5.21` | Planned |
+| [T013](tasks/T013-media-download-storage.md) | دانلود و ذخیره انواع Media | T012 | `5.5` | Completed |
+| [T014](tasks/T014-media-retention-cleanup.md) | انقضا و Cleanup فایل‌های Media | T004، T013 | `5.4`، `5.5` | Completed |
+| [T015](tasks/T015-media-group-aggregation.md) | تجمیع Album/Media Group | T011، T013 | `5.6` | Completed |
+| [T016](tasks/T016-exact-duplicate-detection.md) | Normalize و Duplicate دقیق | T004، T012 | `5.9` | Completed |
+| [T017](tasks/T017-destination-text-pruning-entities.md) | پاک‌سازی مقصدی و بازسازی Entity | T003 | `5.7`، `5.10` | Completed |
+| [T018](tasks/T018-baseline-categorization.md) | دسته‌بندی پایه و Override | T002، T003 | `5.11` | Completed |
+| [T019](tasks/T019-content-preparation-stabilization.md) | Stabilization آماده‌سازی محتوا | T014–T018 | `5.4–5.11`، `5.21` | Completed |
 
 ## Milestone 3 — تعامل مدیران و تأیید
 
@@ -55,7 +55,7 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T020](tasks/T020-bot-admin-authorization.md) | Bot API و Authorization مدیر | T019 | `5.13`، `14` | Planned |
+| [T020](tasks/T020-bot-admin-authorization.md) | Bot API و Authorization مدیر | T019 | `5.13`، `14` | Active |
 | [T021](tasks/T021-secure-callback-tokens.md) | Callback امن و غیرقابل جعل | T004، T020 | `5.13`، `5.14`، `14` | Planned |
 | [T022](tasks/T022-approval-message-delivery.md) | هدر و محتوای پیام تأیید | T013، T019، T020 | `5.12` | Planned |
 | [T023](tasks/T023-destination-keyboard.md) | Keyboard دو ستونی مقصدها | T002، T021، T022 | `5.14` | Planned |

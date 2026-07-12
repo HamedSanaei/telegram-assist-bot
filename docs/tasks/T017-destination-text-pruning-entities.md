@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -96,6 +96,12 @@ uv run python scripts/check_text_integrity.py --changed
 
 بازبینی دستی diff فارسی، offset چند fixture نماینده، `git diff --check` و تأیید عدم تغییر original الزامی است.
 
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/content --basetemp .pytest-tmp/m2-t017-final-20260712-100830-998 -q`؛ نتیجه `3 passed` و `0 skipped` بود.
+- source replacement، destination protection، Telegram-link pruning، URL غیرتلگرامی، UTF-16/astral/Custom Emoji، unknown entity، long input و immutability پاس شدند.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
+
 ## به‌روزرسانی‌های مستندات
 
 - ثبت Status/verification و به‌روزرسانی T017 در `docs/ROADMAP.md` و `docs/STATUS.md`.
@@ -109,4 +115,3 @@ uv run python scripts/check_text_integrity.py --changed
 - transformation pure، version‌شده و مستقل از SDK است.
 - Quality Gate و UTF-8 پاس شده‌اند.
 - original content دست‌نخورده و AI/publication خارج Scope مانده است.
-

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -99,6 +99,12 @@ uv run python scripts/check_text_integrity.py --changed
 
 مسیر storage و DB باید آزمایشی باشند؛ بازبینی فهرست فایل قبل/بعد، Persian diff و `git diff --check` الزامی است.
 
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/test_cleanup_expired_media.py --basetemp .pytest-tmp/m2-t014-final-20260712-100830-998 -q`؛ نتیجه `2 passed` و `0 skipped` بود. Integration مشترک MongoDB نیز در اجرای `m2-focused-final-20260712-100724-136` برابر `1 passed` بود.
+- مرز انقضا، reference/hash مشترک، missing-file idempotency، race دو worker، stale temp و containment پاس شدند.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
+
 ## به‌روزرسانی‌های مستندات
 
 - ثبت Status/verification و به‌روزرسانی T014 در `docs/ROADMAP.md` و `docs/STATUS.md`.
@@ -113,4 +119,3 @@ uv run python scripts/check_text_integrity.py --changed
 - Worker bounded، idempotent و restart-safe است.
 - Quality Gate و UTF-8 پاس شده‌اند و فایل خارج root حذف نمی‌شود.
 - Scope فقط cleanup Media است.
-
