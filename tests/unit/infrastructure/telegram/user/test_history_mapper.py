@@ -24,6 +24,25 @@ class MessageEntityCustomEmoji:
         self.document_id = document_id
 
 
+class DocumentAttributeSticker: ...
+
+
+class DocumentAttributeVideo: ...
+
+
+class DocumentAttributeAnimated: ...
+
+
+class DocumentAttributeAudio:
+    def __init__(self, *, voice: bool) -> None:
+        self.voice = voice
+
+
+class DocumentAttributeFilename:
+    def __init__(self, file_name: str) -> None:
+        self.file_name = file_name
+
+
 def test_maps_persian_text_zwnj_emoji_and_utf16_entities_exactly() -> None:
     source = "سلام‌دنیا\n😀"
     raw = SimpleNamespace(
@@ -69,6 +88,77 @@ def test_media_text_maps_to_caption_without_normalization() -> None:
     assert mapped.text is None
     assert mapped.caption == "کپشن‌اصلی\n✨"
     assert mapped.has_media is True
+
+
+@pytest.mark.parametrize(
+    ("attributes", "mime_type", "expected"),
+    [
+        ([DocumentAttributeSticker()], "image/webp", "Sticker"),
+        ([DocumentAttributeVideo()], "video/mp4", "Video"),
+        (
+            [DocumentAttributeVideo(), DocumentAttributeAnimated()],
+            "video/mp4",
+            "Animation",
+        ),
+        ([DocumentAttributeAudio(voice=True)], "audio/ogg", "Voice"),
+        ([DocumentAttributeAudio(voice=False)], "audio/mpeg", "Audio"),
+        ([], "application/pdf", "Document"),
+    ],
+)
+def test_maps_document_media_metadata(
+    attributes: list[object], mime_type: str, expected: str
+) -> None:
+    document = SimpleNamespace(
+        mime_type=mime_type,
+        size=42,
+        attributes=[*attributes, DocumentAttributeFilename("فایل 😀.bin")],
+    )
+    raw = SimpleNamespace(
+        id=11,
+        date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
+        message="کپشن",
+        entities=[],
+        media=object(),
+        document=document,
+        photo=None,
+        grouped_id=987,
+        action=None,
+    )
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username=None,
+        source_channel_display_name="Source",
+    )
+    assert mapped.media[0].media_type.value == expected
+    assert mapped.media[0].size_bytes == 42
+    assert mapped.media[0].original_filename == "فایل 😀.bin"
+    assert mapped.media[0].media_group_id == "987"
+
+
+def test_maps_photo_size_and_reference() -> None:
+    raw = SimpleNamespace(
+        id=12,
+        date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
+        message=None,
+        entities=[],
+        media=object(),
+        document=None,
+        photo=SimpleNamespace(
+            sizes=[SimpleNamespace(size=10), SimpleNamespace(size=20)]
+        ),
+        grouped_id=None,
+        action=None,
+    )
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username=None,
+        source_channel_display_name="Source",
+    )
+    assert mapped.media[0].media_type.value == "Photo"
+    assert mapped.media[0].size_bytes == 20
+    assert mapped.media[0].opaque_reference == "-1001:12:0"
 
 
 def test_rejects_naive_source_timestamp() -> None:

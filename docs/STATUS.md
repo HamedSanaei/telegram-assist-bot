@@ -1,9 +1,9 @@
 # وضعیت فعلی
 
-- **Current milestone:** Milestone 2 — Media و آماده‌سازی محتوا
-- **Active task:** [T013 — دانلود و ذخیره انواع Media](tasks/T013-media-download-storage.md)
-- **Last completed task:** [T012 — تست Restart و Stabilization دریافت](tasks/T012-ingestion-restart-stabilization.md)
-- **Known blockers:** هیچ‌کدام؛ Milestone 1 و وابستگی T013 یعنی T012 کامل‌اند.
-- **Failing tests:** هیچ‌کدام؛ `669` تست non-live در دو اجرای ترتیبی بدون skip موفق‌اند و Branch Coverage برابر `90.02%` است.
-- **Last verified commit:** `f0fa779`؛ پیاده‌سازی Milestone 1 در شاخه موجود است و اصلاح‌های نهایی lint/coverage و مستندات این راستی‌آزمایی هنوز Commit نشده‌اند.
-- **Next recommended action:** تغییرات نهایی Milestone 1 را review و Commit کنید؛ سپس فقط T013 فعال را طبق فایل Task آن پیاده‌سازی کنید.
+- **Current milestone:** Milestone 3 — تعامل مدیران و تأیید
+- **Active task:** [T020 — Bot API و Authorization مدیر](tasks/T020-bot-admin-authorization.md)
+- **Last completed task:** [T019 — Stabilization آماده‌سازی محتوا](tasks/T019-content-preparation-stabilization.md)
+- **Known blockers:** هیچ‌کدام؛ Milestone 2 و وابستگی T020 یعنی T019 کامل‌اند.
+- **Failing tests:** هیچ‌کدام؛ `702` تست non-live در دو اجرای ترتیبی بدون skip موفق‌اند و Branch Coverage برابر `90.17%` است.
+- **Last verified commit:** `def011c`؛ تغییرات کامل و راستی‌آزمایی‌شدهٔ Milestone 2 هنوز Commit نشده‌اند.
+- **Next recommended action:** تغییرات Milestone 2 را review و Commit کنید؛ سپس فقط T020 فعال را طبق فایل Task آن پیاده‌سازی کنید.

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -97,6 +97,12 @@ uv run python scripts/check_text_integrity.py --changed
 ```
 
 بازبینی دستی diff/fixture فارسی و policy normalization، اجرای `git diff --check` و عدم skip MongoDB الزامی است.
+
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/test_text_normalization.py tests/unit/application/test_detect_exact_duplicate.py --basetemp .pytest-tmp/m2-t016-final-20260712-100830-998 -q`؛ نتیجه `4 passed` و `0 skipped` بود. Integration MongoDB نیز در اجرای مشترک `m2-focused-final-20260712-100724-136` برابر `1 passed` بود.
+- policy نسخهٔ ۱، serialization قطعی، ترتیب Media hash، مرز ۱۴روز، self exclusion، restart و assignment اتمیک پاس شدند.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
 
 ## به‌روزرسانی‌های مستندات
 

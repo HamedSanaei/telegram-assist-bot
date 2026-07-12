@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -102,6 +102,12 @@ uv run python scripts/check_text_integrity.py --changed
 
 MongoDB و storage باید test-only باشند؛ بازبینی permission/path و Persian diff و `git diff --check` الزامی است.
 
+## نتایج نهایی راستی‌آزمایی
+
+- فرمان واقعی متمرکز: `uv run pytest tests/unit/application/test_download_post_media.py tests/unit/infrastructure/media tests/unit/infrastructure/telegram/user/test_media_adapter.py --basetemp .pytest-tmp/m2-t013-final-20260712-100830-998 -q`؛ نتیجه `9 passed` و `0 skipped` بود. Integration مشترک MongoDB نیز در اجرای `m2-focused-final-20260712-100724-136` برابر `1 passed` بود.
+- streaming، timeout/cancellation، size bound، partial cleanup، traversal/absolute/symlink، atomic commit، concurrent identity و recovery پس از شکست metadata پاس شدند.
+- Suite نهایی دو بار `702 passed` و `0 skipped`؛ Branch Coverage برابر `90.17%` است.
+
 ## به‌روزرسانی‌های مستندات
 
 - ثبت Status/verification و به‌روزرسانی T013 در `docs/ROADMAP.md` و `docs/STATUS.md`.
@@ -116,4 +122,3 @@ MongoDB و storage باید test-only باشند؛ بازبینی permission/pat
 - هیچ binary/partial/Secret داخل Git یا MongoDB ذخیره نشده است.
 - Quality Gate و UTF-8 پاس شده‌اند.
 - Scope به دانلود item مستقل محدود و Album/Cleanup/Publication پیاده نشده‌اند.
-

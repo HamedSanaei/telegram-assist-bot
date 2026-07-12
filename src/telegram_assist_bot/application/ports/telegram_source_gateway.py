@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
 
+    from telegram_assist_bot.domain.media import MediaType
     from telegram_assist_bot.domain.posts import TelegramEntity
 
 
@@ -184,6 +185,19 @@ class ResolvedTelegramChannel:
 
 
 @dataclass(frozen=True, slots=True)
+class TelegramMediaReference:
+    """Describe downloadable media without exposing an SDK object."""
+
+    media_type: MediaType
+    item_index: int
+    size_bytes: int | None
+    mime_type: str | None
+    original_filename: str | None
+    opaque_reference: str
+    media_group_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TelegramTextMessage:
     """Preserve one source message in an SDK-independent ingestion DTO."""
 
@@ -198,6 +212,7 @@ class TelegramTextMessage:
     source_published_at: datetime
     is_service: bool
     has_media: bool
+    media: tuple[TelegramMediaReference, ...] = ()
 
     def __repr__(self) -> str:
         """Hide source payload while retaining safe identity diagnostics."""

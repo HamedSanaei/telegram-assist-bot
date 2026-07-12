@@ -1,6 +1,19 @@
 """Application-owned ports for external system interactions."""
 
 from telegram_assist_bot.application.ports.clock import Clock
+from telegram_assist_bot.application.ports.media import (
+    ContentPreparationRepository,
+    DestinationArtifact,
+    MediaDownloadSpec,
+    MediaGroup,
+    MediaGroupMember,
+    MediaOperationError,
+    MediaPermanentError,
+    MediaSource,
+    MediaStorage,
+    MediaTooLargeError,
+    MediaTransientError,
+)
 from telegram_assist_bot.application.ports.post_repository import (
     InsertPostOutcome,
     InsertPostResult,
@@ -33,6 +46,7 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
     TelegramLiveGateway,
     TelegramLiveSubscription,
     TelegramLoginStep,
+    TelegramMediaReference,
     TelegramOperationTimeoutError,
     TelegramRateLimitError,
     TelegramSessionInvalidError,
@@ -46,9 +60,20 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 
 __all__ = (
     "Clock",
+    "ContentPreparationRepository",
+    "DestinationArtifact",
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
+    "MediaDownloadSpec",
+    "MediaGroup",
+    "MediaGroupMember",
+    "MediaOperationError",
+    "MediaPermanentError",
+    "MediaSource",
+    "MediaStorage",
+    "MediaTooLargeError",
+    "MediaTransientError",
     "PostClaimOutcome",
     "PostClaimRequest",
     "PostClaimResult",
@@ -75,6 +100,7 @@ __all__ = (
     "TelegramLiveGateway",
     "TelegramLiveSubscription",
     "TelegramLoginStep",
+    "TelegramMediaReference",
     "TelegramOperationTimeoutError",
     "TelegramRateLimitError",
     "TelegramSessionInvalidError",
