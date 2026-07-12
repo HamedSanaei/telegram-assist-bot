@@ -122,9 +122,29 @@ Suiteها را موازی روی یک basetemp اجرا نکنید؛ هر invoca
 
 فایل [نمونهٔ امن](config/configuration.example.json) قرارداد Schema نسخهٔ ۱ را
 نشان می‌دهد. این فایل فقط نام Environment Variableها را نگه می‌دارد؛ مقدار
-MongoDB URI، Telegram credential، Bot token و AI key باید در Environment قرار
-گیرد. برای اجرای محلی، یک فایل ignored مانند
-`config/configuration.local.json` بسازید و مقادیر واقعی را Commit نکنید.
+MongoDB URI، Telegram credential، Bot token و AI key نباید هرگز در آن ثبت شود.
+برای اجرای محلی، یک فایل ignored مانند `config/configuration.local.json` بسازید
+و مقادیر واقعی را Commit نکنید. در فایل محلی، هر Secret می‌تواند همچنان مرجع
+Environment باشد یا مستقیماً وارد شود؛ برای نمونه:
+
+```json
+{
+  "mongodb": {"uri": "mongodb://127.0.0.1:27017"},
+  "telegram": {
+    "user": {
+      "api_id": 123456,
+      "api_hash": "your-api-hash",
+      "phone_number": "+989120000000"
+    },
+    "bot": {"token": "your-bot-token"}
+  }
+}
+```
+
+این شکل مستقیم فقط در `configuration.local.json` یا
+`configuration.<profile>.local.json` مجاز است. Config نمونه و Configهای
+غیرمحلی فقط `environment_variable` را می‌پذیرند؛ برای Production همچنان
+Environment Variable یا Secret Manager مسیر ترجیحی است.
 
 API متمرکز Loader که Composition Root مصرف می‌کند چنین است:
 
@@ -173,8 +193,8 @@ Session lock و MongoDB clientهای مالکیت‌دار را در ترتیب 
 مسیر Config به‌ترتیب از `--config PATH`، سپس `TAB_CONFIG_PATH` و در نهایت
 `config/configuration.json` نسبت به working directory انتخاب می‌شود. CLI فقط
 مسیر غیرحساس Config را می‌پذیرد؛ URI، Token، Password، API key و Session هرگز
-argument خط فرمان نیستند. مقادیر Secret همچنان فقط از Environment Variableهای
-ارجاع‌شده داخل Config resolve می‌شوند.
+argument خط فرمان نیستند. مقدارهای مستقیم فقط از فایل Local Configِ ignored
+resolve می‌شوند و در Log، `repr` یا پیام خطا نمایش داده نمی‌شوند.
 
 قرارداد خروج پایدار است: `0` برای Startup/Shutdown موفق، `2` برای خطای
 CLI/Configuration و `3` برای خطای Infrastructure. Eventهای lifecycle به‌صورت

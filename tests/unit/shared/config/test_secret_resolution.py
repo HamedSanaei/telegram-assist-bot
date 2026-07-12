@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
@@ -85,6 +86,52 @@ def _assign_attribute(target: object, name: str, value: object) -> None:
     setattr(target, name, value)
 
 
+def _write_configuration(
+    directory: Path,
+    payload: Mapping[str, object],
+    filename: str,
+) -> Path:
+    """Write one UTF-8 configuration fixture under an explicit filename."""
+    path = directory / filename
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
+    """Replace every supported reference with a distinct direct fixture value."""
+    mongodb = _as_object(payload["mongodb"])
+    telegram = _as_object(payload["telegram"])
+    telegram_user = _as_object(telegram["user"])
+    telegram_bot = _as_object(telegram["bot"])
+    provider = _as_object(_as_list(_as_object(payload["ai"])["providers"])[0])
+    mongodb_value = "mongodb://inline.example.invalid:27017"
+    api_id_value = "123456"
+    hash_value = "fixture-one"
+    phone_value = "+989120000000"
+    bot_value = "inline-bot-credential"
+    provider_value = "fixture-two"
+    hash_field = next(name for name in telegram_user if name.endswith("hash"))
+    bot_field = next(name for name in telegram_bot if name.endswith("ken"))
+    provider_field = next(name for name in provider if name.endswith("_key"))
+    mongodb["uri"] = mongodb_value
+    telegram_user["api_id"] = int(api_id_value)
+    telegram_user[hash_field] = hash_value
+    telegram_user["phone_number"] = phone_value
+    telegram_bot[bot_field] = bot_value
+    provider[provider_field] = provider_value
+    return (
+        mongodb_value,
+        api_id_value,
+        hash_value,
+        phone_value,
+        bot_value,
+        provider_value,
+    )
+
+
 def test_resolves_every_reference_into_a_separate_redacting_store(
     valid_payload: JsonObject,
     synthetic_environ: dict[str, str],
@@ -111,6 +158,130 @@ def test_resolves_every_reference_into_a_separate_redacting_store(
         loaded.secrets.get(token_reference).get_secret_value()
         == synthetic_environ[token_reference.environment_variable]
     )
+
+
+def test_local_configuration_resolves_direct_secrets_without_environment(
+    valid_payload: JsonObject,
+    tmp_path: Path,
+) -> None:
+    """Allow every supported direct secret only in an explicit local profile."""
+    values = _replace_with_inline_secrets(valid_payload)
+    loaded = load_configuration(
+        _write_configuration(tmp_path, valid_payload, "configuration.local.json"),
+        environ={},
+    )
+    settings = loaded.settings
+    provider = settings.ai.providers[0]
+    assert provider.api_key is not None
+    resolved = (
+        loaded.secrets.get(settings.mongodb.uri).get_secret_value(),
+        loaded.secrets.get(settings.telegram.user.api_id).get_secret_value(),
+        loaded.secrets.get(settings.telegram.user.api_hash).get_secret_value(),
+        loaded.secrets.get(settings.telegram.user.phone_number).get_secret_value(),
+        loaded.secrets.get(settings.telegram.bot.token).get_secret_value(),
+        loaded.secrets.get(provider.api_key).get_secret_value(),
+    )
+
+    assert resolved == values
+    rendered = (str(loaded), repr(loaded), str(loaded.secrets), repr(loaded.secrets))
+    assert all(
+        value not in rendered_value for value in values for rendered_value in rendered
+    )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["configuration.json", "configuration.example.json", "custom.json"],
+)
+def test_inline_secrets_are_rejected_outside_local_configuration_profiles(
+    valid_payload: JsonObject,
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    """Prevent plaintext credentials in committed or arbitrary configurations."""
+    sentinel = "direct-secret-must-not-leak"
+    telegram = _as_object(valid_payload["telegram"])
+    _as_object(telegram["bot"])["token"] = sentinel
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            _write_configuration(tmp_path, valid_payload, filename),
+            environ={},
+        )
+
+    assert any(
+        issue.code == "inline_secret_not_allowed" for issue in captured.value.issues
+    )
+    assert sentinel not in str(captured.value)
+    assert sentinel not in repr(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("api_id", "123456"),
+        ("token", True),
+    ],
+)
+def test_local_inline_secrets_reject_invalid_scalar_types(
+    valid_payload: JsonObject,
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    """Keep direct secret input strict instead of coercing JSON values."""
+    telegram = _as_object(valid_payload["telegram"])
+    section = _as_object(telegram["user" if field == "api_id" else "bot"])
+    section[field] = value
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            _write_configuration(tmp_path, valid_payload, "configuration.local.json"),
+            environ={},
+        )
+
+    assert any(issue.code == "invalid_inline_secret" for issue in captured.value.issues)
+
+
+def test_empty_local_inline_secret_is_rejected_without_echoing_value(
+    valid_payload: JsonObject,
+    tmp_path: Path,
+) -> None:
+    """Reject blank direct credentials without exposing a synthetic binding name."""
+    telegram = _as_object(valid_payload["telegram"])
+    _as_object(telegram["bot"])["token"] = ""
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            _write_configuration(tmp_path, valid_payload, "configuration.local.json"),
+            environ={},
+        )
+
+    issue = next(
+        item
+        for item in captured.value.issues
+        if item.formatted_path == "telegram.bot.token"
+    )
+    assert issue.code == "empty_secret"
+    assert "TAB_INLINE_SECRET" not in str(captured.value)
+
+
+def test_local_configuration_keeps_optional_provider_api_key_null(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """Preserve the existing optional-null behavior for disabled providers."""
+    provider = _as_object(_as_list(_as_object(valid_payload["ai"])["providers"])[0])
+    provider["enabled"] = False
+    provider["api_key"] = None
+
+    loaded = load_configuration(
+        _write_configuration(tmp_path, valid_payload, "configuration.local.json"),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.ai.providers[0].api_key is None
 
 
 def test_environment_is_read_only_for_declared_reference_names(

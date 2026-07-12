@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 _SCHEMA_VERSION_FIELD: Final[str] = "configuration_schema_version"
 _MISSING: Final[object] = object()
+_INLINE_SECRET_PREFIX: Final[str] = "TAB_INLINE_SECRET_"  # noqa: S105
 
 
 class _NonStandardJsonError(ValueError):
@@ -630,6 +631,133 @@ def _raw_value_at(
     return current
 
 
+def _set_raw_value_at(
+    document: dict[str, object],
+    path: ConfigurationPath,
+    value: object,
+) -> bool:
+    """Replace one existing decoded JSON value without coercing sibling values."""
+    if not path:
+        return False
+    current: object = document
+    for segment in path[:-1]:
+        if isinstance(segment, str):
+            if not isinstance(current, dict):
+                return False
+            current = current.get(segment, _MISSING)
+        else:
+            if not isinstance(current, list) or segment < 0 or segment >= len(current):
+                return False
+            current = current[segment]
+        if current is _MISSING:
+            return False
+    final_segment = path[-1]
+    if isinstance(final_segment, str) and isinstance(current, dict):
+        if final_segment not in current:
+            return False
+        current[final_segment] = value
+        return True
+    if isinstance(final_segment, int) and isinstance(current, list):
+        if final_segment < 0 or final_segment >= len(current):
+            return False
+        current[final_segment] = value
+        return True
+    return False
+
+
+def _is_local_configuration_path(path: Path) -> bool:
+    """Return whether a filename is an explicitly local configuration profile."""
+    name = path.name
+    return name == "configuration.local.json" or (
+        name.startswith("configuration.") and name.endswith(".local.json")
+    )
+
+
+def _inline_secret_identifier(path: ConfigurationPath) -> str:
+    """Build one deterministic opaque binding identifier from a safe field path."""
+    segments = (
+        str(segment).upper() if isinstance(segment, int) else segment.upper()
+        for segment in path
+    )
+    return _INLINE_SECRET_PREFIX + "_".join(segments)
+
+
+def _inline_secret_paths(
+    document: Mapping[str, object],
+) -> tuple[tuple[ConfigurationPath, bool], ...]:
+    """Enumerate secret fields and whether each one requires an integer literal."""
+    paths: list[tuple[ConfigurationPath, bool]] = [
+        (("mongodb", "uri"), False),
+        (("telegram", "user", "api_id"), True),
+        (("telegram", "user", "api_hash"), False),
+        (("telegram", "user", "phone_number"), False),
+        (("telegram", "bot", "token"), False),
+    ]
+    providers = _raw_value_at(document, ("ai", "providers"))
+    if isinstance(providers, list):
+        paths.extend(
+            (("ai", "providers", index, "api_key"), False)
+            for index, provider in enumerate(providers)
+            if isinstance(provider, dict) and provider.get("api_key") is not None
+        )
+    return tuple(paths)
+
+
+def _normalize_inline_secrets(
+    document: dict[str, object],
+    path: Path,
+) -> tuple[dict[str, str], list[ConfigurationIssue]]:
+    """Replace allowed local literals with opaque references before typed parsing."""
+    inline_values: dict[str, str] = {}
+    issues: list[ConfigurationIssue] = []
+    local_configuration = _is_local_configuration_path(path)
+    for field_path, requires_integer in _inline_secret_paths(document):
+        value = _raw_value_at(document, field_path)
+        if value is _MISSING or value is None or isinstance(value, dict):
+            continue
+        if requires_integer:
+            if type(value) is not int:
+                issues.append(
+                    ConfigurationIssue(
+                        path=field_path,
+                        code="invalid_inline_secret",
+                        message="inline secret must be an integer",
+                    )
+                )
+                continue
+            secret_value = str(value)
+        else:
+            if not isinstance(value, str):
+                issues.append(
+                    ConfigurationIssue(
+                        path=field_path,
+                        code="invalid_inline_secret",
+                        message="inline secret must be a string",
+                    )
+                )
+                continue
+            secret_value = value
+        if not local_configuration:
+            issues.append(
+                ConfigurationIssue(
+                    path=field_path,
+                    code="inline_secret_not_allowed",
+                    message=(
+                        "inline secrets are allowed only in local configuration files"
+                    ),
+                )
+            )
+        identifier = _inline_secret_identifier(field_path)
+        if not _set_raw_value_at(
+            document,
+            field_path,
+            {"environment_variable": identifier},
+        ):
+            raise AssertionError("inline secret path disappeared during normalization")
+        inline_values[identifier] = secret_value
+    return inline_values, issues
+
+
 def _secret_binding_from_document(
     document: Mapping[str, object],
     path: ConfigurationPath,
@@ -711,16 +839,24 @@ def _secret_bindings(
 def _resolve_secrets(
     bindings: Sequence[_SecretBinding],
     environ: Mapping[str, str],
+    inline_values: Mapping[str, str],
 ) -> tuple[ResolvedSecrets, list[ConfigurationIssue]]:
-    """Resolve every secret from one environment snapshot and aggregate failures."""
+    """Resolve inline or environment secrets and aggregate safe failures."""
     issues: list[ConfigurationIssue] = []
     resolved: dict[str, str] = {}
     looked_up: dict[str, str | None] = {}
     for binding in bindings:
         environment_variable = binding.reference.environment_variable
-        if environment_variable not in looked_up:
-            looked_up[environment_variable] = environ.get(environment_variable)
-        value = looked_up[environment_variable]
+        value: str | None
+        inline_value = inline_values.get(environment_variable)
+        if inline_value is not None:
+            value = inline_value
+            source = "inline"
+        else:
+            if environment_variable not in looked_up:
+                looked_up[environment_variable] = environ.get(environment_variable)
+            value = looked_up[environment_variable]
+            source = "environment"
         if value is None:
             issues.append(
                 ConfigurationIssue(
@@ -734,14 +870,16 @@ def _resolve_secrets(
             )
             continue
         if not value or value.isspace():
+            message = (
+                "required inline secret is empty"
+                if source == "inline"
+                else f"required environment variable is empty: {environment_variable}"
+            )
             issues.append(
                 ConfigurationIssue(
                     path=binding.path,
                     code="empty_secret",
-                    message=(
-                        "required environment variable is empty: "
-                        f"{environment_variable}"
-                    ),
+                    message=message,
                 )
             )
             continue
@@ -781,7 +919,7 @@ def load_configuration(
     text = _read_configuration_text(path)
     document = _decode_configuration_document(path, text)
     _validate_schema_version(document)
-    issues: list[ConfigurationIssue] = []
+    inline_values, issues = _normalize_inline_secrets(document, path)
     validation_issues: list[ConfigurationIssue] | None = None
     settings: ApplicationConfig | None = None
     try:
@@ -796,6 +934,7 @@ def load_configuration(
     resolved_secrets, secret_issues = _resolve_secrets(
         secret_bindings,
         os.environ if environ is None else environ,
+        inline_values,
     )
     environ = None
     all_issues = _unique_issues([*issues, *semantic_issues, *secret_issues])
@@ -805,6 +944,7 @@ def load_configuration(
         del settings
         del secret_bindings
         del resolved_secrets
+        del inline_values
         raise ConfigurationValidationError(all_issues)
     if settings is None:
         raise AssertionError("configuration validation produced no result")
