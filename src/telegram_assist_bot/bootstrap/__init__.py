@@ -33,6 +33,12 @@ from telegram_assist_bot.bootstrap.runtime import (
     PostRepositoryFactory,
     create_foundation_application,
 )
+from telegram_assist_bot.bootstrap.scheduling import (
+    ScheduleWorkerApplication,
+    ScheduleWorkerStartupError,
+    create_schedule_worker_application,
+    run_schedule_worker_application,
+)
 
 __all__ = (
     "CONFIG_PATH_ENVIRONMENT_VARIABLE",
@@ -57,9 +63,13 @@ __all__ = (
     "MongoConnectionVerifier",
     "MongoIndexInitializer",
     "PostRepositoryFactory",
+    "ScheduleWorkerApplication",
+    "ScheduleWorkerStartupError",
     "create_admin_approval_components",
     "create_foundation_application",
+    "create_schedule_worker_application",
     "main",
     "resolve_configuration_path",
     "run_foundation_application",
+    "run_schedule_worker_application",
 )

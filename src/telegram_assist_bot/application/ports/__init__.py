@@ -38,6 +38,20 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryUnavailableError,
     PostTransitionRequest,
 )
+from telegram_assist_bot.application.ports.publication import (
+    PublicationClaimOutcome,
+    PublicationClaimResult,
+    PublicationMedia,
+    PublicationPayload,
+    PublicationPayloadLoader,
+    PublicationRepository,
+    PublisherError,
+    TelegramPublisherGateway,
+)
+from telegram_assist_bot.application.ports.scheduling import (
+    ScheduleRepository,
+    ScheduleReservation,
+)
 from telegram_assist_bot.application.ports.telegram_source_gateway import (
     ResolvedTelegramChannel,
     TelegramAccount,
@@ -100,7 +114,16 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "PublicationClaimOutcome",
+    "PublicationClaimResult",
+    "PublicationMedia",
+    "PublicationPayload",
+    "PublicationPayloadLoader",
+    "PublicationRepository",
+    "PublisherError",
     "ResolvedTelegramChannel",
+    "ScheduleRepository",
+    "ScheduleReservation",
     "TelegramAccount",
     "TelegramAuthenticationGateway",
     "TelegramChannelNotFoundError",
@@ -118,6 +141,7 @@ __all__ = (
     "TelegramLoginStep",
     "TelegramMediaReference",
     "TelegramOperationTimeoutError",
+    "TelegramPublisherGateway",
     "TelegramRateLimitError",
     "TelegramSessionInvalidError",
     "TelegramSessionMutationConflictError",

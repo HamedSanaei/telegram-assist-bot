@@ -366,11 +366,16 @@ class ToggleDestinationSelection:
     """Authorize and atomically compare-and-set one destination selection."""
 
     def __init__(
-        self, repository: ApprovalRepository, authorize: AuthorizeAdminAction
+        self,
+        repository: ApprovalRepository,
+        authorize: AuthorizeAdminAction,
+        *,
+        after_commit: Callable[[DestinationSelection], Awaitable[None]] | None = None,
     ) -> None:
         """Store authorization and atomic persistence boundaries."""
         self._repository = repository
         self._authorize = authorize
+        self._after_commit = after_commit
 
     async def execute(
         self,
@@ -406,6 +411,8 @@ class ToggleDestinationSelection:
                 ToggleStatus.CONFLICT,
                 await self._repository.get_selection(post_id, destination_id),
             )
+        if self._after_commit is not None:
+            await self._after_commit(updated)
         return ToggleResult(ToggleStatus.UPDATED, updated)
 
 

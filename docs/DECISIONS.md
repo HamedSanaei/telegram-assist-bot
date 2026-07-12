@@ -295,3 +295,37 @@
   deleted دائمی و خطای موقت حداکثر سه attempt با claim اتمیک دارد.
 - **Consequences:** stale sync نمی‌تواند UI جدید را overwrite کند، شکست یک مدیر
   بقیه را rollback نمی‌کند و Milestone 3 هیچ publication یا scheduling ندارد.
+
+## ADR-021 — Trigger پس از Selection و هویت پایدار Publication/Schedule
+
+- **Status:** Accepted
+- **Decision:** Transition موفق به `immediate` فقط پس از commit Selection،
+  Publication را dispatch می‌کند؛ Transition به `scheduled` نیز پس از commit یک
+  Schedule Job می‌سازد و بازگشت به `none` آن را لغو می‌کند. Confirm جدا وجود
+  ندارد. هویت‌های نسخه‌دار به‌ترتیب `post + destination + immediate + v1` و
+  `post + destination + scheduled + v1` هستند و payload، actor، Token و زمان در
+  هویت وارد نمی‌شوند.
+- **Consequences:** Handler منتشر یا Query MongoDB اجرا نمی‌کند. تاریخچه Publication
+  با تغییر Selection پاک نمی‌شود و Bot API هرگز مقصد را منتشر نمی‌کند.
+
+## ADR-022 — Publication claim، Retry پیش‌ارسال و OutcomeUnknown
+
+- **Status:** Accepted
+- **Decision:** Publication با unique key و claim/lease اتمیک اجرا می‌شود. فقط
+  خطای transient اثبات‌شدهٔ پیش از send retry می‌شود. خطایی که پس از امکان رسیدن
+  request به Telegram رخ دهد `OutcomeUnknown` پایدار و terminal است و خودکار
+  reopen یا resend نمی‌شود. reconciliation خارج Milestone 4 است.
+- **Consequences:** raw payload، Session، credential، مسیر خصوصی و exception SDK
+  ذخیره نمی‌شوند. Success و OutcomeUnknown با lease expiry دوباره claim نمی‌شوند.
+
+## ADR-023 — صف مستقل مقصد، lease Worker و سیاست Cancellation
+
+- **Status:** Accepted
+- **Decision:** فاصله پیش‌فرض `300` ثانیه و Configurable/positive/bounded است.
+  Slot خالی `now + interval` و Slot بعدی `last_due + interval` است و reservation
+  اتمیک per Destination در MongoDB انجام می‌شود. Worker قدیمی‌ترین Job due را با
+  lease claim می‌کند. Cancellation پیش‌فرض `preserve` است؛ `recompact` فقط Jobهای
+  later و eligible همان Destination را atomically جابه‌جا و old/new due را audit
+  می‌کند. Job claimed/running/terminal جابه‌جا یا دزدیده نمی‌شود.
+- **Consequences:** MongoDB منبع حقیقت restart است؛ timer درون‌حافظه‌ای وجود ندارد.
+  UI فقط پس از commit موفق sync می‌شود و conflict/rollback هیچ sync ندارد.

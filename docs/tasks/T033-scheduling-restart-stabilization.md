@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -86,6 +86,13 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- E2E مستقیم `1 passed` و مجموعه restart/cancellation دو بار `4 passed`، `0` skip.
+- full suite پوشش‌دار و تکراری هر دو `806 passed`، `0` skip؛ Coverage `90.12%`.
+- `uv lock --check`، sync، Ruff، format، mypy، text integrity، secrets، build،
+  distribution، import، CLI help و `git diff --check` موفق‌اند.
 
 - ثبت جریان واقعی Schedule/Worker/Cancel در `docs/CODE_MAP.md`.
 - اصلاح `docs/ARCHITECTURE.md` فقط برای اختلاف اثبات‌شده طرح و اجرا.
