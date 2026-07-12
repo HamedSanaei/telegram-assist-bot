@@ -81,7 +81,15 @@
     "ai_scoring_enabled": false
   },
   "publishing": {
-    "scheduled_publication_interval_seconds": 300
+    "scheduled_publication_interval_seconds": 300,
+    "operation_timeout_seconds": 30,
+    "publication_lease_seconds": 60,
+    "publication_max_attempts": 3,
+    "retry_initial_delay_seconds": 1,
+    "retry_maximum_delay_seconds": 30,
+    "worker_poll_seconds": 5,
+    "shutdown_timeout_seconds": 10,
+    "cancellation_policy": "preserve"
   },
   "timezone": "Asia/Tehran",
   "logging": {

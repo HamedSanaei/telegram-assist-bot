@@ -21,6 +21,10 @@ from telegram_assist_bot.bootstrap.runtime import (
     JsonLineEventSink,
     create_foundation_application,
 )
+from telegram_assist_bot.bootstrap.scheduling import (
+    create_schedule_worker_application,
+    run_schedule_worker_application,
+)
 from telegram_assist_bot.bootstrap.telegram_login import run_telegram_login
 from telegram_assist_bot.bootstrap.text_ingestion import (
     create_text_ingestion_application,
@@ -109,11 +113,11 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("check", "login", "ingest-text"),
+        choices=("check", "login", "ingest-text", "schedule-worker"),
         default="check",
         help=(
             "Use 'login' for explicit authentication or 'ingest-text' for the "
-            "Milestone 1 worker."
+            "Milestone 1 worker; use 'schedule-worker' for durable publication."
         ),
     )
     parser.add_argument(
@@ -194,6 +198,15 @@ def main(
         exit_code = asyncio.run(
             run_text_ingestion_application(
                 ingestion_application,
+                configuration_path,
+                environ=environment_snapshot,
+            )
+        )
+    elif arguments.command == "schedule-worker":
+        schedule_application = create_schedule_worker_application(sink=sink)
+        exit_code = asyncio.run(
+            run_schedule_worker_application(
+                schedule_application,
                 configuration_path,
                 environ=environment_snapshot,
             )

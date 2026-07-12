@@ -34,6 +34,14 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_repository import (
     MongoPostRepository,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.publication_payload_loader import (  # noqa: E501
+    MongoPublicationPayloadLoader,
+)
+from telegram_assist_bot.infrastructure.persistence.mongodb.publication_repository import (  # noqa: E501
+    MongoPublicationRepository,
+    MongoScheduleRepository,
+    initialize_publication_indexes,
+)
 
 __all__ = (
     "MINIMUM_MONGODB_WIRE_VERSION",
@@ -48,12 +56,16 @@ __all__ = (
     "MongoIndexInitializationError",
     "MongoPersistenceError",
     "MongoPostRepository",
+    "MongoPublicationPayloadLoader",
+    "MongoPublicationRepository",
+    "MongoScheduleRepository",
     "PostIndexSpec",
     "close_mongodb_client",
     "create_mongodb_client",
     "get_posts_collection",
     "initialize_approval_indexes",
     "initialize_post_indexes",
+    "initialize_publication_indexes",
     "post_from_document",
     "post_to_document",
     "status_transition_to_document",

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -88,6 +88,12 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `11` تست واحد Media/Album و `2` تست Adapter موفق، `0` skip.
+- مسیر خصوصی، ترتیب Album، Caption فارسی و همه Message IDها تأیید شدند.
+- full suite نهایی `806 passed` با Coverage برابر `90.12%` است.
 
 - افزودن mapper/typeهای واقعی Media و جریان Album به `docs/CODE_MAP.md`.
 - همگام‌سازی `docs/ARCHITECTURE.md` با قرارداد Publisher و شکل نتیجه چندپیامی.

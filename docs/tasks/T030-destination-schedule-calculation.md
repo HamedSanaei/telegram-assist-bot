@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -91,6 +91,11 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `10` تست واحد و `1` تست رقابتی MongoDB موفق، `0` skip.
+- رزرو هم‌زمان یک مقصد سه بار تکرار شد؛ slotها یکتا/مرتب و مقصدها مستقل ماندند.
 
 - ثبت الگوریتم رزرو Slot، Indexها و UTC policy در `docs/ARCHITECTURE.md`.
 - افزودن مدل/Use Case/Repository به `docs/CODE_MAP.md`.

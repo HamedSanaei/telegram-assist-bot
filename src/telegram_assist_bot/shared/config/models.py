@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, ClassVar, Final, Literal
+from typing import Annotated, ClassVar, Final, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -299,11 +299,28 @@ class FeatureFlags(_FrozenConfigModel):
 
 
 class PublishingConfig(_FrozenConfigModel):
-    """Hold the base interval for scheduled publication."""
+    """Configure bounded immediate publication and persistent scheduling."""
 
-    scheduled_publication_interval_seconds: Annotated[StrictInt, Field(gt=0)] = Field(
-        description="Positive interval between scheduled posts in seconds."
-    )
+    scheduled_publication_interval_seconds: Annotated[
+        StrictInt, Field(ge=1, le=86_400)
+    ] = Field(description="Positive interval between scheduled posts in seconds.")
+    operation_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 30
+    publication_lease_seconds: Annotated[StrictInt, Field(ge=1, le=900)] = 60
+    publication_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
+    retry_initial_delay_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 1
+    retry_maximum_delay_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 30
+    worker_poll_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 5
+    shutdown_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 10
+    cancellation_policy: Literal["preserve", "recompact"] = "preserve"
+
+    @model_validator(mode="after")
+    def validate_publication_bounds(self) -> Self:
+        """Require leases and delay caps to cover their subordinate operation."""
+        if self.publication_lease_seconds < self.operation_timeout_seconds:
+            raise ValueError("Publication lease must cover the operation timeout.")
+        if self.retry_maximum_delay_seconds < self.retry_initial_delay_seconds:
+            raise ValueError("Publication retry delay cap is invalid.")
+        return self
 
 
 class LoggingConfig(_FrozenConfigModel):

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -92,6 +92,12 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `4` تست policy و `5` تست Integration مستقیم موفق، `0` skip.
+- race claim بیش از سه بار روی MongoDB واقعی اجرا شد؛ هر بار یک winner داشت.
+- lease expiry، terminal success و `OutcomeUnknown` بدون resend تأیید شدند.
 
 - مستندسازی idempotency key، State machine، lease و outcome مبهم در `docs/ARCHITECTURE.md`.
 - افزودن Repository/Use Case و Indexها به `docs/CODE_MAP.md`.

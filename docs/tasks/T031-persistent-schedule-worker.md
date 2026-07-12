@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -92,6 +92,12 @@ git diff --check
 ```
 
 ## به‌روزرسانی مستندات
+
+## نتیجه راستی‌آزمایی
+
+- `12` تست واحد Worker/use case و `3` تست مستقیم lease/concurrency موفق، `0` skip.
+- فرمان عملیاتی: `uv run python -m telegram_assist_bot schedule-worker --config config/configuration.local.json`.
+- crash، replacement worker، shutdown و یک Publisher call مؤثر تأیید شدند.
 
 - ثبت lifecycle Worker، claim query، lease و shutdown در `docs/ARCHITECTURE.md`.
 - افزودن Worker/entry point و Repository methods به `docs/CODE_MAP.md`.
