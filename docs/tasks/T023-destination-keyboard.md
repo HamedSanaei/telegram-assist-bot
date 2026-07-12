@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -103,3 +103,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decisionهای UX ثبت، Keyboard دو ستونی قطعی و محدود به مجوز ساخته، Contract Callback و مرزهای اندازه تست، Quality Gateها موفق و Scope فاقد هرگونه Toggle یا انتشار باشد.
+
+## نتایج نهایی
+
+- Keyboard/serialization: `3 passed`، صفر skip؛ ordering، filter، label، opaque token و overflow پاس شدند.
+- Full Suite دو بار `718 passed` و Branch Coverage `90.20%` بود.

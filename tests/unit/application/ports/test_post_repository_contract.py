@@ -253,11 +253,18 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "AdminMessagingGateway",
+        "ApprovalContent",
+        "ApprovalRepository",
+        "BotEditOutcome",
+        "BotUpdate",
         "Clock",
         "ContentPreparationRepository",
         "DestinationArtifact",
         "InsertPostOutcome",
         "InsertPostResult",
+        "InlineButton",
+        "InlineKeyboard",
         "InvalidPostRepositoryRequestError",
         "MediaDownloadSpec",
         "MediaGroup",

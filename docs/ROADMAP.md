@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T020 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T027 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -49,19 +49,19 @@
 | [T018](tasks/T018-baseline-categorization.md) | دسته‌بندی پایه و Override | T002، T003 | `5.11` | Completed |
 | [T019](tasks/T019-content-preparation-stabilization.md) | Stabilization آماده‌سازی محتوا | T014–T018 | `5.4–5.11`، `5.21` | Completed |
 
-## Milestone 3 — تعامل مدیران و تأیید
+## Milestone 3 — تعامل مدیران و تأیید — Completed
 
 هدف: Post پیشنهادی فقط برای مدیر مجاز نمایش یابد و وضعیت انتخاب همه مدیران یکسان بماند.
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T020](tasks/T020-bot-admin-authorization.md) | Bot API و Authorization مدیر | T019 | `5.13`، `14` | Active |
-| [T021](tasks/T021-secure-callback-tokens.md) | Callback امن و غیرقابل جعل | T004، T020 | `5.13`، `5.14`، `14` | Planned |
-| [T022](tasks/T022-approval-message-delivery.md) | هدر و محتوای پیام تأیید | T013، T019، T020 | `5.12` | Planned |
-| [T023](tasks/T023-destination-keyboard.md) | Keyboard دو ستونی مقصدها | T002، T021، T022 | `5.14` | Planned |
-| [T024](tasks/T024-atomic-destination-toggle.md) | Toggle اتمیک حالت مقصد | T003، T004، T023 | `5.15` | Planned |
-| [T025](tasks/T025-multi-admin-synchronization.md) | همگام‌سازی پیام تمام مدیران | T022، T024 | `5.16` | Planned |
-| [T026](tasks/T026-approval-flow-stabilization.md) | Stabilization جریان تأیید | T021–T025 | `5.12–5.16` | Planned |
+| [T020](tasks/T020-bot-admin-authorization.md) | Bot API و Authorization مدیر | T019 | `5.13`، `14` | Completed |
+| [T021](tasks/T021-secure-callback-tokens.md) | Callback امن و غیرقابل جعل | T004، T020 | `5.13`، `5.14`، `14` | Completed |
+| [T022](tasks/T022-approval-message-delivery.md) | هدر و محتوای پیام تأیید | T013، T019، T020 | `5.12` | Completed |
+| [T023](tasks/T023-destination-keyboard.md) | Keyboard دو ستونی مقصدها | T002، T021، T022 | `5.14` | Completed |
+| [T024](tasks/T024-atomic-destination-toggle.md) | Toggle اتمیک حالت مقصد | T003، T004، T023 | `5.15` | Completed |
+| [T025](tasks/T025-multi-admin-synchronization.md) | همگام‌سازی پیام تمام مدیران | T022، T024 | `5.16` | Completed |
+| [T026](tasks/T026-approval-flow-stabilization.md) | Stabilization جریان تأیید | T021–T025 | `5.12–5.16` | Completed |
 
 ## Milestone 4 — انتشار فوری و زمان‌بندی پایدار
 
@@ -69,7 +69,7 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T027](tasks/T027-immediate-text-publication.md) | انتشار فوری متن با User API | T008، T017، T026 | `5.17` | Planned |
+| [T027](tasks/T027-immediate-text-publication.md) | انتشار فوری متن با User API | T008، T017، T026 | `5.17` | Active |
 | [T028](tasks/T028-immediate-media-album-publication.md) | انتشار Media/Album و Premium Emoji | T015، T027 | `5.5–5.7`، `5.17` | Planned |
 | [T029](tasks/T029-publication-idempotency-retry.md) | Idempotency و Retry انتشار | T004، T005، T027، T028 | `5.17`، `13` | Planned |
 | [T030](tasks/T030-destination-schedule-calculation.md) | محاسبه اتمیک صف هر مقصد | T002، T004، T024 | `5.18` | Planned |
