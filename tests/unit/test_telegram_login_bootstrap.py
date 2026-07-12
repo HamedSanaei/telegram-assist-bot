@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,6 +11,7 @@ import telegram_assist_bot.bootstrap.telegram_login as login_module
 from telegram_assist_bot.application.ports import (
     TelegramLoginStep,
     TelegramSessionStatus,
+    TelegramTransientError,
 )
 from telegram_assist_bot.bootstrap.runtime import FoundationExitCode
 from telegram_assist_bot.bootstrap.telegram_login import (
@@ -42,6 +43,7 @@ class Sink:
 class Gateway:
     status: TelegramSessionStatus
     step: TelegramLoginStep = TelegramLoginStep.AUTHORIZED
+    begin_error: TelegramTransientError | None = None
     calls: list[str] = field(default_factory=list)
     close_calls: int = 0
 
@@ -52,6 +54,8 @@ class Gateway:
     async def begin_login(self, phone_number: str) -> None:
         del phone_number
         self.calls.append("begin")
+        if self.begin_error is not None:
+            raise self.begin_error
 
     async def submit_login_code(self, code: str) -> TelegramLoginStep:
         del code
@@ -119,6 +123,49 @@ def test_explicit_login_command_reuses_session_without_prompt(
     assert sink.events[-1]["event_name"] == "telegram_login_succeeded"
 
 
+def test_login_uses_telegram_operation_timeout_not_mongodb_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = loaded_configuration()
+    telegram = loaded.settings.telegram.model_copy(
+        update={
+            "ingestion": loaded.settings.telegram.ingestion.model_copy(
+                update={"operation_timeout_seconds": 17}
+            )
+        }
+    )
+    settings = loaded.settings.model_copy(
+        update={
+            "mongodb": loaded.settings.mongodb.model_copy(
+                update={"connect_timeout_seconds": 5}
+            ),
+            "telegram": telegram,
+        }
+    )
+    captured: dict[str, object] = {}
+    gateway = Gateway(TelegramSessionStatus.AUTHORIZED)
+
+    def factory(**kwargs: object) -> Gateway:
+        captured.update(kwargs)
+        return gateway
+
+    monkeypatch.setattr(
+        login_module,
+        "load_configuration",
+        lambda *_args, **_kwargs: replace(loaded, settings=settings),
+    )
+    monkeypatch.setattr(
+        login_module,
+        "TelethonSessionAdapter",
+        factory,
+    )
+
+    result = run(run_telegram_login(Path("synthetic.json"), environ={}, sink=Sink()))
+
+    assert result is FoundationExitCode.SUCCESS
+    assert captured["timeout_seconds"] == 17.0
+
+
 def test_explicit_login_command_runs_code_and_two_factor_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +188,7 @@ def test_explicit_login_command_runs_code_and_two_factor_flow(
     assert gateway.calls == ["inspect", "begin", "code", "password", "abort"]
 
 
-def test_login_failure_is_safe_and_returns_infrastructure_exit(
+def test_unauthorized_partial_session_is_recovered_by_explicit_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = Gateway(TelegramSessionStatus.INVALID)
@@ -157,10 +204,32 @@ def test_login_failure_is_safe_and_returns_infrastructure_exit(
         )
     )
 
+    assert result is FoundationExitCode.SUCCESS
+    assert gateway.close_calls == 1
+    assert gateway.calls == ["inspect", "begin", "code", "abort"]
+    assert sink.events[-1]["event_name"] == "telegram_login_succeeded"
+
+
+def test_transient_login_failure_is_redacted_and_returns_infrastructure_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        TelegramSessionStatus.MISSING,
+        begin_error=TelegramTransientError(cause=RuntimeError("synthetic-secret")),
+    )
+    patch_composition(monkeypatch, gateway)
+    sink = Sink()
+
+    result = run(
+        run_telegram_login(
+            Path("synthetic.json"), environ={}, sink=sink, login_input=Input()
+        )
+    )
+
     assert result is FoundationExitCode.INFRASTRUCTURE_ERROR
     assert gateway.close_calls == 1
     assert sink.events[-1]["event_name"] == "telegram_login_failed"
-    assert "synthetic" not in repr(sink.events)
+    assert "synthetic-secret" not in repr(sink.events)
 
 
 def test_configuration_failure_creates_no_gateway(

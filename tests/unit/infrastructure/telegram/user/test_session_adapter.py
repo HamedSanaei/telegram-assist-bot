@@ -162,6 +162,44 @@ def test_existing_unauthorized_session_reports_invalid_status(tmp_path: Path) ->
     assert result is TelegramSessionStatus.INVALID
 
 
+def test_unauthorized_partial_session_is_discarded_before_explicit_login(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "source.session"
+    session_path.write_text("synthetic-partial-session", encoding="utf-8")
+    factory = FakeFactory(SessionState())
+    gateway = adapter(tmp_path, factory)
+
+    assert run(gateway.inspect_session()) is TelegramSessionStatus.INVALID
+    run(gateway.begin_login("synthetic-phone"))
+
+    assert not session_path.exists()
+    assert factory.clients[-1].calls == ["connect", "send_code"]
+    run(gateway.abort_login())
+
+
+def test_transient_first_login_failure_can_be_retried_with_partial_session(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "source.session"
+    state = SessionState(send_error=ConnectionError("offline"))
+    first_gateway = adapter(tmp_path, FakeFactory(state))
+
+    with pytest.raises(TelegramTransientError):
+        run(first_gateway.begin_login("synthetic-phone"))
+
+    session_path.write_text("synthetic-partial-session", encoding="utf-8")
+    state.send_error = None
+    retry_factory = FakeFactory(state)
+    retry_gateway = adapter(tmp_path, retry_factory)
+
+    assert run(retry_gateway.inspect_session()) is TelegramSessionStatus.INVALID
+    run(retry_gateway.begin_login("synthetic-phone"))
+
+    assert retry_factory.clients[-1].calls == ["connect", "send_code"]
+    run(retry_gateway.abort_login())
+
+
 def test_create_then_reuse_synthetic_session(tmp_path: Path) -> None:
     state = SessionState()
     factory = FakeFactory(state)
