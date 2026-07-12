@@ -1,5 +1,9 @@
 """Public composition-root, lifecycle, and foundation CLI API."""
 
+from telegram_assist_bot.bootstrap.admin_approval import (
+    AdminApprovalComponents,
+    create_admin_approval_components,
+)
 from telegram_assist_bot.bootstrap.cli import (
     CONFIG_PATH_ENVIRONMENT_VARIABLE,
     DEFAULT_CONFIGURATION_PATH,
@@ -33,6 +37,7 @@ from telegram_assist_bot.bootstrap.runtime import (
 __all__ = (
     "CONFIG_PATH_ENVIRONMENT_VARIABLE",
     "DEFAULT_CONFIGURATION_PATH",
+    "AdminApprovalComponents",
     "BinaryEventStream",
     "CliUsageError",
     "ConfigurationLoader",
@@ -52,6 +57,7 @@ __all__ = (
     "MongoConnectionVerifier",
     "MongoIndexInitializer",
     "PostRepositoryFactory",
+    "create_admin_approval_components",
     "create_foundation_application",
     "main",
     "resolve_configuration_path",

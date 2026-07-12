@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -107,3 +107,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که تصمیم‌های پیش‌نیاز ثبت، Authorization و مرز Bot در محدوده فوق پیاده‌سازی، تست‌های واحد و یکپارچه‌سازی و همه Quality Gateها موفق، Secretها و متن UTF-8 بازبینی، و مستندات حافظه پروژه همگام شده باشند.
+
+## نتایج نهایی
+
+- Authorization/Bot boundary: `4 passed`، صفر skip؛ private chat، default-deny، actor trusted، timeout و close idempotent پاس شدند.
+- Full Suite دو بار `718 passed`؛ Branch Coverage `90.20%`.

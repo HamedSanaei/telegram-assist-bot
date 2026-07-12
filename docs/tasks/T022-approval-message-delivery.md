@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -106,3 +106,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decision UX ثبت، پیام تأیید مطابق نیازمندی تحویل و Reference آن پایدار ذخیره شود، جدایی metadata با تست اثبات گردد، آزمون‌های فارسی/Entity و تمام Quality Gateها موفق باشند و هیچ رفتار Keyboard/انتشار وارد Scope نشده باشد.
+
+## نتایج نهایی
+
+- Header/content/reference و recovery تحویل جزئی پاس شد؛ فارسی، ZWNJ، Emoji و جدایی metadata حفظ شد.
+- Full Suite دو بار `718 passed` و صفر skip بود.

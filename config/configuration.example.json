@@ -42,8 +42,16 @@
       "name": "مدیر‌نمونه\nشیفت شب 😀",
       "telegram_user_id": 100000001,
       "active": true,
+      "role": "admin",
+      "permissions": [
+        "approval.view",
+        "approval.toggle"
+      ],
       "allowed_destination_names": [
         "destination-fa"
+      ],
+      "allowed_destination_ids": [
+        -1000000000201
       ]
     }
   ],
