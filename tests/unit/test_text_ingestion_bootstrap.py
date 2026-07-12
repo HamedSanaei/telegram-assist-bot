@@ -22,6 +22,10 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryQuery,
     TelegramTextMessage,
 )
+from telegram_assist_bot.application.validate_telegram_session import (
+    TelegramChannelValidationError,
+    TelegramChannelValidationIssue,
+)
 from telegram_assist_bot.bootstrap.runtime import FoundationConfigurationError
 from telegram_assist_bot.bootstrap.text_ingestion import (
     SystemClock,
@@ -39,8 +43,10 @@ from telegram_assist_bot.shared.config import (
     ResolvedSecrets,
 )
 from telegram_assist_bot.shared.observability import (
+    CorrelationContext,
     Redactor,
     StructuredLogger,
+    bind_log_context,
 )
 
 if TYPE_CHECKING:
@@ -332,7 +338,10 @@ def test_partial_startup_failure_cleans_reverse_owned_resources() -> None:
         gateway = Gateway((), [], order, fail_history=True)
         app = application(gateway, foundation)
 
-        with pytest.raises(TextIngestionStartupError):
+        with (
+            bind_log_context(CorrelationContext(correlation_id="diagnostic-test")),
+            pytest.raises(TextIngestionStartupError),
+        ):
             await app.start(Path("synthetic.json"), environ={})
 
         assert app.is_ready is False
@@ -345,6 +354,58 @@ def test_partial_startup_failure_cleans_reverse_owned_resources() -> None:
             "telegram_close",
             "foundation_shutdown",
         ]
+
+    run(scenario())
+
+
+def test_validation_failure_emits_only_safe_channel_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reject(*_args: object, **_kwargs: object) -> object:
+        raise TelegramChannelValidationError(
+            (
+                TelegramChannelValidationIssue(
+                    "source_channels.0",
+                    "source_read_denied",
+                    "permission",
+                ),
+            )
+        )
+
+    monkeypatch.setattr(ingestion_module, "validate_telegram_startup", reject)
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        app = application(Gateway((), [], order), foundation)
+        emitted: list[dict[str, object]] = []
+
+        class CapturingLogger:
+            def emit(self, **kwargs: object) -> None:
+                emitted.append(dict(kwargs))
+
+        foundation.logger_value = cast("StructuredLogger", CapturingLogger())
+
+        with (
+            bind_log_context(CorrelationContext(correlation_id="diagnostic-test")),
+            pytest.raises(TextIngestionStartupError),
+        ):
+            await app.start(Path("synthetic.json"), environ={})
+
+        del sink
+        matching = [
+            item
+            for item in emitted
+            if item["event_name"] == "telegram_validation_failed"
+        ]
+        assert matching
+        event = matching[0]
+        fields = event["fields"]
+        assert fields == {
+            "configuration_path": "source_channels.0",
+            "issue_code": "source_read_denied",
+            "error_category": "permission",
+            "channel_role": "source",
+        }
 
     run(scenario())
 

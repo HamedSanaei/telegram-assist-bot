@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from telethon.errors import UserNotParticipantError  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import (
     TelegramChannelReference,
@@ -31,6 +32,7 @@ class ValidationClient:
     permissions: object
     authorized: bool = True
     connect_error: Exception | None = None
+    permission_error: Exception | None = None
     calls: list[object] = field(default_factory=list)
 
     async def connect(self) -> None:
@@ -68,6 +70,8 @@ class ValidationClient:
     async def get_permissions(self, entity: object, user: str) -> object:
         del entity
         self.calls.append(("get_permissions", user))
+        if self.permission_error is not None:
+            raise self.permission_error
         return self.permissions
 
 
@@ -132,6 +136,60 @@ def test_resolves_username_to_canonical_id_and_publication_permission(
     assert all(
         "history" not in str(call) and "send" not in str(call) for call in client.calls
     )
+
+
+def test_public_source_skips_membership_permission_lookup(tmp_path: Path) -> None:
+    entity = SimpleNamespace(
+        canonical_id=-100201,
+        username="public_source",
+        title="Public source",
+    )
+    client = ValidationClient(
+        account=SimpleNamespace(id=42, premium=True),
+        entity=entity,
+        permissions=object(),
+        permission_error=UserNotParticipantError(None),
+    )
+    reference = TelegramChannelReference(
+        config_name="source",
+        configured_channel_id=-100201,
+        configured_username="public_source",
+        role=TelegramChannelRole.SOURCE,
+        configuration_path="source_channels.0",
+    )
+
+    resolved = run(create_adapter(tmp_path, client).resolve_channel(reference))
+
+    assert resolved.can_read is True
+    assert resolved.can_publish is False
+    assert not any(
+        call[0] == "get_permissions" for call in client.calls if isinstance(call, tuple)
+    )
+
+
+def test_destination_non_membership_becomes_publish_denied(tmp_path: Path) -> None:
+    entity = SimpleNamespace(
+        canonical_id=-100202,
+        username="destination",
+        title="Destination",
+    )
+    client = ValidationClient(
+        account=SimpleNamespace(id=42, premium=True),
+        entity=entity,
+        permissions=object(),
+        permission_error=UserNotParticipantError(None),
+    )
+    reference = TelegramChannelReference(
+        config_name="destination",
+        configured_channel_id=-100202,
+        configured_username="destination",
+        role=TelegramChannelRole.DESTINATION,
+        configuration_path="destination_channels.0",
+    )
+
+    resolved = run(create_adapter(tmp_path, client).resolve_channel(reference))
+
+    assert resolved.can_publish is False
 
 
 def test_unauthorized_session_fails_before_resolve(tmp_path: Path) -> None:
