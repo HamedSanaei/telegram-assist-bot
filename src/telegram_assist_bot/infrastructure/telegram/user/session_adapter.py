@@ -25,6 +25,7 @@ from telethon.errors import (  # type: ignore[import-untyped]
     UnauthorizedError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
+    UserNotParticipantError,
 )
 
 from telegram_assist_bot.application.ports import (
@@ -33,6 +34,7 @@ from telegram_assist_bot.application.ports import (
     TelegramChannelNotFoundError,
     TelegramChannelPermissionError,
     TelegramChannelReference,
+    TelegramChannelRole,
     TelegramGatewayError,
     TelegramInvalidCodeError,
     TelegramInvalidPasswordError,
@@ -383,11 +385,20 @@ class TelethonSessionAdapter:
             if type(title) is not str or not title or title.isspace():
                 title = reference.config_name
             can_read = type(entity).__name__ != "ChannelForbidden"
-            permissions = await self._bounded(client.get_permissions(entity, "me"))
-            can_publish = bool(
-                getattr(permissions, "is_creator", False)
-                or getattr(permissions, "post_messages", False)
-            )
+            if reference.role is TelegramChannelRole.SOURCE:
+                can_publish = False
+            else:
+                try:
+                    permissions = await self._bounded(
+                        client.get_permissions(entity, "me")
+                    )
+                except UserNotParticipantError:
+                    can_publish = False
+                else:
+                    can_publish = bool(
+                        getattr(permissions, "is_creator", False)
+                        or getattr(permissions, "post_messages", False)
+                    )
             return ResolvedTelegramChannel(
                 channel_id=channel_id,
                 username=username,

@@ -25,6 +25,9 @@ from telegram_assist_bot.application.ports import (
     TelegramLiveSubscription,
     TelegramValidationGateway,
 )
+from telegram_assist_bot.application.validate_telegram_session import (
+    TelegramChannelValidationError,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
     FoundationStartupError,
@@ -208,7 +211,26 @@ class TextIngestionApplication:
                 raise TextIngestionStartupError
             gateway = self._dependencies.gateway_factory(loaded)
             self._gateway = gateway
-            report = await validate_telegram_startup(loaded.settings, gateway)
+            try:
+                report = await validate_telegram_startup(loaded.settings, gateway)
+            except TelegramChannelValidationError as error:
+                for issue in error.issues:
+                    role = (
+                        "source"
+                        if issue.configuration_path.startswith("source_channels.")
+                        else "destination"
+                    )
+                    logger.emit(
+                        level=LogLevel.ERROR,
+                        event_name="telegram_validation_failed",
+                        fields={
+                            "configuration_path": issue.configuration_path,
+                            "issue_code": issue.code,
+                            "error_category": issue.error_category,
+                            "channel_role": role,
+                        },
+                    )
+                raise
             logger.emit(
                 level=LogLevel.INFO,
                 event_name="telegram_validation_succeeded",
