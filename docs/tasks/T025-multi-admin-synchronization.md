@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -99,3 +99,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که همگام‌سازی version-aware و best-effort با Retry پایدار پیاده‌سازی، شکست جزئی و ترتیب معکوس با تست یکپارچه اثبات، همه Quality Gateها موفق و Decision توپولوژی رعایت شده باشد.
+
+## نتایج نهایی
+
+- Sync/fan-out/retry: `4 passed`، صفر skip؛ failure مستقل، stale protection، deleted inactive و claim تک‌برنده پاس شدند.
+- Attempt سقف ۳ و فقط category امن persisted می‌شود؛ Full Suite `718 passed`.

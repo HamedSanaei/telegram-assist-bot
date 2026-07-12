@@ -7,7 +7,26 @@ Config، Logging، MongoDB و vertical slice دریافت متن Telegram User A
 می‌کند. ورود صریح، اعتبارسنجی Session/Premium/کانال، crawl روز جاری و listener
 زنده پیاده شده‌اند. ذخیره و پاک‌سازی خصوصی Media، Album پایدار، duplicate دقیق،
 محتوای مستقل مقصد، دسته‌بندی پایه و pipeline بازیابی‌پذیر آماده‌سازی نیز پیاده
-شده‌اند؛ Bot API، پردازش هوش مصنوعی و انتشار هنوز ساخته نشده‌اند.
+شده‌اند؛ پردازش هوش مصنوعی و انتشار هنوز ساخته نشده‌اند.
+تعامل مدیریتی private با Bot API، callback opaque، پیام تأیید مستقل، Keyboard
+مقصد، Toggle اتمیک و همگام‌سازی چندمدیره نیز در Milestone 3 آماده شده‌اند؛
+انتشار فوری/زمان‌بندی‌شده همچنان پیاده نشده است.
+
+## تعامل مدیران و تأیید
+
+Bot SDK برابر `aiogram==3.29.1` است. فقط private chat مدیران عددی Config‌شده با
+role `admin` و permissionهای `approval.view`/`approval.toggle` پذیرفته می‌شود.
+Bot token فقط از Environment reference خوانده می‌شود و command خط فرمان حاوی
+Secret وجود ندارد. Milestone 3 polling/webhook یا command عملیاتی عمومی تازه‌ای
+اضافه نمی‌کند؛ ساخت resourceها فقط از Composition Root صریح انجام می‌شود.
+
+Callbackها opaque، reusable تا terminal شدن، دارای عمر ۱۴روز و کمتر از ۶۴ بایت‌اند.
+هر مقصد یک ردیف با `🕒 زمان‌بندی`/`⚡ فوری` دارد و حالت منتخب با `✅` نمایش داده
+می‌شود. بیش از ۲۰ مقصد مجاز fail-fast است. این دکمه‌ها فقط حالت آینده را انتخاب
+می‌کنند و هیچ انتشار، Schedule Job یا Telegram User API call انجام نمی‌دهند.
+
+هر مدیر یک header و content مستقل می‌گیرد. Sync حداکثر سه attempt برای شکست موقت
+دارد، پیام حذف‌شده را inactive می‌کند و stale version را روی UI جدید نمی‌نویسد.
 
 ## پیش‌نیاز توسعه
 

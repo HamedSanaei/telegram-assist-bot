@@ -262,3 +262,36 @@
 - **Consequences:** تغییر هر normalization، serialization، entity clipping، pruning
   یا precedence نیازمند version تازه و migration/recompute صریح است. semantic/fuzzy
   duplicate، AI categorization و publication در این تصمیم و milestone وجود ندارند.
+
+## ADR-018 — aiogram و توپولوژی خصوصی مدیریت
+
+- **Status:** Accepted
+- **Decision:** Bot API با `aiogram==3.29.1` پیاده می‌شود و type/exceptionهای آن
+  فقط در Infrastructure/Presentation می‌مانند. فقط private chat و مدیر عددی
+  Config‌شده با role یکتای `admin` و permissionهای `approval.view` و
+  `approval.toggle` پشتیبانی می‌شود. Authorization همیشه default-deny است.
+- **Consequences:** هر مدیر یک کپی مستقل Approval می‌گیرد؛ group/channel/topic و
+  inline mode رد می‌شوند. تغییر SDK یا topology نیازمند ADR و migration است.
+
+## ADR-019 — Callback opaque و پیام Approval مستقل
+
+- **Status:** Accepted
+- **Decision:** Callback با `c1_` و ۱۲۸ بیت CSPRNG بدون padding ساخته، claim فقط
+  server-side ذخیره و پس از ۱۴ روز صریحاً منقضی می‌شود. Token برای actor/action/
+  post/destination bind، تا terminal شدن reusable و سپس revoke می‌شود. برای هر
+  مدیر یک header canonical قابل‌ویرایش و content مستقل ارسال می‌شود؛ metadata
+  مدیریتی هرگز وارد artifact انتشار نمی‌شود.
+- **Consequences:** MongoDB unique/TTL index منبع حقیقت است؛ HMAC/JWT و claim در
+  callback ممنوع‌اند. شکست delivery فقط پس از دریافت شناسه‌های واقعی reference
+  موفق می‌سازد و recovery باید idempotent باشد.
+
+## ADR-020 — Keyboard، Toggle و Sync چندمدیره
+
+- **Status:** Accepted
+- **Decision:** هر مقصد مجاز دقیقاً یک ردیف scheduled/immediate با Token opaque
+  دارد؛ حداکثر ۲۰ مقصد و بدون truncation/pagination. Toggle مستقل مقصد فقط میان
+  `none`، `immediate` و `scheduled` با CAS نسخه‌دار است و انتشار/Job نمی‌سازد.
+  Sync از آخرین state، best-effort و version-aware است؛ message-not-modified موفق،
+  deleted دائمی و خطای موقت حداکثر سه attempt با claim اتمیک دارد.
+- **Consequences:** stale sync نمی‌تواند UI جدید را overwrite کند، شکست یک مدیر
+  بقیه را rollback نمی‌کند و Milestone 3 هیچ publication یا scheduling ندارد.

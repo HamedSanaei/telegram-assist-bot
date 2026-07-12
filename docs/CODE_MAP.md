@@ -318,6 +318,24 @@ category و artifact موجود را دوباره مصرف می‌کند و read
 AIهای آینده صدا زده نمی‌شوند و state آن‌ها در این milestone صریحاً
 `NotRequested` است.
 
+## جریان تأیید Milestone 3
+
+```text
+aiogram Update -> private actor mapping -> AuthorizeAdminAction
+    -> opaque callback lookup/revalidation -> destination CAS
+    -> latest persisted state -> header/keyboard render
+    -> best-effort edit of every active ApprovalReference
+```
+
+`domain/admin_approval.py` مدل‌های Admin، Callback، ApprovalReference و selection
+نسخه‌دار را نگه می‌دارد. `application/approvals/` use caseهای authorization،
+token، delivery، keyboard، toggle و sync را دارد. `application/ports/admin.py`
+مرز Bot/MongoDB است. Adapterهای concrete در
+`infrastructure/telegram/bot/adapter.py` و
+`infrastructure/persistence/mongodb/approval_repository.py` قرار دارند؛
+`presentation/bot/handlers.py` فقط mapping و dispatch مجوزمحور انجام می‌دهد و
+`bootstrap/admin_approval.py` Composition Root صریح و بدون side effect import است.
+
 ## جریان Observability و Retry
 
 ```text

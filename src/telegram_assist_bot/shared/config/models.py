@@ -193,6 +193,7 @@ class TelegramBotConfig(_FrozenConfigModel):
     approval_chat_id: TelegramEntityId = Field(
         description="Telegram chat or channel receiving approval messages."
     )
+    operation_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=120)] = 10
 
 
 class TelegramIngestionConfig(_FrozenConfigModel):
@@ -234,9 +235,15 @@ class AdminConfig(_FrozenConfigModel):
     active: StrictBool = Field(
         description="Whether this administrator is currently authorized."
     )
+    role: Literal["admin"] = "admin"
+    permissions: tuple[Literal["approval.view", "approval.toggle"], ...] = (
+        "approval.view",
+        "approval.toggle",
+    )
     allowed_destination_names: Annotated[
         tuple[NonBlankString, ...], Field(min_length=1)
     ] = Field(description="Destination names this administrator may operate on.")
+    allowed_destination_ids: tuple[TelegramEntityId, ...] = ()
 
 
 class SourceChannelConfig(_FrozenConfigModel):
@@ -468,6 +475,27 @@ class ApplicationConfig(_FrozenConfigModel):
             raise ValueError(
                 "source default_category_id references an unknown category"
             )
+        destination_ids = {
+            item.telegram_channel_id for item in self.destination_channels
+        }
+        destination_by_name = {
+            item.name: item.telegram_channel_id for item in self.destination_channels
+        }
+        for admin in self.admins:
+            if len(admin.permissions) != len(set(admin.permissions)):
+                raise ValueError("administrator permissions must be unique")
+            configured = set(admin.allowed_destination_ids)
+            if configured and not configured <= destination_ids:
+                raise ValueError("administrator references an unknown destination id")
+            effective = configured or {
+                destination_by_name[name]
+                for name in admin.allowed_destination_names
+                if name in destination_by_name
+            }
+            if len(effective) > 20:
+                raise ValueError(
+                    "an administrator may access at most 20 active destinations"
+                )
         return self
 
 

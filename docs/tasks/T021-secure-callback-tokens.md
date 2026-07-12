@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -104,3 +104,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که تصمیم امنیتی ثبت شده، Callback امن با ذخیره‌سازی و Index واقعی پیاده‌سازی و تحت آزمون جعل/انقضا/هم‌زمانی قرار گرفته، تمام فرمان‌های راستی‌آزمایی موفق و هیچ Secret یا Callback واقعی در Fixture/Log وجود نداشته باشد.
+
+## نتایج نهایی
+
+- Callback security: `7 passed`، صفر skip؛ forgery، expiry، revoke، actor mismatch، revalidation و reuse پاس شدند.
+- unique/TTL index و concurrency روی MongoDB واقعی پاس شدند؛ Full Suite `718 passed`.

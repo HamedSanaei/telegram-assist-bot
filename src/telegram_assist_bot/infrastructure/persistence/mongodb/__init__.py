@@ -1,5 +1,9 @@
 """Public construction and adapter API for MongoDB post persistence."""
 
+from telegram_assist_bot.infrastructure.persistence.mongodb.approval_repository import (
+    MongoApprovalRepository,
+    initialize_approval_indexes,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
     MINIMUM_MONGODB_WIRE_VERSION,
     POSTS_COLLECTION_NAME,
@@ -39,6 +43,7 @@ __all__ = (
     "POST_INDEX_SPECS",
     "POST_SOURCE_IDENTITY_INDEX_NAME",
     "InvalidPostDocumentError",
+    "MongoApprovalRepository",
     "MongoConnectionError",
     "MongoIndexInitializationError",
     "MongoPersistenceError",
@@ -47,6 +52,7 @@ __all__ = (
     "close_mongodb_client",
     "create_mongodb_client",
     "get_posts_collection",
+    "initialize_approval_indexes",
     "initialize_post_indexes",
     "post_from_document",
     "post_to_document",

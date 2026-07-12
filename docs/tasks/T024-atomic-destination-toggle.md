@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -100,3 +100,8 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decision پیش‌نیاز موجود، State machine و Atomic CAS پیاده‌سازی و با تست رقابتی MongoDB اثبات، همه Quality Gateها موفق، Migration سازگار مستند و هیچ رفتار انتشار/زمان‌بندی وارد Scope نشده باشد.
+
+## نتایج نهایی
+
+- Transition/CAS: `4 passed`، صفر skip؛ جدول کامل، legacy default، conflict reload و یک برنده اثبات شد.
+- هیچ publication، Schedule Job یا User API call ایجاد نشد؛ Full Suite `718 passed`.

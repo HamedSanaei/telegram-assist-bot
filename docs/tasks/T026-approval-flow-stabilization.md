@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -97,3 +97,9 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که همه Decisionهای Milestone ثبت، سناریوهای موفق/امنیتی/رقابتی/Restart با تست قطعی پاس، Regressionهای کشف‌شده در همان Scope رفع، همه Quality Gateها موفق و هیچ Feature انتشار وارد نشده باشد.
+
+## نتایج نهایی
+
+- Harness MongoDB/Bot مصنوعی دو بار، هر بار `3 passed` و صفر skip؛ concurrency و restart/retry پایدار ماند.
+- Full coverage: `718 passed`، صفر skip، `90.20%`؛ Full repeat نیز `718 passed` بود.
+- Ruff، format، mypy، UTF-8، secrets، build و distribution موفق‌اند.

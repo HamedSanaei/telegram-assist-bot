@@ -1,5 +1,14 @@
 """Application-owned ports for external system interactions."""
 
+from telegram_assist_bot.application.ports.admin import (
+    AdminMessagingGateway,
+    ApprovalContent,
+    ApprovalRepository,
+    BotEditOutcome,
+    BotUpdate,
+    InlineButton,
+    InlineKeyboard,
+)
 from telegram_assist_bot.application.ports.clock import Clock
 from telegram_assist_bot.application.ports.media import (
     ContentPreparationRepository,
@@ -59,9 +68,16 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 )
 
 __all__ = (
+    "AdminMessagingGateway",
+    "ApprovalContent",
+    "ApprovalRepository",
+    "BotEditOutcome",
+    "BotUpdate",
     "Clock",
     "ContentPreparationRepository",
     "DestinationArtifact",
+    "InlineButton",
+    "InlineKeyboard",
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
