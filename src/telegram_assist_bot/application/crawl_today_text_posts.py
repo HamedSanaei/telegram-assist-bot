@@ -158,7 +158,7 @@ class CrawlTodayTextPosts:
             return "skipped_service"
         has_text = message.text is not None and message.text != ""
         has_caption = message.caption is not None and message.caption != ""
-        if not has_text and not has_caption:
+        if not has_text and not has_caption and not message.media:
             return "skipped_media_only" if message.has_media else "skipped_empty"
         return None
 

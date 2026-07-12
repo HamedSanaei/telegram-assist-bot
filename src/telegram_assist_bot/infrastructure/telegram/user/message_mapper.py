@@ -97,19 +97,20 @@ def map_telethon_message(
             sizes = getattr(photo, "sizes", ())
             size = max((getattr(item, "size", 0) for item in sizes), default=None)
         else:
-            media_type, mime_type, filename, size = MediaType.DOCUMENT, None, None, None
-        grouped_id = getattr(raw_message, "grouped_id", None)
-        media = (
-            TelegramMediaReference(
-                media_type,
-                0,
-                size if type(size) is int and size >= 0 else None,
-                mime_type if type(mime_type) is str else None,
-                filename,
-                f"{source_channel_id}:{message_id}:0",
-                str(grouped_id) if grouped_id is not None else None,
-            ),
-        )
+            media_type = None
+        if media_type is not None:
+            grouped_id = getattr(raw_message, "grouped_id", None)
+            media = (
+                TelegramMediaReference(
+                    media_type,
+                    0,
+                    size if type(size) is int and size >= 0 else None,
+                    mime_type if type(mime_type) is str else None,
+                    filename,
+                    f"{source_channel_id}:{message_id}:0",
+                    str(grouped_id) if grouped_id is not None else None,
+                ),
+            )
     is_service = (
         type(raw_message).__name__ == "MessageService"
         or getattr(raw_message, "action", None) is not None

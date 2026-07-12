@@ -331,3 +331,9 @@
   می‌کند. Job claimed/running/terminal جابه‌جا یا دزدیده نمی‌شود.
 - **Consequences:** MongoDB منبع حقیقت restart است؛ timer درون‌حافظه‌ای وجود ندارد.
   UI فقط پس از commit موفق sync می‌شود و conflict/rollback هیچ sync ندارد.
+
+## ADR-024 — یک Session برای دریافت متن/Media و orchestration پایدار آماده‌سازی
+
+- **Status:** Accepted
+- **Decision:** فرمان `ingest` و alias `ingest-text` یک Composition Root مشترک دارند. همان client قفل‌شدهٔ Telethon برای validation، History، Listener و stream Media استفاده می‌شود. Crawl و Listener فقط `RuntimeMessageIngestor` را صدا می‌زنند؛ این مسیر قراردادهای موجود دانلود، Album و preparation را روی state پایدار MongoDB ادامه می‌دهد. finalizer آلبوم یک task محدود است و deadline پایدار collection منبع حقیقت باقی می‌ماند. cleanup به‌صورت command یک‌مرحله‌ای `media-cleanup` اجرا می‌شود.
+- **Consequences:** session رقیب، write path موازی و task نامحدود ایجاد نمی‌شود. restart فایل و metadata سالم را reuse می‌کند، اما اجرای زنده همچنان به session معتبر، Premium account، دسترسی کانال و storage پایدار نیاز دارد.

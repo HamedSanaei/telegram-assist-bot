@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, Protocol, Self, cast
 from uuid import uuid4
 
 from telegram_assist_bot.application import (
@@ -15,15 +15,31 @@ from telegram_assist_bot.application import (
     CrawlTodayTextPosts,
     HandleLiveMessage,
     IngestPostIdempotently,
+    TelegramValidationReport,
+    TextMessageIngestor,
 )
+from telegram_assist_bot.application.assemble_media_group import AssembleMediaGroup
+from telegram_assist_bot.application.categorize_post import KeywordCategoryRule
+from telegram_assist_bot.application.download_post_media import DownloadPostMedia
 from telegram_assist_bot.application.ports import (
     Clock,
+    MediaSource,
     PostRepository,
     ResolvedTelegramChannel,
     TelegramHistoryGateway,
     TelegramLiveGateway,
     TelegramLiveSubscription,
     TelegramValidationGateway,
+)
+from telegram_assist_bot.application.prepare_post_pipeline import (
+    DestinationSpec,
+    PreparePostPipeline,
+    validate_unimplemented_ai_flags,
+)
+from telegram_assist_bot.application.runtime_ingestion import (
+    RuntimeMessageIngestor,
+    RuntimePreparationPolicy,
+    RuntimeSourcePolicy,
 )
 from telegram_assist_bot.application.validate_telegram_session import (
     TelegramChannelValidationError,
@@ -34,7 +50,13 @@ from telegram_assist_bot.bootstrap.runtime import (
     create_foundation_application,
 )
 from telegram_assist_bot.bootstrap.telegram_validation import validate_telegram_startup
+from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.domain.posts import PostId, SourceMessageIdentity
+from telegram_assist_bot.infrastructure.media import LocalMediaStorage
+from telegram_assist_bot.infrastructure.persistence.mongodb.content_repository import (
+    MongoContentPreparationRepository,
+    initialize_content_preparation_indexes,
+)
 from telegram_assist_bot.infrastructure.telegram.user import (
     TelethonSessionAdapter,
     TelethonTextIngestionGateway,
@@ -44,8 +66,13 @@ from telegram_assist_bot.shared.retry import RetryPolicy
 from telegram_assist_bot.workers import LiveTextListener
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
+    from pymongo import AsyncMongoClient
+
+    from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
+        MongoDocument,
+    )
     from telegram_assist_bot.shared.observability import EventSink, StructuredLogger
     from telegram_assist_bot.shared.retry import AsyncSleeper, JitterSource
 
@@ -129,6 +156,23 @@ class TextIngestionGateway(
         ...
 
 
+class FullFoundationLifecycle(FoundationLifecycle, Protocol):
+    """Expose the owned MongoDB client only to concrete runtime composition."""
+
+    @property
+    def mongodb_client(self) -> AsyncMongoClient[MongoDocument]:
+        """Return the already-owned client while foundation is ready."""
+        ...
+
+
+class FullTextIngestionGateway(TextIngestionGateway, Protocol):
+    """Expose media streaming over the same already-open Telegram client."""
+
+    def media_source(self) -> MediaSource:
+        """Return a streamer over the already-open owned Telegram client."""
+        ...
+
+
 class SystemClock(Clock):
     """Return current UTC time for concrete composition."""
 
@@ -139,6 +183,17 @@ class SystemClock(Clock):
 
 type GatewayFactory = Callable[[LoadedConfiguration], TextIngestionGateway]
 type PostIdFactory = Callable[[SourceMessageIdentity], PostId]
+type RuntimeIngestorFactory = Callable[
+    [
+        LoadedConfiguration,
+        TelegramValidationReport,
+        TextIngestionGateway,
+        TextMessageIngestor,
+        FoundationLifecycle,
+        Clock,
+    ],
+    Awaitable[RuntimeMessageIngestor],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +206,9 @@ class TextIngestionDependencies:
     post_id_factory: PostIdFactory = field(repr=False)
     sleeper: AsyncSleeper = field(repr=False)
     jitter_source: JitterSource = field(repr=False)
+    runtime_ingestor_factory: RuntimeIngestorFactory | None = field(
+        default=None, repr=False
+    )
 
 
 class TextIngestionApplication:
@@ -162,6 +220,7 @@ class TextIngestionApplication:
         "_foundation_owned",
         "_gateway",
         "_listener_tasks",
+        "_runtime_ingestor",
         "_shutdown_task",
         "_state",
         "_subscriptions",
@@ -173,6 +232,7 @@ class TextIngestionApplication:
         self._state = _State.NEW
         self._foundation_owned = False
         self._gateway: TextIngestionGateway | None = None
+        self._runtime_ingestor: RuntimeMessageIngestor | None = None
         self._subscriptions: list[TelegramLiveSubscription] = []
         self._listener_tasks: list[asyncio.Task[object]] = []
         self._crawl_results: dict[int, CrawlTodayResult] = {}
@@ -268,13 +328,26 @@ class TextIngestionApplication:
                 ),
                 max_delay_seconds=ingestion_config.reconnect_max_delay_seconds,
             )
-            for source in sources:
-                ingestor = IngestPostIdempotently(
-                    self._dependencies.foundation.repository,
-                    self._dependencies.clock,
-                    self._dependencies.post_id_factory,
-                    logger,
+            base_ingestor = IngestPostIdempotently(
+                self._dependencies.foundation.repository,
+                self._dependencies.clock,
+                self._dependencies.post_id_factory,
+                logger,
+            )
+            ingestor: TextMessageIngestor = base_ingestor
+            if self._dependencies.runtime_ingestor_factory is not None:
+                self._runtime_ingestor = await (
+                    self._dependencies.runtime_ingestor_factory(
+                        loaded,
+                        report,
+                        gateway,
+                        base_ingestor,
+                        self._dependencies.foundation,
+                        self._dependencies.clock,
+                    )
                 )
+                ingestor = self._runtime_ingestor
+            for source in sources:
                 crawler = CrawlTodayTextPosts(
                     gateway=gateway,
                     ingestor=ingestor,
@@ -292,6 +365,8 @@ class TextIngestionApplication:
                     correlation_id=correlation_id,
                 )
                 self._crawl_results[source.channel_id] = result
+                if self._runtime_ingestor is not None:
+                    await self._runtime_ingestor.finalize_due_groups()
                 logger.emit(
                     level=LogLevel.INFO,
                     event_name="telegram_history_crawl_completed",
@@ -323,10 +398,20 @@ class TextIngestionApplication:
                 )
                 self._listener_tasks.append(cast_task(task))
                 self._subscriptions.remove(prepared[source.channel_id])
+            if self._runtime_ingestor is not None:
+                album_task = asyncio.create_task(
+                    self._run_album_finalizer(), name="telegram-album-finalizer"
+                )
+                self._listener_tasks.append(cast_task(album_task))
             self._state = _State.READY
             logger.emit(
                 level=LogLevel.INFO,
                 event_name="text_ingestion_ready",
+                fields={"source_count": len(sources)},
+            )
+            logger.emit(
+                level=LogLevel.INFO,
+                event_name="full_ingestion_ready",
                 fields={"source_count": len(sources)},
             )
             return self
@@ -375,6 +460,28 @@ class TextIngestionApplication:
             self._foundation_owned = False
         self._state = _State.STOPPED
 
+    async def _run_album_finalizer(self) -> None:
+        """Poll persisted Album deadlines with one bounded background task."""
+        if self._runtime_ingestor is None:
+            return
+        try:
+            while True:
+                await self._runtime_ingestor.finalize_due_groups()
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            safe_error = TextIngestionStartupError(cause=error)
+            self._dependencies.foundation.logger.emit(
+                level=LogLevel.ERROR,
+                event_name="content_preparation_failed",
+                fields={
+                    "error_category": getattr(error, "error_category", "permanent")
+                },
+                error=safe_error,
+            )
+            raise safe_error from error
+
 
 def cast_task(task: asyncio.Task[object]) -> asyncio.Task[object]:
     """Keep task storage explicit for strict type checking."""
@@ -399,6 +506,105 @@ def _create_gateway(loaded: LoadedConfiguration) -> TextIngestionGateway:
     )
 
 
+async def _create_runtime_ingestor(
+    loaded: LoadedConfiguration,
+    report: TelegramValidationReport,
+    gateway: TextIngestionGateway,
+    base_ingestor: TextMessageIngestor,
+    foundation: FoundationLifecycle,
+    clock: Clock,
+) -> RuntimeMessageIngestor:
+    """Wire existing Milestone 2 components over owned runtime resources."""
+    settings = loaded.settings
+    validate_unimplemented_ai_flags(
+        advertisement_enabled=settings.features.advertisement_detection_enabled,
+        semantic_duplicate_enabled=False,
+        ai_categorization_enabled=settings.features.ai_scoring_enabled,
+    )
+    owned_foundation = cast("FullFoundationLifecycle", foundation)
+    media_gateway = cast("FullTextIngestionGateway", gateway)
+    database = owned_foundation.mongodb_client[settings.mongodb.database_name]
+    media = database["media_items"]
+    groups = database["media_groups"]
+    preparations = database["content_preparations"]
+    await initialize_content_preparation_indexes(media, groups, preparations)
+    repository = MongoContentPreparationRepository(media, groups, preparations)
+    storage = LocalMediaStorage(settings.media.root)
+    downloader = DownloadPostMedia(
+        media_gateway.media_source(),
+        storage,
+        repository,
+        maximum_bytes=settings.media.maximum_bytes,
+        timeout_seconds=float(settings.media.download_timeout_seconds),
+        maximum_attempts=settings.media.download_max_attempts,
+        maximum_rate_limit_delay_seconds=float(
+            settings.telegram.ingestion.maximum_flood_wait_seconds
+        ),
+    )
+    assembler = AssembleMediaGroup(
+        repository,
+        quiet_window=timedelta(seconds=settings.media.album_quiet_seconds),
+        maximum_wait=timedelta(seconds=settings.media.album_maximum_wait_seconds),
+    )
+    validated_by_name = {item.config_name: item for item in report.channels}
+    destinations_by_name = {
+        item.name: item for item in settings.destination_channels if item.enabled
+    }
+    source_policies: list[RuntimeSourcePolicy] = []
+    for source in settings.source_channels:
+        if not source.enabled:
+            continue
+        validated = validated_by_name[source.name]
+        if source.default_category_id is None:
+            raise ValueError("An enabled source requires a default category.")
+        destination_specs: list[DestinationSpec] = []
+        for name in source.allowed_destination_names:
+            destination = destinations_by_name[name]
+            resolved = validated_by_name[name].channel
+            username = resolved.username or destination.username
+            if username is None:
+                raise ValueError("A destination username is required for preparation.")
+            destination_specs.append(DestinationSpec(name, username.removeprefix("@")))
+        source_username = validated.channel.username or source.username
+        source_policies.append(
+            RuntimeSourcePolicy(
+                validated.channel.channel_id,
+                source_username.removeprefix("@"),
+                source.default_category_id,
+                tuple(destination_specs),
+            )
+        )
+    policy = RuntimePreparationPolicy(
+        categories=tuple(
+            Category(item.category_id, item.display_name)
+            for item in settings.categorization.categories
+        ),
+        category_rules=tuple(
+            KeywordCategoryRule(
+                item.rule_id, item.category_id, item.keyword, item.priority
+            )
+            for item in settings.categorization.keyword_rules
+        ),
+        sources=tuple(source_policies),
+    )
+    correlation_id = foundation.correlation_id
+    if correlation_id is None:
+        raise ValueError("Runtime correlation context is unavailable.")
+    return RuntimeMessageIngestor(
+        post_ingestor=base_ingestor,
+        post_repository=foundation.repository,
+        content_repository=repository,
+        storage=storage,
+        downloader=downloader,
+        assembler=assembler,
+        pipeline=PreparePostPipeline(repository),
+        policy=policy,
+        clock=clock,
+        logger=foundation.logger,
+        correlation_id=correlation_id,
+    )
+
+
 def create_text_ingestion_application(
     *,
     sink: EventSink,
@@ -412,6 +618,7 @@ def create_text_ingestion_application(
         post_id_factory=_new_post_id,
         sleeper=asyncio.sleep,
         jitter_source=lambda: 0.5,
+        runtime_ingestor_factory=_create_runtime_ingestor,
     )
     return TextIngestionApplication(dependencies)
 
@@ -433,6 +640,9 @@ async def run_text_ingestion_application(
         await application.shutdown()
         if isinstance(error.__cause__, FoundationStartupError):
             return error.__cause__.exit_code
+        return FoundationExitCode.INFRASTRUCTURE_ERROR
+    except Exception:  # noqa: BLE001 - safe long-running CLI boundary.
+        await application.shutdown()
         return FoundationExitCode.INFRASTRUCTURE_ERROR
     await application.shutdown()
     return FoundationExitCode.SUCCESS

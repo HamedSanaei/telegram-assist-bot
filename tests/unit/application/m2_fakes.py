@@ -97,6 +97,20 @@ class FakePreparationRepository:
         self.groups[group_key] = replace(group, finalized_at=at)
         return True
 
+    async def list_due_groups(
+        self, *, now: datetime, limit: int
+    ) -> tuple[MediaGroup, ...]:
+        return tuple(
+            sorted(
+                (
+                    group
+                    for group in self.groups.values()
+                    if group.finalized_at is None and group.finalize_after <= now
+                ),
+                key=lambda group: (group.finalize_after, group.group_key),
+            )[:limit]
+        )
+
     async def find_duplicate(
         self, *, content_hash: str, post_id: PostId, since: datetime
     ) -> PostId | None:

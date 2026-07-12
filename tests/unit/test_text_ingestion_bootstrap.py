@@ -26,7 +26,10 @@ from telegram_assist_bot.application.validate_telegram_session import (
     TelegramChannelValidationError,
     TelegramChannelValidationIssue,
 )
-from telegram_assist_bot.bootstrap.runtime import FoundationConfigurationError
+from telegram_assist_bot.bootstrap.runtime import (
+    FoundationConfigurationError,
+    FoundationExitCode,
+)
 from telegram_assist_bot.bootstrap.text_ingestion import (
     SystemClock,
     TextIngestionApplication,
@@ -447,6 +450,7 @@ def test_cancellation_during_crawl_propagates_after_cleanup() -> None:
 @dataclass
 class RunApplication:
     failure: BaseException | None = None
+    wait_failure: BaseException | None = None
     starts: int = 0
     waits: int = 0
     shutdowns: int = 0
@@ -459,6 +463,8 @@ class RunApplication:
 
     async def wait(self) -> None:
         self.waits += 1
+        if self.wait_failure is not None:
+            raise self.wait_failure
 
     async def shutdown(self) -> None:
         self.shutdowns += 1
@@ -491,6 +497,21 @@ def test_run_wrapper_maps_safe_startup_failure() -> None:
     )
 
     assert result.value == 3
+    assert fake.shutdowns == 1
+
+
+def test_run_wrapper_maps_runtime_failure_and_still_shuts_down() -> None:
+    fake = RunApplication(wait_failure=RuntimeError("synthetic provider detail"))
+
+    result = run(
+        run_text_ingestion_application(
+            cast("TextIngestionApplication", fake),
+            Path("synthetic.json"),
+            environ={},
+        )
+    )
+
+    assert result is FoundationExitCode.INFRASTRUCTURE_ERROR
     assert fake.shutdowns == 1
 
 

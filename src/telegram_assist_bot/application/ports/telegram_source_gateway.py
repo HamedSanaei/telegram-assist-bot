@@ -201,6 +201,15 @@ class TelegramMediaReference:
     opaque_reference: str
     media_group_id: str | None = None
 
+    def __post_init__(self) -> None:
+        """Reject malformed provider-neutral metadata without inspecting payloads."""
+        if self.item_index < 0 or (self.size_bytes is not None and self.size_bytes < 0):
+            raise ValueError("Telegram media descriptor bounds are invalid.")
+        if not self.opaque_reference or self.opaque_reference.isspace():
+            raise ValueError("Telegram media descriptor reference is invalid.")
+        if self.media_group_id is not None and not self.media_group_id:
+            raise ValueError("Telegram media group identity is invalid.")
+
 
 @dataclass(frozen=True, slots=True)
 class TelegramTextMessage:

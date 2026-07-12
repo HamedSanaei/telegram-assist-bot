@@ -46,7 +46,7 @@ class HandleLiveMessage:
             return LiveMessageOutcome.SKIPPED_SERVICE
         has_text = message.text is not None and message.text != ""
         has_caption = message.caption is not None and message.caption != ""
-        if not has_text and not has_caption:
+        if not has_text and not has_caption and not message.media:
             return (
                 LiveMessageOutcome.SKIPPED_MEDIA_ONLY
                 if message.has_media

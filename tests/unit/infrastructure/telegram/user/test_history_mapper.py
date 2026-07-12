@@ -88,6 +88,7 @@ def test_media_text_maps_to_caption_without_normalization() -> None:
     assert mapped.text is None
     assert mapped.caption == "کپشن‌اصلی\n✨"
     assert mapped.has_media is True
+    assert mapped.media == ()
 
 
 @pytest.mark.parametrize(

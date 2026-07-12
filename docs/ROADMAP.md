@@ -128,6 +128,7 @@
 |---|---|---|---|---|
 | [T058](tasks/T058-local-inline-secret-configuration.md) | Secret مستقیم در Local Config | T002 | `4`، `14` | Completed |
 | [T059](tasks/T059-source-channel-username-only.md) | کانال مبدا فقط با Username | T008، T012 | `5.1`، `5.2`، `14` | Completed |
+| [T060](tasks/T060-runtime-media-content-wiring.md) | Runtime media ingestion و content preparation | T012–T019 | `5.2`–`5.11`، `13`، `14`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 

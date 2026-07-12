@@ -183,10 +183,16 @@ uv run python -m telegram_assist_bot login --config config/configuration.local.j
 مستقل و موازی برای crawl یا listener وجود ندارد:
 
 ```powershell
-uv run python -m telegram_assist_bot ingest-text --config config/configuration.local.json
+uv run --python 3.12 python -m telegram_assist_bot ingest --config config/configuration.local.json
 ```
 
-توقف `ingest-text` با cancellation/interrupt، subscription، Telegram client،
+فرمان قدیمی زیر alias سازگار همان runtime کامل متن، Media و آماده‌سازی محتوا است:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot ingest-text --config config/configuration.local.json
+```
+
+توقف `ingest` یا `ingest-text` با cancellation/interrupt، subscription، Telegram client،
 Session lock و MongoDB clientهای مالکیت‌دار را در ترتیب معکوس می‌بندد. اجرای عادی
 هرگز prompt ورود نمایش نمی‌دهد و Session نامعتبر با exit code غیرصفر متوقف می‌شود.
 
@@ -224,10 +230,16 @@ audit زمان جابه‌جا می‌کند. تست‌های MongoDB این Mil
 
 ## آماده‌سازی Media و محتوا
 
-Milestone 2 command عمومی تازه‌ای به CLI اضافه نمی‌کند. Composition Rootهای محصولی
-آینده Workerهای موجود را به این قراردادها متصل خواهند کرد؛ اجرای مستقیم یک command
-ساختگی برای Media یا pipeline پشتیبانی نمی‌شود. تنظیمات واقعی از بخش‌های `media`
-و `categorization` در فایل نمونه گرفته می‌شوند.
+runtime فرمان `ingest` همان session/client بازشده را برای validation، History، Listener
+و stream رسانه reuse می‌کند و Post، `media_items`، `media_groups` و
+`content_preparations` را از یک مسیر idempotent می‌سازد. تنظیمات واقعی از بخش‌های
+`media` و `categorization` در فایل نمونه گرفته می‌شوند.
+
+پاک‌سازی محدود و one-shot با policy نگه‌داری تنظیم‌شده از این فرمان اجرا می‌شود:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot media-cleanup --config config/configuration.local.json
+```
 
 Media به‌صورت stream و با timeout/سقف حجم زیر root خصوصی (پیش‌فرض نمونه
 `var/media`) نوشته می‌شود. temp یکتا فقط پس از تکمیل hash/size به‌طور اتمیک rename

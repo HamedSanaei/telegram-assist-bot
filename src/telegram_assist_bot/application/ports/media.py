@@ -25,6 +25,19 @@ class MediaTransientError(MediaOperationError):
     error_category = "transient"
 
 
+class MediaRateLimitError(MediaTransientError):
+    """Report a retryable provider wait without exposing provider details."""
+
+    error_category = "rate_limit"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        """Retain only one bounded non-negative delay."""
+        if type(retry_after_seconds) is not int or retry_after_seconds < 0:
+            raise ValueError("retry_after_seconds must be a non-negative integer")
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("Media provider rate limit was reached.")
+
+
 class MediaPermanentError(MediaOperationError):
     """Report a non-retryable media operation failure."""
 
@@ -161,6 +174,12 @@ class ContentPreparationRepository(Protocol):
 
     async def finalize_group(self, group_key: str, *, at: datetime) -> bool:
         """Atomically finalize one due group."""
+        ...
+
+    async def list_due_groups(
+        self, *, now: datetime, limit: int
+    ) -> tuple[MediaGroup, ...]:
+        """List a bounded deterministic batch awaiting finalization."""
         ...
 
     async def find_duplicate(

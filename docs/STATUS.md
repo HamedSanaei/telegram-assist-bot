@@ -2,8 +2,8 @@
 
 - **Current milestone:** Milestone 5 — پلتفرم AI و قابلیت‌های فاز اول
 - **Active task:** [T034 — قرارداد AI، Schema و Prompt version](tasks/T034-ai-contracts-schemas-prompts.md)
-- **Last completed task:** [T059 — کانال مبدا فقط با Username](tasks/T059-source-channel-username-only.md)
+- **Last completed task:** [T060 — اتصال runtime دریافت Media و آماده‌سازی محتوا](tasks/T060-runtime-media-content-wiring.md)
 - **Known blockers:** هیچ‌کدام.
-- **Failing tests:** هیچ‌کدام؛ 111 تست مرتبط T059 روی Python 3.14.5 موفق‌اند.
-- **Last verified commit:** `368b186`؛ تغییرات T058 کامل و راستی‌آزمایی‌شده اما هنوز Commit نشده‌اند.
-- **Next recommended action:** در `configuration.local.json` فیلد `telegram_channel_id` را از هر مورد `source_channels` حذف کنید؛ سپس تغییرات را review و Commit کنید و به T034 بازگردید.
+- **Failing tests:** هیچ‌کدام؛ suite کامل non-live روی Python 3.12 برابر `839 passed` و `0 skipped` با Branch Coverage برابر `90.00%` است.
+- **Last verified commit:** `368b186`؛ تغییرات کامل و راستی‌آزمایی‌شدهٔ T060 هنوز Commit نشده‌اند.
+- **Next recommended action:** تغییرات T060 را review و Commit کنید؛ سپس فقط T034 فعال را ادامه دهید.
