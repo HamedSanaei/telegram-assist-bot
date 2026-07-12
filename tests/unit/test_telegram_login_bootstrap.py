@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -119,6 +119,46 @@ def test_explicit_login_command_reuses_session_without_prompt(
     assert sink.events[-1]["event_name"] == "telegram_login_succeeded"
 
 
+def test_login_uses_telegram_timeout_not_mongodb_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = loaded_configuration()
+    telegram = loaded.settings.telegram.model_copy(
+        update={
+            "ingestion": loaded.settings.telegram.ingestion.model_copy(
+                update={"operation_timeout_seconds": 30}
+            )
+        }
+    )
+    settings = loaded.settings.model_copy(
+        update={
+            "mongodb": loaded.settings.mongodb.model_copy(
+                update={"connect_timeout_seconds": 5}
+            ),
+            "telegram": telegram,
+        }
+    )
+    gateway = Gateway(TelegramSessionStatus.AUTHORIZED)
+    captured: dict[str, object] = {}
+
+    def factory(**kwargs: object) -> Gateway:
+        captured.update(kwargs)
+        return gateway
+
+    monkeypatch.setattr(
+        login_module,
+        "load_configuration",
+        lambda *_args, **_kwargs: replace(loaded, settings=settings),
+    )
+    monkeypatch.setattr(login_module, "TelethonSessionAdapter", factory)
+
+    assert (
+        run(run_telegram_login(Path("synthetic.json"), environ={}, sink=Sink()))
+        is FoundationExitCode.SUCCESS
+    )
+    assert captured["timeout_seconds"] == 30.0
+
+
 def test_explicit_login_command_runs_code_and_two_factor_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +181,7 @@ def test_explicit_login_command_runs_code_and_two_factor_flow(
     assert gateway.calls == ["inspect", "begin", "code", "password", "abort"]
 
 
-def test_login_failure_is_safe_and_returns_infrastructure_exit(
+def test_unauthorized_session_runs_explicit_reauthentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = Gateway(TelegramSessionStatus.INVALID)
@@ -157,10 +197,10 @@ def test_login_failure_is_safe_and_returns_infrastructure_exit(
         )
     )
 
-    assert result is FoundationExitCode.INFRASTRUCTURE_ERROR
+    assert result is FoundationExitCode.SUCCESS
     assert gateway.close_calls == 1
-    assert sink.events[-1]["event_name"] == "telegram_login_failed"
-    assert "synthetic" not in repr(sink.events)
+    assert gateway.calls == ["inspect", "begin", "code", "abort"]
+    assert sink.events[-1]["event_name"] == "telegram_login_succeeded"
 
 
 def test_configuration_failure_creates_no_gateway(

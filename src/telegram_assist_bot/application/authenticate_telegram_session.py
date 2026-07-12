@@ -9,7 +9,6 @@ from typing import Protocol
 from telegram_assist_bot.application.ports.telegram_source_gateway import (
     TelegramAuthenticationGateway,
     TelegramLoginStep,
-    TelegramSessionInvalidError,
     TelegramSessionStatus,
 )
 
@@ -59,9 +58,6 @@ class AuthenticateTelegramSession:
         status = await self.gateway.inspect_session()
         if status is TelegramSessionStatus.AUTHORIZED:
             return AuthenticationResult(AuthenticationOutcome.SESSION_REUSED)
-        if status is TelegramSessionStatus.INVALID:
-            raise TelegramSessionInvalidError
-
         await self.gateway.begin_login(phone_number)
         try:
             code = await login_input.read_verification_code()
