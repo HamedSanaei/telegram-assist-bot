@@ -75,6 +75,7 @@ def channel(
     username: str | None = None,
     can_read: bool = True,
     can_publish: bool = False,
+    usernames: tuple[str, ...] = (),
 ) -> ResolvedTelegramChannel:
     return ResolvedTelegramChannel(
         channel_id=channel_id,
@@ -82,6 +83,7 @@ def channel(
         display_name="Synthetic channel",
         can_read=can_read,
         can_publish=can_publish,
+        usernames=usernames,
     )
 
 
@@ -117,6 +119,42 @@ def test_username_only_source_accepts_the_resolved_canonical_identifier() -> Non
     report = run(ValidateTelegramSession(gateway).execute((source,)))
 
     assert report.channels[0].channel.channel_id == -1001
+
+
+@pytest.mark.parametrize(
+    ("configured", "active_usernames"),
+    [
+        ("alonews", ("alonews", "lastnews")),
+        ("@LASTNEWS", ("alonews", "lastnews")),
+        ("  Alonews ", ("alonews",)),
+    ],
+)
+def test_accepts_any_normalized_active_channel_username(
+    configured: str,
+    active_usernames: tuple[str, ...],
+) -> None:
+    source = reference("source", -1001, TelegramChannelRole.SOURCE, username=configured)
+    gateway = FakeValidationGateway(
+        TelegramAccount(42, True),
+        {"source": channel(-1001, username=None, usernames=active_usernames)},
+    )
+
+    report = run(ValidateTelegramSession(gateway).execute((source,)))
+
+    assert report.channels[0].channel.usernames == active_usernames
+
+
+def test_absent_active_usernames_still_report_username_mismatch() -> None:
+    source = reference("source", -1001, TelegramChannelRole.SOURCE, username="alonews")
+    gateway = FakeValidationGateway(
+        TelegramAccount(42, True),
+        {"source": channel(-1001, username=None)},
+    )
+
+    with pytest.raises(TelegramChannelValidationError) as captured:
+        run(ValidateTelegramSession(gateway).execute((source,)))
+
+    assert captured.value.issues[0].code == "username_mismatch"
 
 
 def test_rejects_non_premium_account_before_channel_resolution() -> None:

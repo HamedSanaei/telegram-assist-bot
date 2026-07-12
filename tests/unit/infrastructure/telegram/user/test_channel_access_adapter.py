@@ -167,6 +167,36 @@ def test_public_source_skips_membership_permission_lookup(tmp_path: Path) -> Non
     )
 
 
+def test_extracts_only_active_secondary_channel_usernames(tmp_path: Path) -> None:
+    entity = SimpleNamespace(
+        canonical_id=-100203,
+        username=None,
+        usernames=(
+            SimpleNamespace(username="alonews", active=True),
+            SimpleNamespace(username="lastnews", active=True),
+            SimpleNamespace(username="inactive_news", active=False),
+        ),
+        title="Source",
+    )
+    client = ValidationClient(
+        account=SimpleNamespace(id=42, premium=True),
+        entity=entity,
+        permissions=object(),
+    )
+    reference = TelegramChannelReference(
+        config_name="source",
+        configured_channel_id=-100203,
+        configured_username="alonews",
+        role=TelegramChannelRole.SOURCE,
+        configuration_path="source_channels.0",
+    )
+
+    resolved = run(create_adapter(tmp_path, client).resolve_channel(reference))
+
+    assert resolved.username is None
+    assert resolved.usernames == ("alonews", "lastnews")
+
+
 def test_destination_non_membership_becomes_publish_denied(tmp_path: Path) -> None:
     entity = SimpleNamespace(
         canonical_id=-100202,

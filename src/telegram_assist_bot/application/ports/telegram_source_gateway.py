@@ -175,6 +175,7 @@ class ResolvedTelegramChannel:
     display_name: str
     can_read: bool
     can_publish: bool
+    usernames: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject malformed adapter output without SDK-specific validation."""
@@ -182,6 +183,8 @@ class ResolvedTelegramChannel:
             raise ValueError("channel_id must be a non-zero integer")
         if self.username is not None and (not self.username or self.username.isspace()):
             raise ValueError("username must be non-blank when present")
+        if any(not value or value.isspace() for value in self.usernames):
+            raise ValueError("usernames must contain only non-blank strings")
         if not self.display_name or self.display_name.isspace():
             raise ValueError("display_name must not be blank")
 

@@ -126,9 +126,17 @@ class ValidateTelegramSession:
                 "configuration",
             )
         if reference.configured_username is not None:
-            configured = reference.configured_username.removeprefix("@").casefold()
-            actual = None if resolved.username is None else resolved.username.casefold()
-            if configured != actual:
+            configured = (
+                reference.configured_username.removeprefix("@").strip().casefold()
+            )
+            actual = {
+                value.removeprefix("@").strip().casefold()
+                for value in (
+                    (resolved.username,) if resolved.username is not None else ()
+                )
+                + resolved.usernames
+            }
+            if configured not in actual:
                 return TelegramChannelValidationIssue(
                     reference.configuration_path,
                     "username_mismatch",

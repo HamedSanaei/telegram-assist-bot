@@ -382,6 +382,7 @@ class TelethonSessionAdapter:
             title = getattr(entity, "title", None)
             if username is not None and type(username) is not str:
                 username = None
+            usernames = self._active_usernames(entity, username)
             if type(title) is not str or not title or title.isspace():
                 title = reference.config_name
             can_read = type(entity).__name__ != "ChannelForbidden"
@@ -405,6 +406,7 @@ class TelethonSessionAdapter:
                 display_name=title,
                 can_read=can_read,
                 can_publish=can_publish,
+                usernames=usernames,
             )
         except (UsernameInvalidError, UsernameNotOccupiedError, ValueError) as error:
             raise TelegramChannelNotFoundError(cause=error) from error
@@ -530,6 +532,29 @@ class TelethonSessionAdapter:
         self._set_private_permissions(self.session_path.parent, 0o700)
         if self.session_path.exists():
             self._set_private_permissions(self.session_path, 0o600)
+
+    @staticmethod
+    def _active_usernames(
+        entity: object,
+        primary_username: str | None,
+    ) -> tuple[str, ...]:
+        """Extract public active usernames without returning the SDK entity."""
+        values: list[str] = []
+        if primary_username is not None:
+            values.append(primary_username)
+        candidates = getattr(entity, "usernames", ())
+        if isinstance(candidates, (tuple, list)):
+            for candidate in candidates:
+                username = getattr(candidate, "username", None)
+                active = getattr(candidate, "active", False)
+                if (
+                    type(username) is str
+                    and active is True
+                    and username
+                    and not username.isspace()
+                ):
+                    values.append(username)
+        return tuple(dict.fromkeys(values))
 
     def _discard_unauthorized_session(self) -> None:
         """Remove only session files proven unauthorized while holding the lock."""
