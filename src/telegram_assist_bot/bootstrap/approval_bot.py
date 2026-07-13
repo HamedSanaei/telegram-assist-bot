@@ -44,9 +44,11 @@ from telegram_assist_bot.domain import (
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
+    MongoNativeScheduleRepository,
     MongoOperationalApprovalRepository,
     MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
+    initialize_native_schedule_indexes,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
 )
@@ -124,8 +126,11 @@ class ApprovalBotApplication:
             schedules = database["scheduled_publications"]
             queues = database["schedule_queues"]
             publications = database["publications"]
+            native_commands = database["native_schedule_commands"]
+            native_leases = database["native_schedule_destination_leases"]
             await initialize_operational_approval_indexes(deliveries)
             await initialize_publication_indexes(publications, schedules, queues)
+            await initialize_native_schedule_indexes(native_commands, native_leases)
             operational = MongoOperationalApprovalRepository(
                 database["content_preparations"],
                 deliveries,
@@ -151,6 +156,9 @@ class ApprovalBotApplication:
                 ),
             )
             schedule_repository = MongoScheduleRepository(schedules, queues)
+            native_schedule_repository = MongoNativeScheduleRepository(
+                native_commands, native_leases
+            )
             administrators = _administrators(loaded)
             destinations = tuple(
                 OperationalDestination(item.telegram_channel_id, item.name)
@@ -197,6 +205,7 @@ class ApprovalBotApplication:
                 runtime_active=runtime_active,
                 timezone=settings.timezone,
                 logger=self._foundation.logger,
+                native_schedules=native_schedule_repository,
             )
             handlers = OperationalBotHandlers(
                 components.authorize, components.gateway, callbacks
@@ -242,12 +251,29 @@ class ApprovalBotApplication:
                 destinations,
                 owner=f"approval-bot-{uuid4().hex}",
                 clock=_utc_now,
-                lease_seconds=float(settings.telegram.bot.approval_claim_lease_seconds),
+                lease_seconds=max(
+                    float(settings.telegram.bot.approval_claim_lease_seconds),
+                    float(
+                        getattr(
+                            settings.telegram.bot,
+                            "approval_media_upload_timeout_seconds",
+                            300,
+                        )
+                    )
+                    + 30.0,
+                ),
                 retry_seconds=float(
                     settings.telegram.bot.approval_delivery_poll_seconds
                 ),
                 max_backlog_per_startup=(
                     settings.telegram.bot.approval_delivery_max_per_startup
+                ),
+                historical_batch_pause_seconds=float(
+                    getattr(
+                        settings.telegram.bot,
+                        "approval_delivery_batch_pause_seconds",
+                        10,
+                    )
                 ),
                 max_attempts=settings.telegram.bot.approval_retry_max_attempts,
                 logger=self._foundation.logger,

@@ -349,10 +349,26 @@
   انتشار فوری و زمان‌بندی‌شده را با یک `TelethonTextIngestionGateway` و یک client
   مشترک اجرا می‌کند. callback فقط command پایدار MongoDB می‌سازد. فرمان
   `approval-bot` تنها Aiogram Bot API و MongoDB را مالک است و Session کاربر را باز
-  نمی‌کند. `schedule-worker` و `ingest` سازگار می‌مانند، ولی lock همان Session اجازه
-  رقابت آن‌ها با `runtime` را نمی‌دهد.
+  نمی‌کند. `ingest` سازگار می‌ماند و lock همان Session اجازه رقابت آن با `runtime`
+  را نمی‌دهد؛ `schedule-worker` legacy پیش از Session fail-closed است.
 - **Consequences:** دو client رقیب برای یک فایل Session وجود ندارد؛ restart کارهای
   approval/publication را از outbox/lease ادامه می‌دهد. production به دو Process
   `runtime` و `approval-bot` نیاز دارد و `schedule-worker` نباید هم‌زمان با runtime
   روی همان Session اجرا شود. عمر process با await کردن signal قطع همان client و
   stop event صریح نگه داشته می‌شود؛ پایان crawl یا registration دلیل shutdown نیست.
+
+## ADR-026 — زمان‌بندی بومی Telegram با Outbox مستقل
+
+- **Status:** Accepted
+- **Decision:** انتخاب scheduled جدید دیگر `scheduled_publications` داخلی نمی‌سازد.
+  Approval Bot یک command نسخه‌دار در `native_schedule_commands` ثبت می‌کند و
+  Runtime با همان Telethon client مالک Session، تمام Scheduled Messages مقصد را
+  می‌خواند. Slot برابر پنج دقیقه پس از بیشینهٔ `now` و آخرین زمان Telegram است و
+  با lease مستقل مقصد serialize می‌شود. Telegram message IDها و UTC due پایدارند؛
+  لغو فقط همان IDها را حذف می‌کند. مرز `request_started` مانع resend نتیجهٔ مبهم
+  است و reconciliation نتیجهٔ ناپدیدشدن را قطعیِ «منتشر شد» فرض نمی‌کند.
+- **Consequences:** زمان‌بندی‌های ساخته‌شده خارج برنامه در Slot اثر دارند و مدیر
+  فوراً Scheduled Message را در Telegram می‌بیند. jobهای scheduled داخلی قدیمی
+  بدون migration، execution یا cancellation خودکار inert می‌مانند. تغییر scheduled
+  به immediate تا حذف بومی موفق صبر می‌کند؛ Bot API هرگز Session کاربر را باز
+  نمی‌کند.

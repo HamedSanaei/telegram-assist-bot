@@ -25,6 +25,11 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.indexes import (
     PostIndexSpec,
     initialize_post_indexes,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.native_schedule_repository import (  # noqa: E501
+    MongoNativeScheduleRepository,
+    initialize_native_schedule_indexes,
+    native_schedule_identity,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.operational_approval_repository import (  # noqa: E501
     MongoApprovalPostLoader,
     MongoOperationalApprovalRepository,
@@ -61,6 +66,7 @@ __all__ = (
     "MongoApprovalRepository",
     "MongoConnectionError",
     "MongoIndexInitializationError",
+    "MongoNativeScheduleRepository",
     "MongoOperationalApprovalRepository",
     "MongoPersistenceError",
     "MongoPostRepository",
@@ -73,9 +79,11 @@ __all__ = (
     "create_mongodb_client",
     "get_posts_collection",
     "initialize_approval_indexes",
+    "initialize_native_schedule_indexes",
     "initialize_operational_approval_indexes",
     "initialize_post_indexes",
     "initialize_publication_indexes",
+    "native_schedule_identity",
     "post_from_document",
     "post_to_document",
     "status_transition_to_document",

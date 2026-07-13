@@ -82,6 +82,7 @@ class OperationalApprovalRepository(Protocol):
         now: datetime,
         lease_until: datetime,
         ready_after: datetime | None = None,
+        ready_before_or_at: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
         """Claim one ready, incomplete, or lease-expired delivery."""
         ...

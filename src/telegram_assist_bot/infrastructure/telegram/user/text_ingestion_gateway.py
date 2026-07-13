@@ -144,6 +144,16 @@ class TelethonTextIngestionGateway:
         client = cast("TelethonPublisherClient", self._require_client())
         return TelethonPublisherGateway(client, media_root=media_root)
 
+    def native_scheduler(self, *, media_root: Path) -> object:
+        """Build native scheduling over the same already-open User API client."""
+        from telegram_assist_bot.infrastructure.telegram.native_scheduler import (
+            TelethonNativeSchedulerClient,
+            TelethonNativeSchedulerGateway,
+        )
+
+        client = cast("TelethonNativeSchedulerClient", self._require_client())
+        return TelethonNativeSchedulerGateway(client, media_root=media_root)
+
     async def close(self) -> None:
         """Close the shared client and release its session lock exactly once."""
         self._client = None

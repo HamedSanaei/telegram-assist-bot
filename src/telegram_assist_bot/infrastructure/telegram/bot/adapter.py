@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aiogram.exceptions import (
     TelegramBadRequest,
@@ -15,7 +16,6 @@ from aiogram.types import (
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaDocument,
     MessageEntity,
 )
 
@@ -25,6 +25,11 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryRejectedError,
     ApprovalDeliveryTransientError,
     ApprovalDeliveryUnavailableError,
+    ApprovalMedia,
+    ApprovalMediaNetworkError,
+    ApprovalMediaPathError,
+    ApprovalMediaRejectedError,
+    ApprovalMediaUploadTimeoutError,
     BotEditOutcome,
     InlineKeyboard,
 )
@@ -67,10 +72,19 @@ def _entities(values: tuple[TelegramEntity, ...]) -> list[MessageEntity]:
 class AiogramAdminMessagingGateway:
     """Map aiogram messages and safe error categories at the adapter boundary."""
 
-    def __init__(self, bot: Bot, *, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        *,
+        timeout_seconds: float,
+        media_root: Path = Path(),
+        upload_timeout_seconds: float | None = None,
+    ) -> None:
         """Store one owned Bot and bounded operation timeout."""
         self._bot = bot
         self._timeout = timeout_seconds
+        self._upload_timeout = upload_timeout_seconds or timeout_seconds
+        self._media_root = media_root.resolve()
         self._closed = False
 
     @property
@@ -109,43 +123,153 @@ class AiogramAdminMessagingGateway:
     ) -> tuple[int, ...]:
         """Send prepared content without adding managerial metadata."""
         try:
-            async with asyncio.timeout(self._timeout):
-                if content.media_paths:
-                    # Serialization stays adapter-owned; publication remains absent.
+            media = self._approval_media(content)
+            if media:
+                async with asyncio.timeout(self._upload_timeout):
+                    preview = self._preview_member(media)
+                    path = self._resolve_media(preview.storage_path)
                     caption_entities = _entities(content.caption_entities)
-                    if len(content.media_paths) == 1:
-                        message = await self._bot.send_document(
+                    kind, extension = self._preview_kind(preview, path)
+                    filename = preview.original_filename or (
+                        f"approval-{kind}.{extension}"
+                    )
+                    upload = FSInputFile(path, filename=filename)
+                    if kind == "photo":
+                        message = await self._bot.send_photo(
                             chat_id,
-                            document=FSInputFile(content.media_paths[0]),
+                            photo=upload,
                             caption=content.caption,
                             caption_entities=caption_entities,
                         )
-                        return (message.message_id,)
-                    media = [
-                        InputMediaDocument(
-                            media=FSInputFile(path),
-                            caption=content.caption if index == 0 else None,
-                            caption_entities=caption_entities if index == 0 else None,
+                    elif kind == "video":
+                        message = await self._bot.send_video(
+                            chat_id,
+                            video=upload,
+                            supports_streaming=True,
+                            caption=content.caption,
+                            caption_entities=caption_entities,
                         )
-                        for index, path in enumerate(content.media_paths)
-                    ]
-                    messages = await self._bot.send_media_group(
-                        chat_id, media=cast("Any", media)
-                    )
-                    return tuple(message.message_id for message in messages)
+                    elif kind == "animation":
+                        message = await self._bot.send_animation(
+                            chat_id,
+                            animation=upload,
+                            caption=content.caption,
+                            caption_entities=caption_entities,
+                        )
+                    else:
+                        message = await self._bot.send_document(
+                            chat_id,
+                            document=upload,
+                            caption=content.caption,
+                            caption_entities=caption_entities,
+                        )
+                    return (message.message_id,)
+            async with asyncio.timeout(self._timeout):
                 message = await self._bot.send_message(
                     chat_id,
                     content.text or content.caption or "",
                     entities=_entities(content.text_entities),
                 )
                 return (message.message_id,)
+        except TimeoutError as error:
+            if content.media or content.media_paths:
+                raise ApprovalMediaUploadTimeoutError(
+                    "Approval media upload timed out."
+                ) from error
+            raise
+        except OSError:
+            if content.media or content.media_paths:
+                raise ApprovalMediaPathError(
+                    "Approval media path is unavailable."
+                ) from None
+            raise ApprovalDeliveryTransientError(
+                "Approval delivery temporarily failed."
+            ) from None
         except (
             TelegramForbiddenError,
             TelegramRetryAfter,
             TelegramNetworkError,
             TelegramBadRequest,
         ) as error:
-            raise self._delivery_error(error) from None
+            raise self._delivery_error(
+                error, media=bool(content.media or content.media_paths)
+            ) from None
+
+    @staticmethod
+    def _approval_media(content: ApprovalContent) -> tuple[ApprovalMedia, ...]:
+        if content.media:
+            return content.media
+        return tuple(ApprovalMedia("document", path) for path in content.media_paths)
+
+    @staticmethod
+    def _preview_member(media: tuple[ApprovalMedia, ...]) -> ApprovalMedia:
+        if len(media) == 1:
+            return media[0]
+        return next(
+            (item for item in media if item.media_type.lower() == "photo"), media[0]
+        )
+
+    @classmethod
+    def _preview_kind(cls, media: ApprovalMedia, path: Path) -> tuple[str, str]:
+        """Recover a safe visual preview kind without changing stored metadata."""
+        declared = media.media_type.lower()
+        detected = cls._file_signature(path)
+        mime_type = (media.mime_type or "").partition(";")[0].strip().lower()
+        mime_preview = {
+            "image/jpeg": ("photo", "jpg"),
+            "image/png": ("photo", "png"),
+            "image/gif": ("animation", "gif"),
+        }.get(mime_type)
+        if declared == "document":
+            recovered = mime_preview or detected
+            if recovered is not None and recovered[0] in {"photo", "animation"}:
+                return recovered
+        if mime_preview is not None and mime_preview[0] == declared:
+            return mime_preview
+        if detected is not None and detected[0] == declared:
+            return detected
+        extension = {
+            "photo": "jpg",
+            "video": "mp4",
+            "animation": "gif",
+            "document": "bin",
+        }[declared]
+        return declared, extension
+
+    @staticmethod
+    def _file_signature(path: Path) -> tuple[str, str] | None:
+        """Read a bounded header for legacy records that lack media metadata."""
+        with path.open("rb") as media_file:
+            header = media_file.read(16)
+        if header.startswith(b"\xff\xd8\xff"):
+            return "photo", "jpg"
+        if header.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "photo", "png"
+        if header.startswith((b"GIF87a", b"GIF89a")):
+            return "animation", "gif"
+        if header.startswith(b"%PDF-"):
+            return "document", "pdf"
+        if len(header) >= 12 and header[4:8] == b"ftyp":
+            return "video", "mp4"
+        return None
+
+    def _resolve_media(self, storage_path: str) -> Path:
+        candidate = Path(storage_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ApprovalMediaPathError("Approval media path is invalid.")
+        current = self._media_root
+        for part in candidate.parts:
+            current /= part
+            if current.is_symlink():
+                raise ApprovalMediaPathError("Approval media path is invalid.")
+        try:
+            resolved = (self._media_root / candidate).resolve(strict=True)
+            resolved.relative_to(self._media_root)
+        except (OSError, ValueError):
+            raise ApprovalMediaPathError("Approval media path is invalid.") from None
+        if not resolved.is_file() or resolved.is_symlink():
+            raise ApprovalMediaPathError("Approval media path is invalid.")
+        return resolved
 
     @staticmethod
     def _delivery_error(
@@ -155,6 +279,8 @@ class AiogramAdminMessagingGateway:
             | TelegramNetworkError
             | TelegramBadRequest
         ),
+        *,
+        media: bool = False,
     ) -> (
         ApprovalDeliveryUnavailableError
         | ApprovalDeliveryRateLimitError
@@ -167,9 +293,15 @@ class AiogramAdminMessagingGateway:
         if isinstance(error, TelegramRetryAfter):
             return ApprovalDeliveryRateLimitError(error.retry_after)
         if isinstance(error, TelegramNetworkError):
+            if media:
+                return ApprovalMediaNetworkError(
+                    "Approval media upload temporarily failed."
+                )
             return ApprovalDeliveryTransientError(
                 "Approval delivery temporarily failed."
             )
+        if media:
+            return ApprovalMediaRejectedError("Approval media was rejected.")
         return ApprovalDeliveryRejectedError("Approval delivery request was rejected.")
 
     async def edit_header(

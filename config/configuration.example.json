@@ -29,7 +29,9 @@
       "polling_timeout_seconds": 30,
       "approval_delivery_poll_seconds": 5,
       "approval_delivery_interval_seconds": 1,
+      "approval_delivery_batch_pause_seconds": 10,
       "approval_delivery_max_per_startup": 10,
+      "approval_media_upload_timeout_seconds": 300,
       "approval_claim_lease_seconds": 60,
       "approval_retry_max_attempts": 3,
       "shutdown_timeout_seconds": 10
@@ -96,7 +98,10 @@
     "retry_maximum_delay_seconds": 30,
     "worker_poll_seconds": 5,
     "shutdown_timeout_seconds": 10,
-    "cancellation_policy": "preserve"
+    "cancellation_policy": "preserve",
+    "native_schedule_timeout_seconds": 300,
+    "native_schedule_lease_seconds": 600,
+    "native_schedule_poll_seconds": 1
   },
   "timezone": "Asia/Tehran",
   "logging": {

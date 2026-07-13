@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from aiogram.exceptions import (
@@ -20,6 +20,9 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryRejectedError,
     ApprovalDeliveryTransientError,
     ApprovalDeliveryUnavailableError,
+    ApprovalMedia,
+    ApprovalMediaPathError,
+    ApprovalMediaUploadTimeoutError,
     BotEditOutcome,
     InlineKeyboard,
 )
@@ -30,6 +33,9 @@ from telegram_assist_bot.presentation.bot import (
     ProtectedCallbackHandler,
     map_aiogram_update,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class FakeSession:
@@ -49,11 +55,25 @@ class FakeBot:
         self.session = FakeSession()
         self.answers: list[str] = []
         self.media_count = 0
+        self.media_calls: list[tuple[str, object, dict[str, object]]] = []
 
     async def send_message(self, *_args: object, **_kwargs: object) -> Result:
         return Result()
 
     async def send_document(self, *_args: object, **_kwargs: object) -> Result:
+        self.media_calls.append(("document", _args, _kwargs))
+        return Result()
+
+    async def send_photo(self, *_args: object, **_kwargs: object) -> Result:
+        self.media_calls.append(("photo", _args, _kwargs))
+        return Result()
+
+    async def send_video(self, *_args: object, **_kwargs: object) -> Result:
+        self.media_calls.append(("video", _args, _kwargs))
+        return Result()
+
+    async def send_animation(self, *_args: object, **_kwargs: object) -> Result:
+        self.media_calls.append(("animation", _args, _kwargs))
         return Result()
 
     async def send_media_group(
@@ -95,10 +115,17 @@ def test_typed_update_mapping_uses_authenticated_actor() -> None:
     assert mapped.callback_data == "c1_synthetic"
 
 
-def test_handler_rejects_before_dispatch_and_adapter_closes_once() -> None:
+def test_handler_rejects_before_dispatch_and_adapter_closes_once(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "first.bin").write_bytes(b"one")
+    (tmp_path / "second.bin").write_bytes(b"two")
+
     async def scenario() -> None:
         fake = FakeBot()
-        gateway = AiogramAdminMessagingGateway(cast("Any", fake), timeout_seconds=1)
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
         administrator = Administrator(
             1001, True, "admin", frozenset({AdminPermission.TOGGLE}), frozenset({-2001})
         )
@@ -124,8 +151,8 @@ def test_handler_rejects_before_dispatch_and_adapter_closes_once() -> None:
             caption_entities=(TelegramEntity(0, 6, "bold"),),
             media_paths=("first.bin", "second.bin"),
         )
-        assert await gateway.send_content(1001, media) == (7, 7)
-        assert fake.media_count == 1
+        assert await gateway.send_content(1001, media) == (7,)
+        assert fake.media_calls[-1][0] == "document"
         assert (
             await gateway.edit_header(1001, 7, "هدر", InlineKeyboard(()))
             is BotEditOutcome.UPDATED
@@ -137,7 +164,178 @@ def test_handler_rejects_before_dispatch_and_adapter_closes_once() -> None:
     asyncio.run(scenario())
 
 
-def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries() -> None:
+def test_aiogram_gateway_uses_real_media_types_and_album_photo_preview(
+    tmp_path: Path,
+) -> None:
+    for name in ("photo.jpg", "video.mp4", "animation.gif", "document.pdf"):
+        (tmp_path / name).write_bytes(name.encode())
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake),
+            timeout_seconds=1,
+            media_root=tmp_path,
+            upload_timeout_seconds=2,
+        )
+        entities = (TelegramEntity(0, 4, "bold"),)
+        media = (
+            ApprovalMedia("photo", "photo.jpg", "image/jpeg", "عکس.jpg"),
+            ApprovalMedia("video", "video.mp4", "video/mp4", "video.mp4"),
+            ApprovalMedia("animation", "animation.gif", "image/gif", "anim.gif"),
+            ApprovalMedia(
+                "document", "document.pdf", "application/pdf", "document.pdf"
+            ),
+        )
+        for expected, item in zip(
+            ("photo", "video", "animation", "document"), media, strict=True
+        ):
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "کپشن",
+                    caption_entities=entities,
+                    media=(item,),
+                ),
+            )
+            kind, _args, kwargs = fake.media_calls[-1]
+            assert kind == expected
+            assert kwargs["caption"] == "کپشن"
+            mapped = cast("list[object]", kwargs["caption_entities"])
+            assert cast("Any", mapped[0]).offset == 0
+            assert cast("Any", mapped[0]).length == 4
+
+        await gateway.send_content(
+            7,
+            ApprovalContent(None, "آلبوم", media=(media[3], media[0], media[1])),
+        )
+        assert fake.media_calls[-1][0] == "photo"
+
+        with pytest.raises(ApprovalMediaPathError):
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "x",
+                    media=(ApprovalMedia("photo", "../outside.jpg"),),
+                ),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_aiogram_gateway_recovers_legacy_image_preview_without_hash_filename(
+    tmp_path: Path,
+) -> None:
+    jpeg_hash = "f59ac19d7a626ce9f36fa6cbb32930ed753c8b2cb367c8a"
+    png_hash = "a" * 64
+    gif_hash = "b" * 64
+    document_hash = "c" * 64
+    (tmp_path / jpeg_hash).write_bytes(b"\xff\xd8\xff\xe0legacy-jpeg")
+    (tmp_path / png_hash).write_bytes(b"\x89PNG\r\n\x1a\nlegacy-png")
+    (tmp_path / gif_hash).write_bytes(b"GIF89alegacy-gif")
+    (tmp_path / document_hash).write_bytes(b"%PDF-1.7 document")
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        entities = (TelegramEntity(0, 4, "bold"),)
+
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "کپشن",
+                caption_entities=entities,
+                media=(ApprovalMedia("Document", jpeg_hash, "image/jpeg"),),
+            ),
+        )
+        kind, _args, kwargs = fake.media_calls[-1]
+        assert kind == "photo"
+        upload = cast("Any", kwargs["photo"])
+        assert upload.filename == "approval-photo.jpg"
+        assert jpeg_hash not in upload.filename
+        assert kwargs["caption"] == "کپشن"
+        assert cast("Any", kwargs["caption_entities"])[0].length == 4
+
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "png",
+                media=(ApprovalMedia("document", png_hash),),
+            ),
+        )
+        assert fake.media_calls[-1][0] == "photo"
+        assert cast("Any", fake.media_calls[-1][2]["photo"]).filename == (
+            "approval-photo.png"
+        )
+
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "gif",
+                media=(ApprovalMedia("document", gif_hash),),
+            ),
+        )
+        assert fake.media_calls[-1][0] == "animation"
+        assert cast("Any", fake.media_calls[-1][2]["animation"]).filename == (
+            "approval-animation.gif"
+        )
+
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "pdf",
+                media=(ApprovalMedia("document", document_hash),),
+            ),
+        )
+        assert fake.media_calls[-1][0] == "document"
+        assert cast("Any", fake.media_calls[-1][2]["document"]).filename == (
+            "approval-document.pdf"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_aiogram_gateway_has_a_separate_media_upload_timeout(tmp_path: Path) -> None:
+    (tmp_path / "slow.jpg").write_bytes(b"slow")
+
+    class SlowBot(FakeBot):
+        async def send_photo(self, *_args: object, **_kwargs: object) -> Result:
+            await asyncio.sleep(0.05)
+            return Result()
+
+    async def scenario() -> None:
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", SlowBot()),
+            timeout_seconds=1,
+            media_root=tmp_path,
+            upload_timeout_seconds=0.001,
+        )
+        with pytest.raises(ApprovalMediaUploadTimeoutError):
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "slow",
+                    media=(ApprovalMedia("photo", "slow.jpg"),),
+                ),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "single.bin").write_bytes(b"single")
+
     class FailingBot(FakeBot):
         def __init__(self) -> None:
             super().__init__()
@@ -155,7 +353,9 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries() -> None:
 
     async def scenario() -> None:
         fake = FailingBot()
-        gateway = AiogramAdminMessagingGateway(cast("Any", fake), timeout_seconds=1)
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
         method = cast("Any", object())
 
         assert gateway.bot is cast("Any", fake)

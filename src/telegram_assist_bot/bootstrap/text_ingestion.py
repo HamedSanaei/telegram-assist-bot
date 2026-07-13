@@ -21,9 +21,11 @@ from telegram_assist_bot.application import (
 from telegram_assist_bot.application.assemble_media_group import AssembleMediaGroup
 from telegram_assist_bot.application.categorize_post import KeywordCategoryRule
 from telegram_assist_bot.application.download_post_media import DownloadPostMedia
+from telegram_assist_bot.application.native_scheduling import RunNativeScheduling
 from telegram_assist_bot.application.ports import (
     Clock,
     MediaSource,
+    NativeScheduleCommand,
     PostRepository,
     ResolvedTelegramChannel,
     TelegramHistoryGateway,
@@ -58,13 +60,16 @@ from telegram_assist_bot.bootstrap.runtime import (
 from telegram_assist_bot.bootstrap.telegram_validation import validate_telegram_startup
 from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.domain.posts import PostId, SourceMessageIdentity
+from telegram_assist_bot.domain.publication import publication_identity
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
+    MongoNativeScheduleRepository,
     MongoOperationalApprovalRepository,
     MongoPublicationPayloadLoader,
     MongoPublicationRepository,
     MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
+    initialize_native_schedule_indexes,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
 )
@@ -85,6 +90,7 @@ if TYPE_CHECKING:
 
     from pymongo import AsyncMongoClient
 
+    from telegram_assist_bot.application.ports import TelegramNativeSchedulerGateway
     from telegram_assist_bot.domain import ScheduledPublication
     from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
         MongoDocument,
@@ -202,6 +208,10 @@ class FullTextIngestionGateway(TextIngestionGateway, Protocol):
 
     def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
         """Return a publisher over the same already-open User API client."""
+        ...
+
+    def native_scheduler(self, *, media_root: Path) -> object:
+        """Return native scheduling over the same already-open User API client."""
         ...
 
     async def wait_disconnected(self) -> None:
@@ -924,7 +934,7 @@ async def _create_publication_worker(
     gateway: TextIngestionGateway,
     foundation: FoundationLifecycle,
 ) -> RuntimeWorker:
-    """Wire both due-now and scheduled commands over the ingestion-owned client."""
+    """Wire immediate and native scheduling over the ingestion-owned client."""
     settings = loaded.settings
     owned_foundation = cast("FullFoundationLifecycle", foundation)
     owned_gateway = cast("FullTextIngestionGateway", gateway)
@@ -932,11 +942,14 @@ async def _create_publication_worker(
     publications = database["publications"]
     schedules = database["scheduled_publications"]
     queues = database["schedule_queues"]
+    native_commands = database["native_schedule_commands"]
+    native_leases = database["native_schedule_destination_leases"]
     deliveries = database["approval_deliveries"]
     media = database["media_items"]
     groups = database["media_groups"]
     preparations = database["content_preparations"]
     await initialize_publication_indexes(publications, schedules, queues)
+    await initialize_native_schedule_indexes(native_commands, native_leases)
     await initialize_operational_approval_indexes(deliveries)
     content_repository = MongoContentPreparationRepository(media, groups, preparations)
     destination_ids = {
@@ -959,6 +972,7 @@ async def _create_publication_worker(
     publisher = owned_gateway.publisher(media_root=settings.media.root)
     publication_repository = MongoPublicationRepository(publications)
     schedule_repository = MongoScheduleRepository(schedules, queues)
+    native_repository = MongoNativeScheduleRepository(native_commands, native_leases)
     operational = MongoOperationalApprovalRepository(preparations, deliveries)
     owner = f"runtime-{uuid4().hex}"
     heartbeat = MongoRuntimeHeartbeatRepository(database["runtime_heartbeats"])
@@ -1033,26 +1047,91 @@ async def _create_publication_worker(
         before_attempt=before_attempt,
         logger=owned_foundation.logger,
     )
-    scheduled = RunDuePublication(
-        schedule_repository,
+    native_gateway = cast(
+        "TelegramNativeSchedulerGateway",
+        owned_gateway.native_scheduler(media_root=settings.media.root),
+    )
+
+    async def after_native_scheduled(command: NativeScheduleCommand) -> None:
+        await operational.record_destination_status(
+            command.post_id,
+            command.destination_id,
+            status="native_scheduled",
+            version=command.selection_version,
+            at=datetime.now(UTC),
+            action="scheduled",
+            due_at=command.due_at,
+        )
+
+    async def after_native_cancelled(command: NativeScheduleCommand) -> None:
+        now = datetime.now(UTC)
+        if command.follow_up_immediate:
+            reservation = await schedule_repository.reserve_immediate(
+                job_id=publication_identity(
+                    command.post_id, command.destination_id, "immediate"
+                ),
+                post_id=command.post_id,
+                destination_id=command.destination_id,
+                now=now,
+            )
+            await operational.record_destination_status(
+                command.post_id,
+                command.destination_id,
+                status="immediate_queued",
+                version=command.selection_version,
+                at=now,
+                action="immediate",
+                due_at=reservation.job.due_at,
+            )
+        else:
+            await operational.record_destination_status(
+                command.post_id,
+                command.destination_id,
+                status="cancelled",
+                version=command.selection_version,
+                at=now,
+            )
+
+    async def after_native_reconciled(command: NativeScheduleCommand) -> None:
+        status = {
+            "cancelled_external": "cancelled",
+            "resolved": "native_resolved",
+            "outcome_unknown": "native_outcome_unknown",
+        }.get(command.status.value, "native_scheduled")
+        await operational.record_destination_status(
+            command.post_id,
+            command.destination_id,
+            status=status,
+            version=command.selection_version,
+            at=datetime.now(UTC),
+            action="scheduled",
+            due_at=command.due_at,
+        )
+
+    native = RunNativeScheduling(
+        native_repository,
+        native_gateway,
+        loader,
         owner=owner,
         clock=lambda: datetime.now(UTC),
-        lease_seconds=float(publishing.publication_lease_seconds),
-        max_attempts=publishing.publication_max_attempts,
-        retry_delay_seconds=float(publishing.retry_initial_delay_seconds),
-        action="scheduled",
-        build_request=request_builder("scheduled"),
-        publish=publication.execute,
-        after_result=after_result,
-        before_attempt=before_attempt,
-        logger=owned_foundation.logger,
+        timeout_seconds=float(publishing.native_schedule_timeout_seconds),
+        lease_seconds=float(publishing.native_schedule_lease_seconds),
+        retry_seconds=float(publishing.retry_initial_delay_seconds),
+        after_scheduled=after_native_scheduled,
+        after_cancelled=after_native_cancelled,
+        after_reconciled=after_native_reconciled,
     )
 
     async def run_once() -> None:
         await immediate.execute_once()
-        await scheduled.execute_once()
+        await native.execute_once()
+        await native.reconcile_once()
 
-    publication_poll_seconds = min(1.0, float(publishing.worker_poll_seconds))
+    publication_poll_seconds = min(
+        1.0,
+        float(publishing.worker_poll_seconds),
+        float(publishing.native_schedule_poll_seconds),
+    )
     publication_worker = ScheduledPublicationWorker(
         run_once, poll_seconds=publication_poll_seconds
     )

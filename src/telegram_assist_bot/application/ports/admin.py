@@ -44,6 +44,31 @@ class InlineKeyboard:
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovalMedia:
+    """Describe one private approval-preview media item without an SDK type."""
+
+    media_type: str
+    storage_path: str
+    mime_type: str | None = None
+    original_filename: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject blank media identity and unsupported preview kinds."""
+        if (
+            self.media_type.lower()
+            not in {
+                "photo",
+                "video",
+                "animation",
+                "document",
+            }
+            or not self.storage_path
+            or self.storage_path.isspace()
+        ):
+            raise ValueError("Approval media metadata is invalid.")
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalContent:
     """Prepared content sent separately from the managerial header."""
 
@@ -52,6 +77,7 @@ class ApprovalContent:
     text_entities: tuple[TelegramEntity, ...] = ()
     caption_entities: tuple[TelegramEntity, ...] = ()
     media_paths: tuple[str, ...] = ()
+    media: tuple[ApprovalMedia, ...] = ()
 
 
 class BotEditOutcome(StrEnum):
@@ -95,6 +121,30 @@ class ApprovalDeliveryRejectedError(ApprovalDeliveryError):
     """Report a safe retryable Bot API request rejection."""
 
     error_category = "bad_request"
+
+
+class ApprovalMediaPathError(ApprovalDeliveryRejectedError):
+    """Report a missing or unsafe private approval media path."""
+
+    error_category = "invalid_media_path"
+
+
+class ApprovalMediaUploadTimeoutError(ApprovalDeliveryTransientError):
+    """Report that a bounded approval media upload timed out."""
+
+    error_category = "media_upload_timeout"
+
+
+class ApprovalMediaNetworkError(ApprovalDeliveryTransientError):
+    """Report a retryable network failure specific to media upload."""
+
+    error_category = "media_network"
+
+
+class ApprovalMediaRejectedError(ApprovalDeliveryRejectedError):
+    """Report a permanent Bot API rejection of prepared approval media."""
+
+    error_category = "media_rejected"
 
 
 class AdminMessagingGateway(Protocol):
@@ -216,6 +266,11 @@ __all__ = (
     "ApprovalDeliveryRejectedError",
     "ApprovalDeliveryTransientError",
     "ApprovalDeliveryUnavailableError",
+    "ApprovalMedia",
+    "ApprovalMediaNetworkError",
+    "ApprovalMediaPathError",
+    "ApprovalMediaRejectedError",
+    "ApprovalMediaUploadTimeoutError",
     "ApprovalRepository",
     "BotEditOutcome",
     "BotUpdate",
