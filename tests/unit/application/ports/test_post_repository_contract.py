@@ -255,6 +255,11 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     expected_exports = {
         "AdminMessagingGateway",
         "ApprovalContent",
+        "ApprovalDeliveryError",
+        "ApprovalDeliveryRateLimitError",
+        "ApprovalDeliveryRejectedError",
+        "ApprovalDeliveryTransientError",
+        "ApprovalDeliveryUnavailableError",
         "ApprovalDeliveryClaim",
         "ApprovalPost",
         "ApprovalPostLoader",

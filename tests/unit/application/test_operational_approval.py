@@ -425,9 +425,14 @@ class DeliveryOperational:
         self.released = 0
 
     async def claim_ready(
-        self, *, owner: str, now: datetime, lease_until: datetime
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        ready_after: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
-        del now
+        del now, ready_after
         if not self.available:
             return None
         self.available = False
@@ -473,6 +478,7 @@ def test_delivery_worker_persists_each_admin_reference_and_completes_once() -> N
             clock=lambda: NOW,
             lease_seconds=30,
             retry_seconds=1,
+            max_backlog_per_startup=0,
             logger=cast("Any", Logger()),
         )
         assert await worker.execute_once()
