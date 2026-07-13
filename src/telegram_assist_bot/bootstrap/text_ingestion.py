@@ -82,7 +82,7 @@ from telegram_assist_bot.infrastructure.telegram.user import (
     TelethonTextIngestionGateway,
 )
 from telegram_assist_bot.shared.config import LoadedConfiguration, LogLevel
-from telegram_assist_bot.shared.retry import RetryPolicy
+from telegram_assist_bot.shared.retry import RetryPolicy, execute_with_retry
 from telegram_assist_bot.workers import LiveTextListener, ScheduledPublicationWorker
 
 if TYPE_CHECKING:
@@ -345,10 +345,26 @@ class TextIngestionApplication:
             correlation_id = self._dependencies.foundation.correlation_id
             if correlation_id is None:
                 raise TextIngestionStartupError
+            ingestion_config = loaded.settings.telegram.ingestion
+            retry_policy = RetryPolicy(
+                max_attempts=ingestion_config.max_reconnect_attempts,
+                initial_delay_seconds=(
+                    ingestion_config.reconnect_initial_delay_seconds
+                ),
+                max_delay_seconds=ingestion_config.reconnect_max_delay_seconds,
+            )
             gateway = self._dependencies.gateway_factory(loaded)
             self._gateway = gateway
             try:
-                report = await validate_telegram_startup(loaded.settings, gateway)
+                report = await execute_with_retry(
+                    lambda: validate_telegram_startup(loaded.settings, gateway),
+                    operation_name="telegram_startup_validation",
+                    operation_is_safe_to_retry=True,
+                    policy=retry_policy,
+                    logger=logger,
+                    sleeper=self._dependencies.sleeper,
+                    jitter_source=self._dependencies.jitter_source,
+                )
             except TelegramChannelValidationError as error:
                 for issue in error.issues:
                     role = (
@@ -374,7 +390,15 @@ class TextIngestionApplication:
             )
             for validated in report.channels:
                 gateway.register_channel(validated.channel)
-            await gateway.open()
+            await execute_with_retry(
+                gateway.open,
+                operation_name="telegram_session_open",
+                operation_is_safe_to_retry=True,
+                policy=retry_policy,
+                logger=logger,
+                sleeper=self._dependencies.sleeper,
+                jitter_source=self._dependencies.jitter_source,
+            )
             logger.emit(level=LogLevel.INFO, event_name="telegram_session_opened")
             disconnect_task: asyncio.Task[object] | None = None
             if self._dependencies.runtime_worker_factory is not None:
@@ -392,7 +416,6 @@ class TextIngestionApplication:
             )
             if not sources:
                 raise TextIngestionStartupError
-            ingestion_config = loaded.settings.telegram.ingestion
             prepared: dict[int, TelegramLiveSubscription] = {}
             for source in sources:
                 subscription = await gateway.subscribe(
@@ -407,13 +430,6 @@ class TextIngestionApplication:
                 fields={"source_count": len(sources)},
             )
 
-            retry_policy = RetryPolicy(
-                max_attempts=ingestion_config.max_reconnect_attempts,
-                initial_delay_seconds=(
-                    ingestion_config.reconnect_initial_delay_seconds
-                ),
-                max_delay_seconds=ingestion_config.reconnect_max_delay_seconds,
-            )
             base_ingestor = IngestPostIdempotently(
                 self._dependencies.foundation.repository,
                 self._dependencies.clock,

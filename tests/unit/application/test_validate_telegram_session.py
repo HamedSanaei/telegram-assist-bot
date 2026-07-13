@@ -191,17 +191,15 @@ def test_aggregates_mismatch_and_permission_failures() -> None:
     ]
 
 
-def test_transient_resolution_failure_is_not_reclassified_as_permanent() -> None:
+def test_transient_resolution_failure_propagates_for_startup_retry() -> None:
     source = reference("source", -1001, TelegramChannelRole.SOURCE)
     gateway = FakeValidationGateway(
         TelegramAccount(42, True),
         {"source": TelegramTransientError()},
     )
 
-    with pytest.raises(TelegramChannelValidationError) as captured:
+    with pytest.raises(TelegramTransientError):
         run(ValidateTelegramSession(gateway).execute((source,)))
-
-    assert captured.value.issues[0].error_category == "transient"
 
 
 def test_disabled_source_is_not_resolved_and_its_destination_is_not_required() -> None:

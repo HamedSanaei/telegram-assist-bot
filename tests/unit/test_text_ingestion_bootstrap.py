@@ -25,6 +25,7 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryPage,
     TelegramHistoryQuery,
     TelegramTextMessage,
+    TelegramTransientError,
 )
 from telegram_assist_bot.application.validate_telegram_session import (
     TelegramChannelValidationError,
@@ -418,6 +419,48 @@ def test_validation_failure_emits_only_safe_channel_diagnostics(
             "failure_category": "permission",
             "channel_role": "source",
         }
+
+    run(scenario())
+
+
+def test_transient_startup_validation_and_open_are_retried() -> None:
+    @dataclass
+    class RetryingGateway(Gateway):
+        validation_attempts: int = 0
+        open_attempts: int = 0
+
+        async def validate_account(self) -> TelegramAccount:
+            self.validation_attempts += 1
+            if self.validation_attempts == 1:
+                raise TelegramTransientError
+            return await super().validate_account()
+
+        async def open(self) -> None:
+            self.open_attempts += 1
+            if self.open_attempts == 1:
+                raise TelegramTransientError
+            await super().open()
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = RetryingGateway((), [], order)
+        app = application(gateway, foundation)
+
+        await app.start(Path("synthetic.json"), environ={})
+        await app.wait()
+        await app.shutdown()
+
+        assert gateway.validation_attempts == 2
+        assert gateway.open_attempts == 2
+        retry_operations = [
+            event["operation_name"]
+            for event in sink.events
+            if event["event_name"] == "retry_scheduled"
+        ]
+        assert retry_operations == [
+            "telegram_startup_validation",
+            "telegram_session_open",
+        ]
 
     run(scenario())
 
