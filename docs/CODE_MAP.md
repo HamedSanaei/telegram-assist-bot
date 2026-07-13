@@ -156,10 +156,11 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/text_ingestion.py` | orchestration یک Session؛ stop event، supervision فقط taskهای حیاتی، تشخیص completion امن، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
 | `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
-| `application/operational_approval.py` | delivery content-first، callback-to-command، زمان/availability هر مقصد، cancellation و sync نتیجه بدون Telegram SDK |
+| `bootstrap/approval_queue.py` | projection امن و read-only صف تحویل approval و retry صریح/idempotent یک proposal بدون reset مدیران موفق |
+| `application/operational_approval.py` | delivery content-first پیوسته با watermark، cap موفق تاریخی، pacing، backoff و recovery هر مدیر؛ callback-to-command و sync بدون Telegram SDK |
 | `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
 | `presentation/bot/runtime_handlers.py` | handlerهای SDK-independent برای `/start` و callback عملیاتی |
-| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease آماده‌ها، heartbeat Runtime، status/due/sync outbox و loader metadata/text/Entity/Media تأیید |
+| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease منصفانه با `claim_due_at`، وضعیت retry/permanent هر مدیر، heartbeat Runtime، status/due/sync outbox و loader تأیید |
 | `bootstrap/media_cleanup.py` | Composition Root یک‌مرحله‌ای cleanup محدود Media با reuse تنظیمات، repository و storage موجود |
 | `bootstrap/scheduling.py` | Composition Root عملیاتی Session/Premium، MongoDB، Publisher و Worker پایدار |
 | `bootstrap/__init__.py` | API عمومی Composition Root و CLI بدون اجرای Startup هنگام import |

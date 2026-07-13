@@ -249,12 +249,20 @@ class ApprovalBotApplication:
                 max_backlog_per_startup=(
                     settings.telegram.bot.approval_delivery_max_per_startup
                 ),
+                max_attempts=settings.telegram.bot.approval_retry_max_attempts,
                 logger=self._foundation.logger,
             )
             loop = ApprovalDeliveryLoop(
                 delivery,
                 poll_seconds=float(
                     settings.telegram.bot.approval_delivery_poll_seconds
+                ),
+                delivery_interval_seconds=float(
+                    getattr(
+                        settings.telegram.bot,
+                        "approval_delivery_interval_seconds",
+                        1,
+                    )
                 ),
             )
             self._delivery_task = asyncio.create_task(

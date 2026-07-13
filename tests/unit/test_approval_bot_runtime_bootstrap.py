@@ -128,8 +128,14 @@ class Foundation:
 
 
 class IdleDeliveryLoop:
-    def __init__(self, worker: object, *, poll_seconds: float) -> None:
-        del worker, poll_seconds
+    def __init__(
+        self,
+        worker: object,
+        *,
+        poll_seconds: float,
+        delivery_interval_seconds: float,
+    ) -> None:
+        del worker, poll_seconds, delivery_interval_seconds
 
     async def run(self) -> None:
         await asyncio.Event().wait()

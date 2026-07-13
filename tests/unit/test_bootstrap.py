@@ -990,6 +990,51 @@ def test_cli_cancellation_requires_job_id_and_is_explicitly_dispatched(
     assert "AlreadyCancelled" in capsys.readouterr().out
 
 
+def test_cli_inspects_and_explicitly_retries_approval_queue(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inspected: list[tuple[Path, str]] = []
+    retried: list[tuple[Path, str]] = []
+
+    async def inspect(path: Path, *, status: str, **_kwargs: object) -> tuple[str, ...]:
+        inspected.append((path, status))
+        return ("approval_post_id=short | content_kind=album | status=retry",)
+
+    async def retry(path: Path, *, approval_post_id: str, **_kwargs: object) -> bool:
+        retried.append((path, approval_post_id))
+        return True
+
+    monkeypatch.setattr(cli_module, "inspect_approval_queue", inspect)
+    monkeypatch.setattr(cli_module, "retry_approval_delivery", retry)
+    assert (
+        cli_module.main(
+            ["approval-queue", "--config", "queue.json", "--status", "retry"],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.SUCCESS
+    )
+    assert (
+        cli_module.main(
+            [
+                "approval-retry",
+                "--config",
+                "queue.json",
+                "--approval-post-id",
+                "proposal-exact",
+            ],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.SUCCESS
+    )
+    assert inspected == [(Path("queue.json"), "retry")]
+    assert retried == [(Path("queue.json"), "proposal-exact")]
+    output = capsys.readouterr().out
+    assert "approval_post_id=short" in output
+    assert "approval_retry_queued=true" in output
+
+
 def test_import_and_reload_do_not_execute_startup_or_open_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

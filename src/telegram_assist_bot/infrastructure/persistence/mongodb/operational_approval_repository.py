@@ -10,6 +10,7 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from telegram_assist_bot.application.ports import (
+    ApprovalAdministratorDeliveryState,
     ApprovalContent,
     ApprovalDeliveryClaim,
     ApprovalPost,
@@ -33,10 +34,12 @@ async def initialize_operational_approval_indexes(
     await deliveries.create_index(
         [
             ("status", ASCENDING),
-            ("next_attempt_at", ASCENDING),
+            ("claim_due_at", ASCENDING),
+            ("created_at", ASCENDING),
             ("lease_until", ASCENDING),
+            ("_id", ASCENDING),
         ],
-        name="ix_approval_delivery_claim_v1",
+        name="ix_approval_delivery_claim_v2",
     )
 
 
@@ -127,22 +130,30 @@ class MongoOperationalApprovalRepository:
                         "_id": item["_id"],
                         "status": "pending",
                         "ready_at": item["ready_at"],
+                        "created_at": item["ready_at"],
+                        "claim_due_at": item["ready_at"],
                         "attempt_count": 0,
+                        "administrator_deliveries": {},
                         "destination_statuses": {},
                         "sync_version": 0,
                         "sync_required": False,
                     }
                 )
-        query: Document = {
-            "$and": [
-                {"attempt_count": {"$lt": self._max_attempts}},
+            await self._deliveries.update_one(
+                {"_id": item["_id"], "claim_due_at": {"$exists": False}},
                 {
-                    "$or": [
-                        {"status": "pending"},
-                        {"status": "retry", "next_attempt_at": {"$lte": now}},
-                        {"status": "claimed", "lease_until": {"$lte": now}},
-                    ]
+                    "$set": {
+                        "claim_due_at": item["ready_at"],
+                        "created_at": item["ready_at"],
+                        "administrator_deliveries": {},
+                    }
                 },
+            )
+        query: Document = {
+            "$or": [
+                {"status": "pending"},
+                {"status": "retry", "next_attempt_at": {"$lte": now}},
+                {"status": "claimed", "lease_until": {"$lte": now}},
             ]
         }
         if ready_after is not None:
@@ -155,39 +166,151 @@ class MongoOperationalApprovalRepository:
                     "claim_owner": owner,
                     "lease_until": lease_until,
                     "next_attempt_at": None,
+                    "claim_due_at": lease_until,
                 },
                 "$inc": {"attempt_count": 1},
             },
-            sort=[("ready_at", ASCENDING), ("_id", ASCENDING)],
+            sort=[
+                ("claim_due_at", ASCENDING),
+                ("created_at", ASCENDING),
+                ("_id", ASCENDING),
+            ],
             return_document=ReturnDocument.AFTER,
         )
         if document is None:
             return None
+        states = tuple(
+            ApprovalAdministratorDeliveryState(
+                int(identifier),
+                value.get("status", "pending"),
+                int(value.get("attempt_count", 0)),
+                value.get("next_attempt_at"),
+                value.get("delivery_phase", "pending"),
+                value.get("failure_type"),
+            )
+            for identifier, value in document.get(
+                "administrator_deliveries", {}
+            ).items()
+        )
         return ApprovalDeliveryClaim(
-            document["_id"], owner, lease_until, document["ready_at"]
+            document["_id"],
+            owner,
+            lease_until,
+            document["ready_at"],
+            int(document.get("attempt_count", 0)),
+            states,
         )
 
     async def complete_delivery(self, post_id: str, *, owner: str) -> bool:
         """Complete one logical delivery only for its current lease owner."""
         result = await self._deliveries.update_one(
             {"_id": post_id, "status": "claimed", "claim_owner": owner},
-            {"$set": {"status": "completed", "claim_owner": None, "lease_until": None}},
+            {
+                "$set": {
+                    "status": "completed",
+                    "claim_owner": None,
+                    "lease_until": None,
+                    "claim_due_at": None,
+                }
+            },
         )
         return result.modified_count == 1
 
     async def release_delivery(
-        self, post_id: str, *, owner: str, category: str, next_attempt_at: datetime
+        self,
+        post_id: str,
+        *,
+        owner: str,
+        category: str,
+        next_attempt_at: datetime,
+        failure_type: str | None = None,
+        delivery_phase: str | None = None,
+        terminal: bool = False,
     ) -> bool:
         """Release one owned delivery with a safe retry category."""
         result = await self._deliveries.update_one(
             {"_id": post_id, "status": "claimed", "claim_owner": owner},
             {
                 "$set": {
-                    "status": "retry",
+                    "status": "permanent_failed" if terminal else "retry",
                     "claim_owner": None,
                     "lease_until": None,
                     "next_attempt_at": next_attempt_at,
+                    "claim_due_at": None if terminal else next_attempt_at,
                     "last_error_category": category,
+                    "last_failure_type": failure_type,
+                    "last_delivery_phase": delivery_phase,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def record_administrator_delivery(
+        self,
+        post_id: str,
+        administrator_id: int,
+        *,
+        owner: str,
+        status: str,
+        attempt_count: int,
+        delivery_phase: str,
+        next_attempt_at: datetime | None = None,
+        failure_category: str | None = None,
+        failure_type: str | None = None,
+    ) -> bool:
+        """Persist one administrator result without resetting other progress."""
+        key = f"administrator_deliveries.{administrator_id}"
+        result = await self._deliveries.update_one(
+            {"_id": post_id, "status": "claimed", "claim_owner": owner},
+            {
+                "$set": {
+                    key: {
+                        "status": status,
+                        "attempt_count": attempt_count,
+                        "next_attempt_at": next_attempt_at,
+                        "delivery_phase": delivery_phase,
+                        "failure_category": failure_category,
+                        "failure_type": failure_type,
+                    }
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def retry_delivery(self, post_id: str, *, now: datetime) -> bool:
+        """Idempotently requeue only failed administrator phases for one Post."""
+        document = await self._deliveries.find_one({"_id": post_id})
+        if document is None or document.get("status") in {
+            "pending",
+            "retry",
+            "claimed",
+            "completed",
+        }:
+            return False
+        states = document.get("administrator_deliveries", {})
+        reset = {
+            identifier: {
+                **value,
+                "status": "retry"
+                if value.get("status") == "permanent_failed"
+                else value.get("status"),
+                "attempt_count": 0
+                if value.get("status") == "permanent_failed"
+                else value.get("attempt_count", 0),
+                "next_attempt_at": now
+                if value.get("status") == "permanent_failed"
+                else value.get("next_attempt_at"),
+            }
+            for identifier, value in states.items()
+        }
+        result = await self._deliveries.update_one(
+            {"_id": post_id, "status": "permanent_failed"},
+            {
+                "$set": {
+                    "status": "retry",
+                    "next_attempt_at": now,
+                    "claim_due_at": now,
+                    "administrator_deliveries": reset,
                 }
             },
         )

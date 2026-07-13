@@ -299,9 +299,29 @@ uv run --python 3.12 python -m telegram_assist_bot publication-cancel `
 هیچ‌یک از دو فرمان صف، Telegram User API یا Session را باز نمی‌کند و inspection
 هیچ job موجودی را اجرا یا خودکار لغو نمی‌کند.
 
-`telegram.bot.approval_delivery_max_per_startup` (default `10`) bounds the
-initial approval-delivery backlog. Bot API delivery failures are retried through
-the durable outbox after the administrator starts or unblocks the bot.
+`telegram.bot.approval_delivery_max_per_startup` (default `10`) فقط تعداد
+پیشنهادهای تاریخیِ منحصربه‌فرد و موفق را در هر startup محدود می‌کند. retry یا
+خطای یک پیشنهاد این سهمیه را مصرف نمی‌کند؛ پیشنهادهای ساخته‌شده پس از watermark
+شروع نیز در تمام عمر process پیوسته تحویل می‌شوند. فاصلهٔ pacing موفق‌ها با
+`telegram.bot.approval_delivery_interval_seconds` (default `1`) تنظیم می‌شود.
+ترتیب claim بر پایهٔ زمان تلاش بعدی، زمان ایجاد و شناسهٔ پایدار است و پیشرفت هر
+مدیر جداگانه نگه‌داری می‌شود.
+
+صف تحویل تأیید را می‌توان بدون بارگذاری متن یا مسیر Media و بدون اجرای Telegram
+به‌صورت read-only دید:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot approval-queue `
+  --config config/configuration.local.json --status retry
+```
+
+و فقط یک پیشنهاد دقیق را می‌توان به‌شکل idempotent برای retry صریح آزاد کرد؛
+referenceهای موفق مدیران reset نمی‌شوند:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot approval-retry `
+  --config config/configuration.local.json --approval-post-id <exact-id>
+```
 
 فرمان‌های `ingest`، `ingest-text` و `schedule-worker` سازگار مانده‌اند، اما نباید
 هم‌زمان با `runtime` روی همان `session_path` اجرا شوند. lock سیستم‌عامل اجرای رقیب

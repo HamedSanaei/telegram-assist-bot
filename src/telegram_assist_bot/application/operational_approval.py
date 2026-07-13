@@ -20,7 +20,11 @@ from telegram_assist_bot.application.approvals import (
     RenderApprovalHeader,
     ToggleStatus,
 )
-from telegram_assist_bot.application.ports import ApprovalDeliveryRateLimitError
+from telegram_assist_bot.application.ports import (
+    ApprovalDeliveryRateLimitError,
+    ApprovalDeliveryRejectedError,
+    ApprovalDeliveryUnavailableError,
+)
 from telegram_assist_bot.application.scheduling import (
     CancelRequest,
     CancelScheduledPost,
@@ -100,6 +104,7 @@ class ApprovalDeliveryWorker:
         lease_seconds: float,
         retry_seconds: float,
         max_backlog_per_startup: int = 10,
+        max_attempts: int = 3,
         logger: StructuredLogger | None = None,
     ) -> None:
         """Store durable delivery collaborators and bounded lease settings."""
@@ -117,12 +122,17 @@ class ApprovalDeliveryWorker:
         self._retry_seconds = retry_seconds
         self._logger = logger
         self._claimed_post_id: str | None = None
+        self._claimed_attempt_count = 0
         self._startup_at = clock().astimezone(UTC)
-        self._backlog_remaining = max_backlog_per_startup
+        self._historical_success_limit = max_backlog_per_startup
+        self._historical_successes = 0
+        self._max_attempts = max_attempts
+        self._idle = False
 
     async def execute_once(self) -> bool:
         """Contain every expected per-delivery failure and release its lease."""
         self._claimed_post_id = None
+        self._claimed_attempt_count = 0
         try:
             return await self._execute_once()
         except asyncio.CancelledError:
@@ -131,6 +141,7 @@ class ApprovalDeliveryWorker:
             return await self._release_claim_after_failure(error)
         finally:
             self._claimed_post_id = None
+            self._claimed_attempt_count = 0
 
     async def _release_claim_after_failure(self, error: BaseException) -> bool:
         """Persist a safe retry state for a claimed delivery failure."""
@@ -138,21 +149,37 @@ class ApprovalDeliveryWorker:
         if post_id is None:
             raise error
         category = getattr(error, "error_category", "transient")
-        delay = self._retry_seconds
+        failure_type = type(error).__name__
+        attempt_count = max(1, self._claimed_attempt_count)
+        delay = self._retry_delay(attempt_count)
         if isinstance(error, ApprovalDeliveryRateLimitError):
             delay = min(float(error.retry_after_seconds), self._lease_seconds)
+        terminal = attempt_count >= self._max_attempts
+        next_attempt_at = self._clock().astimezone(UTC) + timedelta(seconds=delay)
         await self._operational.release_delivery(
             post_id,
             owner=self._owner,
             category=category,
-            next_attempt_at=self._clock().astimezone(UTC) + timedelta(seconds=delay),
+            next_attempt_at=next_attempt_at,
+            failure_type=failure_type,
+            delivery_phase="proposal_loading",
+            terminal=terminal,
         )
         self._emit(
-            "approval_delivery_failed",
+            "approval_delivery_permanent_failed"
+            if terminal
+            else "approval_delivery_failed",
             approval_post_id=post_id,
+            administrator_identifier="not_applicable",
             failure_category=category,
+            failure_type=failure_type,
+            delivery_phase="proposal_loading",
+            content_kind="unknown",
+            attempt_count=attempt_count,
+            next_attempt_at=None if terminal else next_attempt_at,
+            terminal=terminal,
         )
-        return False
+        return True
 
     async def _execute_once(self) -> bool:
         """Deliver one logical Post and retain successful per-admin progress."""
@@ -162,14 +189,13 @@ class ApprovalDeliveryWorker:
             "now": now,
             "lease_until": now + timedelta(seconds=self._lease_seconds),
         }
-        if self._backlog_remaining == 0:
+        if self._historical_successes >= self._historical_success_limit:
             claim_kwargs["ready_after"] = self._startup_at
         claim = await self._operational.claim_ready(**claim_kwargs)  # type: ignore[arg-type]
         if claim is None:
             return False
         self._claimed_post_id = claim.post_id
-        if claim.ready_at is not None and claim.ready_at <= self._startup_at:
-            self._backlog_remaining -= 1
+        self._claimed_attempt_count = claim.attempt_count
         self._emit("approval_delivery_claimed", approval_post_id=claim.post_id)
         post = await self._loader.load(claim.post_id)
         header = self._header.execute(
@@ -190,31 +216,56 @@ class ApprovalDeliveryWorker:
                 f"📤 مقصد: {item.name}" for item in self._destinations
             ),
         )
-        failed = False
+        states = {item.administrator_id: item for item in claim.administrator_states}
+        pending_retry_times: list[datetime] = []
+        terminal_failures = 0
         for admin in self._administrators:
             reference_id = f"approval:{post.post_id}:{admin.telegram_user_id}"
             existing = await self._approvals.get_reference(reference_id)
             if existing is not None and existing.active:
+                saved_state = states.get(admin.telegram_user_id)
+                await self._record_administrator(
+                    post.post_id,
+                    admin.telegram_user_id,
+                    status="completed",
+                    attempt_count=saved_state.attempt_count
+                    if saved_state is not None
+                    else 0,
+                    delivery_phase="completed",
+                )
                 continue
-            selections = tuple(
-                [
-                    await self._approvals.get_selection(
-                        post.post_id, item.destination_id
-                    )
-                    for item in self._destinations
-                ]
-            )
-            keyboard = await self._keyboard.execute(
-                actor=admin,
-                post_id=post.post_id,
-                destinations=tuple(
-                    DestinationOption(item.destination_id, item.name)
-                    for item in self._destinations
-                ),
-                selections=selections,
-                now=now,
-            )
+            state = states.get(admin.telegram_user_id)
+            if state is not None and state.status == "permanent_failed":
+                terminal_failures += 1
+                continue
+            if (
+                state is not None
+                and state.next_attempt_at is not None
+                and state.next_attempt_at > now
+            ):
+                pending_retry_times.append(state.next_attempt_at)
+                continue
+            phase = "keyboard_rendering"
             try:
+                selections = tuple(
+                    [
+                        await self._approvals.get_selection(
+                            post.post_id, item.destination_id
+                        )
+                        for item in self._destinations
+                    ]
+                )
+                keyboard = await self._keyboard.execute(
+                    actor=admin,
+                    post_id=post.post_id,
+                    destinations=tuple(
+                        DestinationOption(item.destination_id, item.name)
+                        for item in self._destinations
+                    ),
+                    selections=selections,
+                    now=now,
+                )
+                phase = self._delivery_phase(existing)
                 await self._deliver.execute(
                     reference_id=reference_id,
                     actor_id=admin.telegram_user_id,
@@ -226,22 +277,173 @@ class ApprovalDeliveryWorker:
                 self._emit(
                     "approval_message_delivered",
                     approval_post_id=post.post_id,
-                    administrator_id=admin.telegram_user_id,
+                    administrator_identifier=admin.telegram_user_id,
+                    content_kind=post.content_type,
                 )
-            except (TimeoutError, OSError, RuntimeError):
-                failed = True
-        if failed:
+                if state is not None and state.attempt_count:
+                    self._emit(
+                        "approval_delivery_recovered",
+                        approval_post_id=post.post_id,
+                        administrator_identifier=admin.telegram_user_id,
+                        delivery_phase=phase,
+                        content_kind=post.content_type,
+                        attempt_count=state.attempt_count,
+                    )
+                await self._record_administrator(
+                    post.post_id,
+                    admin.telegram_user_id,
+                    status="completed",
+                    attempt_count=state.attempt_count if state is not None else 0,
+                    delivery_phase="completed",
+                )
+            except Exception as error:  # noqa: BLE001 - isolate each administrator.
+                attempts = (state.attempt_count if state is not None else 0) + 1
+                category = getattr(error, "error_category", "transient")
+                terminal = (
+                    isinstance(
+                        error,
+                        (
+                            ApprovalDeliveryRejectedError,
+                            ApprovalDeliveryUnavailableError,
+                        ),
+                    )
+                    or attempts >= self._max_attempts
+                )
+                next_attempt = None
+                if terminal:
+                    terminal_failures += 1
+                else:
+                    retry_delay = self._retry_delay(attempts)
+                    if isinstance(error, ApprovalDeliveryRateLimitError):
+                        retry_delay = min(
+                            float(error.retry_after_seconds), self._lease_seconds
+                        )
+                    next_attempt = now + timedelta(seconds=retry_delay)
+                    pending_retry_times.append(next_attempt)
+                failure_type = type(error).__name__
+                await self._record_administrator(
+                    post.post_id,
+                    admin.telegram_user_id,
+                    status="permanent_failed" if terminal else "retry",
+                    attempt_count=attempts,
+                    delivery_phase=phase,
+                    next_attempt_at=next_attempt,
+                    failure_category=category,
+                    failure_type=failure_type,
+                )
+                event_name = (
+                    "approval_delivery_permanent_failed"
+                    if terminal
+                    else "approval_delivery_failed"
+                )
+                self._emit(
+                    event_name,
+                    approval_post_id=post.post_id,
+                    administrator_identifier=admin.telegram_user_id,
+                    delivery_phase=phase,
+                    content_kind=post.content_type,
+                    attempt_count=attempts,
+                    failure_category=category,
+                    failure_type=failure_type,
+                    next_attempt_at=next_attempt,
+                    terminal=terminal,
+                )
+        if pending_retry_times:
+            next_attempt_at = min(pending_retry_times)
             await self._operational.release_delivery(
                 post.post_id,
                 owner=self._owner,
                 category="transient",
-                next_attempt_at=now + timedelta(seconds=self._retry_seconds),
+                next_attempt_at=next_attempt_at,
+                delivery_phase="administrator_delivery",
             )
-            self._emit("approval_delivery_failed", approval_post_id=post.post_id)
-            return False
-        await self._operational.complete_delivery(post.post_id, owner=self._owner)
+            self._emit(
+                "approval_delivery_deferred",
+                approval_post_id=post.post_id,
+                next_attempt_at=next_attempt_at,
+            )
+            return True
+        if terminal_failures:
+            await self._operational.release_delivery(
+                post.post_id,
+                owner=self._owner,
+                category="administrator_delivery",
+                next_attempt_at=now,
+                delivery_phase="administrator_delivery",
+                terminal=True,
+            )
+            return True
+        completed = await self._operational.complete_delivery(
+            post.post_id, owner=self._owner
+        )
+        if (
+            completed
+            and claim.ready_at is not None
+            and claim.ready_at <= self._startup_at
+        ):
+            self._historical_successes += 1
         self._emit("approval_delivery_completed", approval_post_id=post.post_id)
         return True
+
+    async def _record_administrator(
+        self,
+        post_id: str,
+        administrator_id: int,
+        *,
+        status: str,
+        attempt_count: int,
+        delivery_phase: str,
+        next_attempt_at: datetime | None = None,
+        failure_category: str | None = None,
+        failure_type: str | None = None,
+    ) -> None:
+        """Persist isolated administrator progress when the repository supports it."""
+        recorder = getattr(self._operational, "record_administrator_delivery", None)
+        if recorder is not None:
+            await recorder(
+                post_id,
+                administrator_id,
+                owner=self._owner,
+                status=status,
+                attempt_count=attempt_count,
+                delivery_phase=delivery_phase,
+                next_attempt_at=next_attempt_at,
+                failure_category=failure_category,
+                failure_type=failure_type,
+            )
+
+    def _retry_delay(self, attempt_count: int) -> float:
+        return float(
+            min(
+                self._retry_seconds * (2 ** max(0, attempt_count - 1)),
+                max(self._retry_seconds, self._lease_seconds),
+            )
+        )
+
+    @staticmethod
+    def _delivery_phase(reference: ApprovalReference | None) -> str:
+        if reference is None or reference.delivery_state.value in {
+            "pending",
+            "content_sending",
+        }:
+            return "content_message_send"
+        if reference.delivery_state.value == "content_sent":
+            return "reply_association"
+        if reference.delivery_state.value == "control_sending":
+            return "control_card_send"
+        return "message_reference_persistence"
+
+    def report_idle(self) -> None:
+        """Emit one idle transition rather than one event per poll."""
+        if not self._idle:
+            self._idle = True
+            self._emit("approval_delivery_worker_idle")
+
+    def report_resumed(self) -> None:
+        """Emit one resumed transition after idle polling finds work."""
+        if self._idle:
+            self._idle = False
+            self._emit("approval_delivery_worker_resumed")
 
     def _emit(self, event_name: str, **fields: object) -> None:
         if self._logger is not None:
@@ -591,16 +793,31 @@ class ApprovalCallbackExecutor:
 class ApprovalDeliveryLoop:
     """Run bounded delivery polling until cancellation."""
 
-    def __init__(self, worker: ApprovalDeliveryWorker, *, poll_seconds: float) -> None:
+    def __init__(
+        self,
+        worker: ApprovalDeliveryWorker,
+        *,
+        poll_seconds: float,
+        delivery_interval_seconds: float = 1,
+    ) -> None:
         """Store one worker and its bounded idle polling interval."""
         self._worker = worker
         self._poll_seconds = poll_seconds
+        self._delivery_interval_seconds = delivery_interval_seconds
 
     async def run(self) -> None:
         """Poll until cancellation and retain no work only in memory."""
         while True:
             worked = await self._worker.execute_once()
-            if not worked:
+            if worked:
+                reporter = getattr(self._worker, "report_resumed", None)
+                if reporter is not None:
+                    reporter()
+                await asyncio.sleep(self._delivery_interval_seconds)
+            else:
+                reporter = getattr(self._worker, "report_idle", None)
+                if reporter is not None:
+                    reporter()
                 await asyncio.sleep(self._poll_seconds)
 
 

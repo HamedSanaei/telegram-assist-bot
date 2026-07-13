@@ -134,6 +134,7 @@
 | [T063](tasks/T063-operational-runtime-startup-order.md) | Operational runtime startup ordering | T009–T012، T029–T033، T060–T062 | `5.2`، `5.17`، `5.18`، `13`، `14`، `16` | Completed |
 | [T064](tasks/T064-operational-runtime-lifetime.md) | Operational runtime lifetime supervision | T009–T012، T029–T033، T060–T063 | `5.2`، `5.17`، `5.18`، `13`، `14`، `16` | Completed |
 | [T065](tasks/T065-album-finalization-isolation.md) | Album finalization identity and failure isolation | T013–T019، T060، T063، T064 | `5.2`، `5.5`–`5.7`، `13`، `14`، `16` | Completed |
+| [T066](tasks/T066-approval-delivery-fairness.md) | Approval delivery fairness and continuous queue processing | T020–T026، T061–T065 | `5.12`–`5.19`، `13`، `14`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 

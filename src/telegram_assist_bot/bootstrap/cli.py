@@ -16,6 +16,10 @@ from telegram_assist_bot.bootstrap.approval_bot import (
     create_approval_bot_application,
     run_approval_bot_application,
 )
+from telegram_assist_bot.bootstrap.approval_queue import (
+    inspect_approval_queue,
+    retry_approval_delivery,
+)
 from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
@@ -134,6 +138,8 @@ def _parser() -> _SafeArgumentParser:
             "runtime",
             "publication-queue",
             "publication-cancel",
+            "approval-queue",
+            "approval-retry",
         ),
         default="check",
         help=(
@@ -142,7 +148,8 @@ def _parser() -> _SafeArgumentParser:
             "cleanup batch, 'schedule-worker' for standalone durable publication, "
             "'approval-bot' for Bot API polling, or 'runtime' for the single-owner "
             "ingestion and publication process; publication queue commands never "
-            "open Telegram sessions."
+            "open Telegram sessions; approval queue commands safely inspect or "
+            "explicitly retry one approval proposal."
         ),
     )
     parser.add_argument(
@@ -153,8 +160,13 @@ def _parser() -> _SafeArgumentParser:
             "default config/configuration.json path."
         ),
     )
-    parser.add_argument("--status", choices=("pending",), default="pending")
+    parser.add_argument(
+        "--status",
+        choices=("pending", "retry", "permanent-failed", "completed"),
+        default="pending",
+    )
     parser.add_argument("--job-id", metavar="ID")
+    parser.add_argument("--approval-post-id", metavar="ID")
     return parser
 
 
@@ -288,6 +300,31 @@ def main(
             )
         )
         sys.stdout.write(f"cancellation_result={result.value}\n")
+        exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "approval-queue":
+        rows = asyncio.run(
+            inspect_approval_queue(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                status=arguments.status,
+            )
+        )
+        for row in rows:
+            sys.stdout.write(f"{row}\n")
+        exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "approval-retry":
+        if not arguments.approval_post_id:
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        retried = asyncio.run(
+            retry_approval_delivery(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                approval_post_id=arguments.approval_post_id,
+            )
+        )
+        sys.stdout.write(f"approval_retry_queued={str(retried).lower()}\n")
         exit_code = FoundationExitCode.SUCCESS
     else:
         foundation_application = create_foundation_application(sink=sink)

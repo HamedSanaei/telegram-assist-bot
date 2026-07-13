@@ -28,8 +28,11 @@ from telegram_assist_bot.application.operational_approval import (
     OperationalDestination,
 )
 from telegram_assist_bot.application.ports import (
+    ApprovalAdministratorDeliveryState,
     ApprovalContent,
     ApprovalDeliveryClaim,
+    ApprovalDeliveryRateLimitError,
+    ApprovalDeliveryUnavailableError,
     ApprovalPost,
     ApprovalSyncClaim,
     BotEditOutcome,
@@ -476,6 +479,7 @@ class DeliveryOperational:
         self.available = True
         self.completed = 0
         self.released = 0
+        self.administrator_results: list[dict[str, object]] = []
 
     async def claim_ready(
         self,
@@ -497,10 +501,37 @@ class DeliveryOperational:
         return True
 
     async def release_delivery(
-        self, post_id: str, *, owner: str, category: str, next_attempt_at: datetime
+        self,
+        post_id: str,
+        *,
+        owner: str,
+        category: str,
+        next_attempt_at: datetime,
+        failure_type: str | None = None,
+        delivery_phase: str | None = None,
+        terminal: bool = False,
     ) -> bool:
-        del post_id, owner, category, next_attempt_at
+        del (
+            post_id,
+            owner,
+            category,
+            next_attempt_at,
+            failure_type,
+            delivery_phase,
+            terminal,
+        )
         self.released += 1
+        return True
+
+    async def record_administrator_delivery(
+        self,
+        post_id: str,
+        administrator_id: int,
+        **values: object,
+    ) -> bool:
+        self.administrator_results.append(
+            {"post_id": post_id, "administrator_id": administrator_id, **values}
+        )
         return True
 
 
@@ -573,7 +604,7 @@ def test_delivery_worker_releases_transient_partial_delivery() -> None:
             lease_seconds=30,
             retry_seconds=1,
         )
-        assert not await worker.execute_once()
+        assert await worker.execute_once()
         assert operational.released == 1
         reference = approvals.references["approval:post-1:7"]
         assert reference.delivery_state is ApprovalDeliveryState.CONTENT_SENDING
@@ -630,7 +661,7 @@ def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -
         assert successful.completed == 1
 
         retrying = DeliveryOperational()
-        assert not await worker(retrying, FailingGateway()).execute_once()
+        assert await worker(retrying, FailingGateway()).execute_once()
         assert retrying.released == 1
 
         names = [event["event_name"] for event in events]
@@ -721,6 +752,425 @@ def test_delivery_resume_skips_existing_reference_and_loop_sleeps(
             await loop.run()
 
     asyncio.run(scenario())
+
+
+def test_failed_retries_do_not_consume_historical_success_budget() -> None:
+    class QueueOperational(DeliveryOperational):
+        def __init__(self) -> None:
+            super().__init__()
+            self.claims = [
+                ("failing", NOW - timedelta(minutes=3)),
+                ("failing", NOW - timedelta(minutes=3)),
+                ("failing", NOW - timedelta(minutes=3)),
+                ("healthy", NOW - timedelta(minutes=2)),
+                ("new", NOW + timedelta(seconds=1)),
+            ]
+            self.ready_filters: list[datetime | None] = []
+
+        async def claim_ready(
+            self,
+            *,
+            owner: str,
+            now: datetime,
+            lease_until: datetime,
+            ready_after: datetime | None = None,
+        ) -> ApprovalDeliveryClaim | None:
+            del now
+            self.ready_filters.append(ready_after)
+            for index, (post_id, ready_at) in enumerate(self.claims):
+                if ready_after is None or ready_at > ready_after:
+                    self.claims.pop(index)
+                    return ApprovalDeliveryClaim(post_id, owner, lease_until, ready_at)
+            return None
+
+    class QueueLoader(Loader):
+        async def load(self, post_id: str) -> ApprovalPost:
+            post = await super().load(post_id)
+            return replace(
+                post,
+                content=ApprovalContent("fail" if post_id == "failing" else "ok", None),
+            )
+
+    class SelectiveGateway(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            if content.text == "fail":
+                raise TimeoutError
+            return await super().send_content(chat_id, content)
+
+    async def scenario() -> None:
+        approvals = MemoryRepository()
+        operational = QueueOperational()
+        worker = ApprovalDeliveryWorker(
+            cast("OperationalApprovalRepository", operational),
+            approvals,
+            QueueLoader(),
+            DeliverApproval(SelectiveGateway(), approvals),
+            BuildDestinationKeyboard(
+                CallbackTokenService(approvals, lambda size: b"q" * size)
+            ),
+            RenderApprovalHeader(),
+            (administrator(),),
+            (OperationalDestination(DESTINATION, "مقصد"),),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            retry_seconds=1,
+            max_backlog_per_startup=1,
+        )
+        for _ in range(5):
+            assert await worker.execute_once()
+        assert operational.completed == 2
+        assert operational.ready_filters[:4] == [None, None, None, None]
+        assert operational.ready_filters[4] == NOW
+
+    asyncio.run(scenario())
+
+
+def test_per_administrator_failure_preserves_other_successful_reference() -> None:
+    class OneAdminFails(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            if chat_id == 7:
+                raise TimeoutError
+            return await super().send_content(chat_id, content)
+
+    async def scenario() -> None:
+        approvals = MemoryRepository()
+        operational = DeliveryOperational()
+        gateway = OneAdminFails()
+        worker = ApprovalDeliveryWorker(
+            cast("OperationalApprovalRepository", operational),
+            approvals,
+            Loader(),
+            DeliverApproval(gateway, approvals),
+            BuildDestinationKeyboard(
+                CallbackTokenService(approvals, lambda size: b"a" * size)
+            ),
+            RenderApprovalHeader(),
+            (administrator(7), administrator(8)),
+            (OperationalDestination(DESTINATION, "مقصد"),),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            retry_seconds=1,
+        )
+        assert await worker.execute_once()
+        assert approvals.references["approval:post-1:8"].active
+        operational.available = True
+        assert await worker.execute_once()
+        assert len([item for item in gateway.sent if item[0] == 8]) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "content_kind", ["text", "photo", "video", "document", "album"]
+)
+def test_content_kind_failures_are_isolated_and_safely_diagnosed(
+    content_kind: str,
+) -> None:
+    class KindLoader(Loader):
+        async def load(self, post_id: str) -> ApprovalPost:
+            return replace(await super().load(post_id), content_type=content_kind)
+
+    class FailingGateway(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            del chat_id, content
+            raise TimeoutError
+
+    async def scenario() -> None:
+        events: list[dict[str, object]] = []
+        approvals = MemoryRepository()
+        logger = StructuredLogger(
+            sink=lambda event: events.append(dict(event)),
+            clock=lambda: NOW,
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.DEBUG,
+        )
+        worker = ApprovalDeliveryWorker(
+            cast("OperationalApprovalRepository", DeliveryOperational()),
+            approvals,
+            KindLoader(),
+            DeliverApproval(FailingGateway(), approvals),
+            BuildDestinationKeyboard(
+                CallbackTokenService(approvals, lambda size: b"k" * size)
+            ),
+            RenderApprovalHeader(),
+            (administrator(),),
+            (OperationalDestination(DESTINATION, "مقصد"),),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            retry_seconds=1,
+            logger=logger,
+        )
+        assert await worker.execute_once()
+        failure = next(
+            event
+            for event in events
+            if event["event_name"] == "approval_delivery_failed"
+        )
+        assert failure["content_kind"] == content_kind
+        assert failure["delivery_phase"] == "content_message_send"
+        assert "error_message" not in failure
+
+    asyncio.run(scenario())
+
+
+def test_proposal_loading_failures_are_bounded_and_preserve_cancellation() -> None:
+    class LoadingFailure(Loader):
+        async def load(self, post_id: str) -> ApprovalPost:
+            del post_id
+            raise ApprovalDeliveryRateLimitError(90)
+
+    class AttemptOperational(DeliveryOperational):
+        def __init__(self, attempt_count: int) -> None:
+            super().__init__()
+            self.attempt_count = attempt_count
+            self.terminal = False
+
+        async def claim_ready(
+            self,
+            *,
+            owner: str,
+            now: datetime,
+            lease_until: datetime,
+            ready_after: datetime | None = None,
+        ) -> ApprovalDeliveryClaim | None:
+            del now, ready_after
+            if not self.available:
+                return None
+            self.available = False
+            return ApprovalDeliveryClaim(
+                "post-1", owner, lease_until, NOW, self.attempt_count
+            )
+
+        async def release_delivery(
+            self,
+            post_id: str,
+            *,
+            owner: str,
+            category: str,
+            next_attempt_at: datetime,
+            failure_type: str | None = None,
+            delivery_phase: str | None = None,
+            terminal: bool = False,
+        ) -> bool:
+            self.terminal = terminal
+            return await super().release_delivery(
+                post_id,
+                owner=owner,
+                category=category,
+                next_attempt_at=next_attempt_at,
+                failure_type=failure_type,
+                delivery_phase=delivery_phase,
+                terminal=terminal,
+            )
+
+    def worker(
+        operational: AttemptOperational, loader: Loader
+    ) -> ApprovalDeliveryWorker:
+        approvals = MemoryRepository()
+        return ApprovalDeliveryWorker(
+            cast("OperationalApprovalRepository", operational),
+            approvals,
+            loader,
+            DeliverApproval(Gateway(), approvals),
+            BuildDestinationKeyboard(
+                CallbackTokenService(approvals, lambda size: b"l" * size)
+            ),
+            RenderApprovalHeader(),
+            (administrator(),),
+            (OperationalDestination(DESTINATION, "مقصد"),),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            retry_seconds=1,
+            max_attempts=3,
+        )
+
+    async def scenario() -> None:
+        retrying = AttemptOperational(1)
+        assert await worker(retrying, LoadingFailure()).execute_once()
+        assert not retrying.terminal
+        terminal = AttemptOperational(3)
+        assert await worker(terminal, LoadingFailure()).execute_once()
+        assert terminal.terminal
+
+        class CancelledLoader(Loader):
+            async def load(self, post_id: str) -> ApprovalPost:
+                del post_id
+                raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await worker(AttemptOperational(1), CancelledLoader()).execute_once()
+
+        class BrokenClaim(AttemptOperational):
+            async def claim_ready(
+                self, **kwargs: object
+            ) -> ApprovalDeliveryClaim | None:
+                del kwargs
+                raise RuntimeError("safe synthetic failure")
+
+        with pytest.raises(RuntimeError, match="safe synthetic"):
+            await worker(BrokenClaim(1), Loader()).execute_once()
+
+    asyncio.run(scenario())
+
+
+def test_deferred_terminal_recovered_and_idle_delivery_paths() -> None:
+    class StatefulOperational(DeliveryOperational):
+        def __init__(self, state: ApprovalAdministratorDeliveryState) -> None:
+            super().__init__()
+            self.state = state
+            self.terminal = False
+
+        async def claim_ready(
+            self,
+            *,
+            owner: str,
+            now: datetime,
+            lease_until: datetime,
+            ready_after: datetime | None = None,
+        ) -> ApprovalDeliveryClaim | None:
+            del now, ready_after
+            if not self.available:
+                return None
+            self.available = False
+            return ApprovalDeliveryClaim(
+                "post-1", owner, lease_until, NOW, 1, (self.state,)
+            )
+
+        async def release_delivery(
+            self,
+            post_id: str,
+            *,
+            owner: str,
+            category: str,
+            next_attempt_at: datetime,
+            failure_type: str | None = None,
+            delivery_phase: str | None = None,
+            terminal: bool = False,
+        ) -> bool:
+            self.terminal = terminal
+            return await super().release_delivery(
+                post_id,
+                owner=owner,
+                category=category,
+                next_attempt_at=next_attempt_at,
+                failure_type=failure_type,
+                delivery_phase=delivery_phase,
+                terminal=terminal,
+            )
+
+    class RateLimitedGateway(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            del chat_id, content
+            raise ApprovalDeliveryRateLimitError(2)
+
+    async def run_case(
+        state: ApprovalAdministratorDeliveryState, gateway: Gateway
+    ) -> tuple[StatefulOperational, list[str], ApprovalDeliveryWorker]:
+        operational = StatefulOperational(state)
+        approvals = MemoryRepository()
+        events: list[str] = []
+
+        class Logger:
+            def emit(self, *, event_name: str, **kwargs: object) -> None:
+                del kwargs
+                events.append(event_name)
+
+        worker = ApprovalDeliveryWorker(
+            cast("OperationalApprovalRepository", operational),
+            approvals,
+            Loader(),
+            DeliverApproval(gateway, approvals),
+            BuildDestinationKeyboard(
+                CallbackTokenService(approvals, lambda size: b"s" * size)
+            ),
+            RenderApprovalHeader(),
+            (administrator(),),
+            (OperationalDestination(DESTINATION, "مقصد"),),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            retry_seconds=1,
+            logger=cast("Any", Logger()),
+        )
+        assert await worker.execute_once()
+        return operational, events, worker
+
+    async def scenario() -> None:
+        future = ApprovalAdministratorDeliveryState(
+            7, "retry", 1, NOW + timedelta(seconds=10)
+        )
+        deferred, _, _ = await run_case(future, Gateway())
+        assert not deferred.terminal
+
+        permanent = ApprovalAdministratorDeliveryState(7, "permanent_failed", 3)
+        terminal, _, _ = await run_case(permanent, Gateway())
+        assert terminal.terminal
+
+        recovered_state = ApprovalAdministratorDeliveryState(7, "retry", 1, NOW)
+        _, events, recovered = await run_case(recovered_state, Gateway())
+        assert "approval_delivery_recovered" in events
+        recovered.report_idle()
+        recovered.report_idle()
+        recovered.report_resumed()
+        recovered.report_resumed()
+        assert events.count("approval_delivery_worker_idle") == 1
+        assert events.count("approval_delivery_worker_resumed") == 1
+
+        rate_state = ApprovalAdministratorDeliveryState(7, "retry", 1, NOW)
+        _, rate_events, _ = await run_case(rate_state, RateLimitedGateway())
+        assert "approval_delivery_failed" in rate_events
+
+        unavailable = ApprovalAdministratorDeliveryState(7, "retry", 1, NOW)
+
+        class UnavailableGateway(Gateway):
+            async def send_content(
+                self, chat_id: int, content: ApprovalContent
+            ) -> tuple[int, ...]:
+                del chat_id, content
+                raise ApprovalDeliveryUnavailableError
+
+        unavailable_result, unavailable_events, _ = await run_case(
+            unavailable, UnavailableGateway()
+        )
+        assert unavailable_result.terminal
+        assert "approval_delivery_permanent_failed" in unavailable_events
+
+    asyncio.run(scenario())
+
+
+def test_delivery_phase_diagnostics_cover_restart_states() -> None:
+    base = ApprovalReference("ref", 7, 7, "post", 0, (), active=False)
+    assert ApprovalDeliveryWorker._delivery_phase(None) == "content_message_send"
+    assert (
+        ApprovalDeliveryWorker._delivery_phase(
+            replace(base, delivery_state=ApprovalDeliveryState.CONTENT_SENT)
+        )
+        == "reply_association"
+    )
+    assert (
+        ApprovalDeliveryWorker._delivery_phase(
+            replace(base, delivery_state=ApprovalDeliveryState.CONTROL_SENDING)
+        )
+        == "control_card_send"
+    )
+    assert (
+        ApprovalDeliveryWorker._delivery_phase(
+            replace(base, delivery_state=ApprovalDeliveryState.COMPLETED)
+        )
+        == "message_reference_persistence"
+    )
 
 
 def test_operational_edge_paths_remain_safe_and_retryable() -> None:
