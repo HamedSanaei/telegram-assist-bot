@@ -153,7 +153,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client |
 | `bootstrap/telegram_login.py` | Composition Root ورود صریح و prompt امن بدون Secret در CLI/log |
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
-| `bootstrap/text_ingestion.py` | orchestration کامل Foundation، ingestion و publication با یک Session، Album finalizer، heartbeat پایدار Runtime و shutdown معکوس |
+| `bootstrap/text_ingestion.py` | orchestration یک Session؛ heartbeat/publication/live پیش از crawl background، supervision حیاتی، retry ایزولهٔ history و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
 | `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
 | `application/operational_approval.py` | delivery content-first، callback-to-command، زمان/availability هر مقصد، cancellation و sync نتیجه بدون Telegram SDK |

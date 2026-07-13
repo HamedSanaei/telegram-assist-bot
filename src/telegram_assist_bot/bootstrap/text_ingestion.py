@@ -196,6 +196,10 @@ class FullTextIngestionGateway(TextIngestionGateway, Protocol):
 class RuntimeWorker(Protocol):
     """Describe one cancellation-safe operational background worker."""
 
+    async def wait_ready(self) -> None:
+        """Wait until heartbeat and publication polling are both active."""
+        ...
+
     async def run(self) -> None:
         """Run until cancellation."""
         ...
@@ -387,8 +391,9 @@ class TextIngestionApplication:
                     )
                 )
                 ingestor = self._runtime_ingestor
-            for source in sources:
-                crawler = CrawlTodayTextPosts(
+
+            def crawler() -> CrawlTodayTextPosts:
+                return CrawlTodayTextPosts(
                     gateway=gateway,
                     ingestor=ingestor,
                     clock=self._dependencies.clock,
@@ -400,7 +405,14 @@ class TextIngestionApplication:
                     page_size=ingestion_config.history_page_size,
                     max_pages=ingestion_config.history_max_pages,
                 )
-                result = await crawler.execute(
+
+            async def crawl_source(source: ResolvedTelegramChannel) -> None:
+                logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="history_crawl_started",
+                    fields={"source_channel_id": source.channel_id},
+                )
+                result = await crawler().execute(
                     source.channel_id,
                     correlation_id=correlation_id,
                 )
@@ -416,6 +428,18 @@ class TextIngestionApplication:
                         "already_existing": result.already_existing,
                     },
                 )
+
+                logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="history_crawl_completed",
+                    fields={
+                        "source_channel_id": source.channel_id,
+                        "created": result.created,
+                        "already_existing": result.already_existing,
+                    },
+                )
+
+            def start_listener(source: ResolvedTelegramChannel) -> None:
                 listener = LiveTextListener(
                     gateway=gateway,
                     handler=HandleLiveMessage(ingestor),
@@ -438,12 +462,41 @@ class TextIngestionApplication:
                 )
                 self._listener_tasks.append(cast_task(task))
                 self._subscriptions.remove(prepared[source.channel_id])
-            if self._runtime_ingestor is not None:
-                album_task = asyncio.create_task(
-                    self._run_album_finalizer(), name="telegram-album-finalizer"
+
+            async def run_history_crawl() -> None:
+                retry_delay = min(
+                    30.0,
+                    max(
+                        0.1,
+                        float(ingestion_config.reconnect_initial_delay_seconds),
+                    ),
                 )
-                self._listener_tasks.append(cast_task(album_task))
+                for source in sources:
+                    while True:
+                        try:
+                            await crawl_source(source)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as error:  # noqa: BLE001 - isolated retry loop.
+                            logger.emit(
+                                level=LogLevel.ERROR,
+                                event_name="history_crawl_failed",
+                                fields={
+                                    "source_channel_id": source.channel_id,
+                                    "failure_category": getattr(
+                                        error, "error_category", "transient"
+                                    ),
+                                    "failure_type": type(error).__name__,
+                                },
+                            )
+                            await self._dependencies.sleeper(retry_delay)
+                            continue
+                        break
+
             if self._dependencies.runtime_worker_factory is not None:
+                logger.emit(
+                    level=LogLevel.INFO, event_name="operational_runtime_starting"
+                )
                 operational_worker = await self._dependencies.runtime_worker_factory(
                     loaded, report, gateway, self._dependencies.foundation
                 )
@@ -451,7 +504,50 @@ class TextIngestionApplication:
                     operational_worker.run(), name="operational-publication"
                 )
                 self._listener_tasks.append(cast_task(publication_task))
+                readiness_task = asyncio.create_task(
+                    operational_worker.wait_ready(), name="operational-readiness"
+                )
+                done, _pending = await asyncio.wait(
+                    (publication_task, readiness_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if publication_task in done:
+                    readiness_task.cancel()
+                    await asyncio.gather(readiness_task, return_exceptions=True)
+                    await publication_task
+                    raise TextIngestionStartupError
+                await readiness_task
+                for source in sources:
+                    start_listener(source)
+                await asyncio.sleep(0)
+                logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="live_ingestion_started",
+                    fields={"source_count": len(sources)},
+                )
+                if self._runtime_ingestor is not None:
+                    album_task = asyncio.create_task(
+                        self._run_album_finalizer(), name="telegram-album-finalizer"
+                    )
+                    self._listener_tasks.append(cast_task(album_task))
+                self._state = _State.READY
                 logger.emit(level=LogLevel.INFO, event_name="operational_runtime_ready")
+                history_task = asyncio.create_task(
+                    run_history_crawl(), name="telegram-history-crawl"
+                )
+                self._listener_tasks.append(cast_task(history_task))
+            else:
+                for source in sources:
+                    await crawl_source(source)
+                    start_listener(source)
+            if (
+                self._runtime_ingestor is not None
+                and self._dependencies.runtime_worker_factory is None
+            ):
+                album_task = asyncio.create_task(
+                    self._run_album_finalizer(), name="telegram-album-finalizer"
+                )
+                self._listener_tasks.append(cast_task(album_task))
             self._state = _State.READY
             logger.emit(
                 level=LogLevel.INFO,
@@ -813,48 +909,107 @@ async def _create_publication_worker(
         await immediate.execute_once()
         await scheduled.execute_once()
 
+    publication_poll_seconds = min(1.0, float(publishing.worker_poll_seconds))
     publication_worker = ScheduledPublicationWorker(
-        run_once, poll_seconds=float(publishing.worker_poll_seconds)
+        run_once, poll_seconds=publication_poll_seconds
     )
+    ready = asyncio.Event()
 
     class OperationalWorker:
+        async def wait_ready(self) -> None:
+            """Wait until the first heartbeat and publication loop are active."""
+            await ready.wait()
+
         async def run(self) -> None:
+            """Supervise heartbeat and publication as independent critical tasks."""
             started_at = datetime.now(UTC)
-            interval = max(1.0, float(publishing.worker_poll_seconds))
+            heartbeat_interval = max(
+                1.0, min(5.0, float(publishing.worker_poll_seconds))
+            )
+            heartbeat_ready = asyncio.Event()
+            publication_ready = asyncio.Event()
 
             async def pulse() -> None:
+                await heartbeat.beat(
+                    owner,
+                    started_at=started_at,
+                    now=datetime.now(UTC),
+                    status="running",
+                )
+                owned_foundation.logger.emit(
+                    level=LogLevel.INFO, event_name="runtime_heartbeat_active"
+                )
+                heartbeat_ready.set()
                 while True:
+                    await asyncio.sleep(heartbeat_interval)
                     await heartbeat.beat(
                         owner,
                         started_at=started_at,
                         now=datetime.now(UTC),
                         status="running",
                     )
-                    await asyncio.sleep(interval)
+
+            async def publish_due() -> None:
+                owned_foundation.logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="publication_worker_started",
+                    fields={"publication_poll_seconds": publication_poll_seconds},
+                )
+                publication_ready.set()
+                await publication_worker.run()
 
             publication_task = asyncio.create_task(
-                publication_worker.run(), name="runtime-publication"
+                publish_due(), name="runtime-publication"
             )
             heartbeat_task = asyncio.create_task(pulse(), name="runtime-heartbeat")
+
+            async def await_readiness() -> None:
+                await asyncio.gather(heartbeat_ready.wait(), publication_ready.wait())
+
+            readiness_task = asyncio.create_task(
+                await_readiness(), name="runtime-critical-readiness"
+            )
             try:
+                started, _pending = await asyncio.wait(
+                    (readiness_task, publication_task, heartbeat_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if readiness_task not in started:
+                    completed = next(iter(started))
+                    await completed
+                    raise RuntimeError("Critical operational worker stopped.")
+                await readiness_task
+                ready.set()
                 done, _pending = await asyncio.wait(
                     (publication_task, heartbeat_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                await asyncio.gather(*done)
+                completed = next(iter(done))
+                await completed
+                raise RuntimeError("Critical operational worker stopped.")
             finally:
-                for task in (publication_task, heartbeat_task):
+                for task in (readiness_task, publication_task, heartbeat_task):
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(
-                    publication_task, heartbeat_task, return_exceptions=True
+                    readiness_task,
+                    publication_task,
+                    heartbeat_task,
+                    return_exceptions=True,
                 )
-                await heartbeat.beat(
-                    owner,
-                    started_at=started_at,
-                    now=datetime.now(UTC),
-                    status="stopped",
-                )
+                try:
+                    await heartbeat.beat(
+                        owner,
+                        started_at=started_at,
+                        now=datetime.now(UTC),
+                        status="stopped",
+                    )
+                except Exception as error:  # noqa: BLE001 - preserve critical cause.
+                    owned_foundation.logger.emit(
+                        level=LogLevel.ERROR,
+                        event_name="runtime_heartbeat_stop_failed",
+                        fields={"failure_type": type(error).__name__},
+                    )
 
     return OperationalWorker()
 

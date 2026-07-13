@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pymongo import AsyncMongoClient
 
-from telegram_assist_bot.domain import publication_identity
+from telegram_assist_bot.application.publication import PublishResult, PublishStatus
+from telegram_assist_bot.application.scheduling import RunDuePublication, RunDueStatus
+from telegram_assist_bot.domain import ScheduleStatus, publication_identity
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
     MongoOperationalApprovalRepository,
@@ -18,6 +20,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb import (
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
 )
+from telegram_assist_bot.workers import ScheduledPublicationWorker
 
 if TYPE_CHECKING:
     from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
@@ -362,6 +365,80 @@ def test_future_scheduled_job_is_not_claimed_early_and_due_job_is_claimed_once(
                 ),
             )
             assert sum(item is not None for item in claims) == 1
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_poll_claims_new_immediate_job_within_two_seconds_and_restart_is_idle(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            schedules = database["scheduled_publications"]
+            queues = database["schedule_queues"]
+            await initialize_publication_indexes(
+                database["publications"], schedules, queues
+            )
+            repository = MongoScheduleRepository(schedules, queues)
+            published = asyncio.Event()
+            publication_count = 0
+
+            async def build(_post_id: str, _destination_id: int) -> object:
+                return object()
+
+            async def publish(_request: object) -> PublishResult:
+                nonlocal publication_count
+                publication_count += 1
+                published.set()
+                return PublishResult(PublishStatus.SUCCEEDED)
+
+            def use_case(owner: str) -> RunDuePublication:
+                return RunDuePublication(
+                    cast("Any", repository),
+                    owner=owner,
+                    clock=lambda: datetime.now(UTC),
+                    lease_seconds=30,
+                    max_attempts=3,
+                    retry_delay_seconds=1,
+                    action="immediate",
+                    build_request=cast("Any", build),
+                    publish=cast("Any", publish),
+                )
+
+            worker = ScheduledPublicationWorker(
+                use_case("runtime-one").execute_once, poll_seconds=0.1
+            )
+            task = asyncio.create_task(worker.run())
+            await asyncio.sleep(0)
+            started = asyncio.get_running_loop().time()
+            identity = publication_identity("post-latency", -1001, "immediate")
+            await repository.reserve_immediate(
+                job_id=identity,
+                post_id="post-latency",
+                destination_id=-1001,
+                now=datetime.now(UTC),
+            )
+            await asyncio.wait_for(published.wait(), timeout=2)
+            elapsed = asyncio.get_running_loop().time() - started
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+            stored = await repository.get(identity)
+            assert elapsed < 2
+            assert publication_count == 1
+            assert stored is not None
+            assert stored.status is ScheduleStatus.COMPLETED
+            assert (
+                await use_case("runtime-after-restart").execute_once()
+                is RunDueStatus.IDLE
+            )
+            assert publication_count == 1
         finally:
             await client.close()
 
