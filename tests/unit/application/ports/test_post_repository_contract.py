@@ -253,6 +253,7 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "AlbumFinalizationStatus",
         "AdminMessagingGateway",
         "ApprovalContent",
         "ApprovalDeliveryError",
@@ -275,6 +276,7 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "InsertPostResult",
         "InlineButton",
         "InlineKeyboard",
+        "InvalidMediaGroupRecordError",
         "InvalidPostRepositoryRequestError",
         "MediaDownloadSpec",
         "MediaGroup",

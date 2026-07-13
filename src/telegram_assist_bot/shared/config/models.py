@@ -350,6 +350,9 @@ class MediaStorageConfig(_FrozenConfigModel):
     orphan_grace_seconds: Annotated[StrictInt, Field(ge=60, le=604800)] = 3600
     album_quiet_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 3
     album_maximum_wait_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 30
+    album_finalization_retry_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 5
+    album_finalization_lease_seconds: Annotated[StrictInt, Field(ge=5, le=3600)] = 300
+    album_finalization_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
 
 
 class CategoryConfig(_FrozenConfigModel):

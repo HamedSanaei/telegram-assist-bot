@@ -67,7 +67,7 @@ class MongoTestSettings(Protocol):
     database_name: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class Clock:
     """Return one deterministic time for crawl and preparation boundaries."""
 
@@ -396,11 +396,16 @@ def test_history_live_album_overlap_restart_and_graceful_shutdown(
         )
         first_source = MediaSource()
         first_gateway = Gateway((photo, text, *album), [photo, video], first_source)
+        first_clock = Clock(now)
         first, first_foundation = await create_application(
-            mongodb_test_settings, loaded, Clock(now), first_gateway
+            mongodb_test_settings, loaded, first_clock, first_gateway
         )
         await first.start(Path("synthetic.json"), environ={})
         database = first_foundation.client[mongodb_test_settings.database_name]
+        await wait_for_count(
+            database["media_groups"], {"members.2": {"$exists": True}}, 1
+        )
+        first_clock.now += timedelta(seconds=4)
         await wait_for_count(
             database["content_preparations"],
             {"ready_at": {"$exists": True}},

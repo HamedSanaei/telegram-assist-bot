@@ -239,12 +239,15 @@
 - **Decision:** `LocalMediaStorage` فقط زیر root خصوصی پیکربندی‌شده، با stream،
   hash/size هم‌زمان، temp یکتا و rename اتمیک می‌نویسد. MongoDB metadata، Album،
   duplicate/category، artifact مقصد و readiness را نگه می‌دارد. Album deadlineهای
-  quiet/max-wait و finalization CAS دارد؛ عضو دیررس پس از finalization نادیده گرفته
-  می‌شود. Pipeline هر نتیجهٔ پایدار را پیش از اجرای مرحله reload و readiness را
+  quiet/max-wait بر پایهٔ زمان observation دارد؛ observation پیش از دانلود ثبت
+  می‌شود و finalization با claim/lease، retry bounded و terminal state هر گروه
+  انجام می‌گیرد. anchor از Post canonical همان source/group استخراج می‌شود و عضو
+  دیررس پس از finalization نادیده گرفته می‌شود. Pipeline هر نتیجهٔ پایدار را پیش از اجرای مرحله reload و readiness را
   مشروط ایجاد می‌کند.
 - **Reason:** فایل committed سالم از شکست پایگاه‌داده جان سالم به در می‌برد و در
   restart بدون truncate بازیابی می‌شود؛ state پایدار و عملیات اتمیک نیز correctness
-  چند worker را بدون singleton، timer منبع حقیقت یا check-then-write تأمین می‌کند.
+  چند worker را بدون singleton، timer منبع حقیقت یا check-then-write تأمین می‌کند؛
+  malformed بودن یک گروه نیز task بحرانی Runtime را متوقف نمی‌کند.
 - **Consequences:** binary Media خارج MongoDB و خارج Git است؛ backup باید MongoDB
   و root خصوصی را هماهنگ پوشش دهد. POSIX permissionها best-effort و محرمانگی Windows
   وابسته به ACL است. Object Storage و orchestration محصولی خارج از Milestone 2 است.

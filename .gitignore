@@ -77,3 +77,4 @@ Thumbs.db
 !/tests/fixtures/**
 config/configuration.local.env
 .pytest-tmp-*
+artifacts/*

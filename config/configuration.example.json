@@ -110,7 +110,10 @@
     "cleanup_batch_size": 100,
     "orphan_grace_seconds": 3600,
     "album_quiet_seconds": 3,
-    "album_maximum_wait_seconds": 30
+    "album_maximum_wait_seconds": 30,
+    "album_finalization_retry_seconds": 5,
+    "album_finalization_lease_seconds": 300,
+    "album_finalization_max_attempts": 3
   },
   "categorization": {
     "categories": [

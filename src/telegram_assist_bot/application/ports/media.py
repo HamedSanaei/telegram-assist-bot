@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -46,6 +47,28 @@ class MediaPermanentError(MediaOperationError):
 
 class MediaTooLargeError(MediaPermanentError):
     """Report a stream exceeding its configured maximum size."""
+
+
+class AlbumFinalizationStatus(StrEnum):
+    """Describe durable per-group finalization state."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    PERMANENT_FAILED = "permanent_failed"
+
+
+class InvalidMediaGroupRecordError(MediaPermanentError):
+    """Report one safely identified malformed persisted media group."""
+
+    def __init__(
+        self, group_key: str, *, attempt_count: int, media_member_count: int
+    ) -> None:
+        """Retain only safe retry metadata required for group isolation."""
+        self.group_key = group_key
+        self.attempt_count = attempt_count
+        self.media_member_count = media_member_count
+        super().__init__("Persisted media group metadata is invalid.")
 
 
 class MediaSource(Protocol):
@@ -105,6 +128,8 @@ class MediaGroupMember:
     media: StoredMedia
     caption: str | None = None
     caption_entities: tuple[TelegramEntity, ...] = ()
+    observed_at: datetime | None = None
+    telegram_group_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +145,14 @@ class MediaGroup:
     finalize_after: datetime
     maximum_wait_until: datetime
     finalized_at: datetime | None = None
+    observed_message_ids: tuple[int, ...] = ()
+    finalization_status: AlbumFinalizationStatus = AlbumFinalizationStatus.PENDING
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    claim_owner: str | None = None
+    claim_expires_at: datetime | None = None
+    failure_category: str | None = None
+    canonical_source_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +205,15 @@ class ContentPreparationRepository(Protocol):
         """Append one replay-safe group member."""
         ...
 
+    async def observe_group_member(
+        self,
+        group: MediaGroup,
+        *,
+        source_message_id: int,
+    ) -> MediaGroup:
+        """Persist arrival before a potentially slow media download."""
+        ...
+
     async def get_group(self, group_key: str) -> MediaGroup | None:
         """Load one durable media group."""
         ...
@@ -184,6 +226,49 @@ class ContentPreparationRepository(Protocol):
         self, *, now: datetime, limit: int
     ) -> tuple[MediaGroup, ...]:
         """List a bounded deterministic batch awaiting finalization."""
+        ...
+
+    async def claim_due_group(
+        self,
+        *,
+        now: datetime,
+        owner: str,
+        lease_until: datetime,
+    ) -> MediaGroup | None:
+        """Atomically claim one due or expired-lease group."""
+        ...
+
+    async def complete_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        canonical_source_message_id: int,
+    ) -> bool:
+        """Complete one claimed group with its stable anchor identity."""
+        ...
+
+    async def defer_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        next_attempt_at: datetime,
+        failure_category: str,
+    ) -> bool:
+        """Release one claimed group for bounded retry."""
+        ...
+
+    async def fail_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        failure_category: str,
+    ) -> bool:
+        """Permanently fail only one claimed malformed group."""
         ...
 
     async def find_duplicate(
