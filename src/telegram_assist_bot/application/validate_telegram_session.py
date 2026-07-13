@@ -12,6 +12,7 @@ from telegram_assist_bot.application.ports import (
     TelegramGatewayError,
     TelegramValidationGateway,
 )
+from telegram_assist_bot.shared.errors import classify_error
 
 
 class TelegramPremiumRequiredError(Exception):
@@ -84,6 +85,8 @@ class ValidateTelegramSession:
             try:
                 resolved = await self.gateway.resolve_channel(reference)
             except TelegramGatewayError as error:
+                if classify_error(error).retryable:
+                    raise
                 issues.append(
                     TelegramChannelValidationIssue(
                         configuration_path=reference.configuration_path,
