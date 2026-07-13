@@ -73,6 +73,7 @@ class Runner:
 
 class Worker:
     instances: ClassVar[list[Worker]] = []
+    fail: ClassVar[bool] = False
 
     def __init__(self, run_once: object, *, poll_seconds: float) -> None:
         self.run_once = cast("Any", run_once)
@@ -80,6 +81,8 @@ class Worker:
         self.instances.append(self)
 
     async def run(self) -> None:
+        if self.fail:
+            raise RuntimeError("synthetic publication loop failure")
         await self.run_once()
         await asyncio.Event().wait()
 
@@ -122,7 +125,8 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         Heartbeat.beats.clear()
         Heartbeat.fail = False
         Worker.instances.clear()
-        events: list[str] = []
+        Worker.fail = False
+        emitted: list[dict[str, object]] = []
 
         async def initialize(*args: object) -> None:
             del args
@@ -165,9 +169,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         database = Database()
         foundation = SimpleNamespace(
             mongodb_client={"test": database},
-            logger=SimpleNamespace(
-                emit=lambda **values: events.append(cast("str", values["event_name"]))
-            ),
+            logger=SimpleNamespace(emit=lambda **values: emitted.append(dict(values))),
         )
         shared_publisher = object()
         gateway = SimpleNamespace(
@@ -199,8 +201,9 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         assert Operational.statuses == ["published", "permanent_failed"]
         assert Heartbeat.beats == ["running", "stopped"]
         assert Worker.instances[0].poll_seconds == 1.0
-        assert "runtime_heartbeat_active" in events
-        assert "publication_worker_started" in events
+        names = [cast("str", item["event_name"]) for item in emitted]
+        assert "runtime_heartbeat_active" in names
+        assert "publication_worker_started" in names
 
         Heartbeat.fail = True
         failing = await module._create_publication_worker(
@@ -209,8 +212,43 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
             cast("Any", gateway),
             cast("Any", foundation),
         )
-        with pytest.raises(RuntimeError, match="heartbeat"):
+        with pytest.raises(module.OperationalRuntimeError) as heartbeat_failure:
             await failing.run()
+        assert isinstance(heartbeat_failure.value.__cause__, RuntimeError)
+        heartbeat_event = next(
+            item
+            for item in reversed(emitted)
+            if item["event_name"] == "runtime_task_completed_unexpectedly"
+        )
+        assert heartbeat_event["fields"] == {
+            "task_name": "runtime-heartbeat",
+            "completion_kind": "failed",
+            "failure_type": "RuntimeError",
+        }
+
+        Heartbeat.fail = False
+        Worker.fail = True
+        publication_failing = await module._create_publication_worker(
+            cast("Any", loaded),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        with pytest.raises(module.OperationalRuntimeError) as publication_failure:
+            await publication_failing.run()
+        assert isinstance(publication_failure.value.__cause__, RuntimeError)
+        publication_event = next(
+            item
+            for item in reversed(emitted)
+            if item["event_name"] == "runtime_task_completed_unexpectedly"
+            and cast("dict[str, object]", item["fields"])["task_name"]
+            == "runtime-publication"
+        )
+        assert publication_event["fields"] == {
+            "task_name": "runtime-publication",
+            "completion_kind": "failed",
+            "failure_type": "RuntimeError",
+        }
         monkeypatch.setattr(
             module, "create_foundation_application", lambda **kwargs: object()
         )

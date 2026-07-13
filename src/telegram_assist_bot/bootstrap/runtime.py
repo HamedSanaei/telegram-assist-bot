@@ -425,11 +425,11 @@ class FoundationApplication:
 
         return self
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, reason: str = "requested") -> None:
         """Close each owned resource once; repeated or concurrent calls are safe."""
         if self._state is _LifecycleState.STARTING:
             raise FoundationLifecycleError
-        task = self._ensure_shutdown_task(reason="requested")
+        task = self._ensure_shutdown_task(reason=reason)
         if task is None:
             if self._state is _LifecycleState.NEW:
                 self._state = _LifecycleState.STOPPED
@@ -615,7 +615,7 @@ class FoundationApplication:
             raise FoundationInfrastructureError
 
     async def _cleanup_preserving(self, original_error: BaseException) -> None:
-        task = self._ensure_shutdown_task(reason="startup_failure")
+        task = self._ensure_shutdown_task(reason="startup_failed")
         if task is None:
             return
         try:

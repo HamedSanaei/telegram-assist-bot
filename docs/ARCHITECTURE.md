@@ -123,9 +123,15 @@ ready می‌شوند؛ live listenerها شروع می‌شوند؛ `operationa
 می‌شود؛ سپس history crawl در task غیرحیاتی و retryشونده آغاز می‌شود. poll مؤثر
 runtime حداکثر یک ثانیه است، ولی durable truth همچنان MongoDB و claim/lease موجود
 است. crawl کامل‌شده می‌تواند task خود را خاتمه دهد؛ failure آن فقط safe category/type
-ثبت و retry می‌شود. پایان غیرمنتظره یا failure heartbeat/publication و exception
-live listener به lifecycle اصلی propagate می‌شود. shutdown همهٔ taskها را پیش از
-بستن gateway و Foundation cancel/gather می‌کند.
+ثبت و retry می‌شود. lifecycle با stop event صریح فقط taskهای واقعاً بلندمدت شامل
+heartbeat، publication، consumer زنده، Album finalizer و signal قطع همان client را
+supervise می‌کند؛ listener registration و crawl تک‌مرحله‌ای lifetime نیستند. gateway
+روی همان client بازشده `disconnected` را await می‌کند و client یا Session دومی
+نمی‌سازد. بازگشت عادی، cancellation یا failure task حیاتی پیش از shutdown با event
+`runtime_task_completed_unexpectedly` و فقط `task_name`، `completion_kind` و
+`failure_type` امن ثبت می‌شود. علت shutdown یکی از `requested`،
+`critical_task_failed`، `telethon_disconnected` یا `startup_failed` است. shutdown
+همهٔ taskها را پیش از بستن gateway و Foundation cancel/gather می‌کند.
 
 ## 4. مدل Domain
 

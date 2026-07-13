@@ -123,7 +123,8 @@ class Foundation:
         del configuration_path, environ
         return self
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, reason: str = "requested") -> None:
+        del reason
         if self.shutdown_calls == 0:
             await close_mongodb_client(self.client, timeout_seconds=5)
         self.shutdown_calls += 1

@@ -149,6 +149,10 @@ class TelethonTextIngestionGateway:
         self._client = None
         await self.session.close()
 
+    async def wait_disconnected(self) -> None:
+        """Wait for the shared Telethon connection lifetime to end."""
+        await self.session.wait_disconnected()
+
     def _require_client(self) -> TelethonTextClient:
         if self._client is None:
             raise TelegramSessionInvalidError

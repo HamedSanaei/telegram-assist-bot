@@ -32,7 +32,7 @@ from telegram_assist_bot.infrastructure.telegram.user.session_adapter import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine
+    from collections.abc import Awaitable, Coroutine
     from pathlib import Path
 
 
@@ -55,6 +55,13 @@ class FakeClient:
     path: Path
     state: SessionState
     calls: list[str] = field(default_factory=list)
+    disconnect_event: asyncio.Event | None = None
+
+    @property
+    def disconnected(self) -> Awaitable[object]:
+        if self.disconnect_event is None:
+            self.disconnect_event = asyncio.Event()
+        return self.disconnect_event.wait()
 
     async def connect(self) -> None:
         self.calls.append("connect")
@@ -63,6 +70,8 @@ class FakeClient:
 
     async def disconnect(self) -> None:
         self.calls.append("disconnect")
+        if self.disconnect_event is not None:
+            self.disconnect_event.set()
         if self.state.authorized:
             self.path.write_text("synthetic-authorized-session", encoding="utf-8")
 
@@ -171,7 +180,7 @@ def test_concrete_client_factory_uses_bounded_connection_resilience(
     assert captured["request_retries"] == 1
     assert captured["retry_delay"] == 1
     assert captured["auto_reconnect"] is False
-    assert captured["receive_updates"] is False
+    assert captured["receive_updates"] is True
 
 
 def test_existing_unauthorized_session_reports_invalid_status(tmp_path: Path) -> None:
@@ -270,6 +279,29 @@ def test_open_authorized_client_holds_lock_until_idempotent_close(
     run(gateway.close())
     with pytest.raises(TelegramSessionInvalidError):
         _ = gateway.connected_client
+
+
+def test_wait_disconnected_uses_the_already_open_owned_client(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session_path = tmp_path / "source.session"
+        session_path.write_text("synthetic", encoding="utf-8")
+        factory = FakeFactory(SessionState(authorized=True))
+        gateway = adapter(tmp_path, factory)
+        await gateway.open_authorized_client()
+        client = factory.clients[0]
+
+        waiter = asyncio.create_task(gateway.wait_disconnected())
+        await asyncio.sleep(0)
+        assert waiter.done() is False
+        assert len(factory.clients) == 1
+
+        assert client.disconnect_event is not None
+        client.disconnect_event.set()
+        await asyncio.wait_for(waiter, timeout=1)
+        await gateway.close()
+        assert len(factory.clients) == 1
+
+    run(scenario())
 
 
 def test_open_unauthorized_client_releases_lock_and_reports_invalid(

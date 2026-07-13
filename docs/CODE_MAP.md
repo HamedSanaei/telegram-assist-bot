@@ -153,7 +153,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client |
 | `bootstrap/telegram_login.py` | Composition Root ورود صریح و prompt امن بدون Secret در CLI/log |
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
-| `bootstrap/text_ingestion.py` | orchestration یک Session؛ heartbeat/publication/live پیش از crawl background، supervision حیاتی، retry ایزولهٔ history و shutdown معکوس |
+| `bootstrap/text_ingestion.py` | orchestration یک Session؛ stop event، supervision فقط taskهای حیاتی، تشخیص completion امن، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
 | `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
 | `application/operational_approval.py` | delivery content-first، callback-to-command، زمان/availability هر مقصد، cancellation و sync نتیجه بدون Telegram SDK |
@@ -201,11 +201,11 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
 | `infrastructure/telegram/user/media_adapter.py` | تبدیل reference داخلی به stream محدود Telethon بدون نشت SDK به Application |
-| `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium و channel access |
+| `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium، channel access و await کردن disconnect همان client مالک |
 | `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16 |
 | `infrastructure/telegram/user/history_adapter.py` | pagination و query bounded History بدون token SDK در Application |
 | `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، reconnect/FloodWait و unsubscribe cancellation-safe |
-| `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener و ساخت MediaSource روی همان client |
+| `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji و ارسال متن/Media/Album با Telethon User API |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |

@@ -98,6 +98,15 @@ class TelethonValidationClientProtocol(TelethonClientProtocol, Protocol):
         ...
 
 
+class TelethonDisconnectClientProtocol(TelethonClientProtocol, Protocol):
+    """Describe the connected Telethon lifetime signal."""
+
+    @property
+    def disconnected(self) -> Awaitable[object]:
+        """Return an awaitable completed when the client disconnects."""
+        ...
+
+
 type TelethonClientFactory = Callable[[Path, int, str, float], TelethonClientProtocol]
 type AsyncSleep = Callable[[float], Awaitable[None]]
 type MonotonicClock = Callable[[], float]
@@ -121,7 +130,7 @@ def create_telethon_client(
         retry_delay=1,
         auto_reconnect=False,
         flood_sleep_threshold=0,
-        receive_updates=False,
+        receive_updates=True,
     )
     return cast("TelethonClientProtocol", client)
 
@@ -482,6 +491,11 @@ class TelethonSessionAdapter:
     async def close(self) -> None:
         """Close any pending client and release the session lock idempotently."""
         await self.abort_login()
+
+    async def wait_disconnected(self) -> None:
+        """Wait for the already-owned client to disconnect without opening another."""
+        client = cast("TelethonDisconnectClientProtocol", self.connected_client)
+        await client.disconnected
 
     async def _finish_login(self) -> None:
         client = self._client
