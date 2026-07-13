@@ -117,6 +117,16 @@ active و heartbeat stale/stopped را offline تفسیر می‌کند؛ این
 `CancelScheduledPost` و policy موجود لغو می‌کند؛ هیچ command بازرسی Session را باز
 نمی‌کند.
 
+ترتیب startup عملیاتی پس از validation و بازشدن همان Telethon client چنین است:
+subscriptionها ساخته می‌شوند؛ heartbeat اولیه و publication polling حیاتی شروع و
+ready می‌شوند؛ live listenerها شروع می‌شوند؛ `operational_runtime_ready` صادر
+می‌شود؛ سپس history crawl در task غیرحیاتی و retryشونده آغاز می‌شود. poll مؤثر
+runtime حداکثر یک ثانیه است، ولی durable truth همچنان MongoDB و claim/lease موجود
+است. crawl کامل‌شده می‌تواند task خود را خاتمه دهد؛ failure آن فقط safe category/type
+ثبت و retry می‌شود. پایان غیرمنتظره یا failure heartbeat/publication و exception
+live listener به lifecycle اصلی propagate می‌شود. shutdown همهٔ taskها را پیش از
+بستن gateway و Foundation cancel/gather می‌کند.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای

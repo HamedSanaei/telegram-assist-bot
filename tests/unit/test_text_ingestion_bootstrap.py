@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -443,6 +443,231 @@ def test_cancellation_during_crawl_propagates_after_cleanup() -> None:
         assert gateway.close_calls == 1
         assert foundation.shutdown_calls == 1
         assert app.is_ready is False
+
+    run(scenario())
+
+
+@dataclass
+class BlockingSubscription(Subscription):
+    entered: asyncio.Event | None = None
+
+    async def __anext__(self) -> TelegramTextMessage:
+        assert self.entered is not None
+        self.order.append("live_started")
+        self.entered.set()
+        await asyncio.Event().wait()
+        raise StopAsyncIteration
+
+
+@dataclass
+class RuntimeGateway(Gateway):
+    history_entered: asyncio.Event | None = None
+    history_release: asyncio.Event | None = None
+    live_entered: asyncio.Event | None = None
+    second_history_attempt: asyncio.Event | None = None
+    fail_first_history: bool = False
+    history_attempts: int = 0
+
+    async def subscribe(
+        self, source_channel_id: int, *, buffer_size: int
+    ) -> BlockingSubscription:
+        del source_channel_id, buffer_size
+        self.order.append("subscribe")
+        self.subscription = BlockingSubscription(
+            [], self.order, entered=self.live_entered
+        )
+        return self.subscription
+
+    async def iter_history_pages(
+        self,
+        query: TelegramHistoryQuery,
+    ) -> AsyncIterator[TelegramHistoryPage]:
+        del query
+        self.history_attempts += 1
+        if self.history_attempts >= 2 and self.second_history_attempt is not None:
+            self.second_history_attempt.set()
+        self.order.append("history_started")
+        assert self.history_entered is not None
+        self.history_entered.set()
+        if self.fail_first_history and self.history_attempts == 1:
+            raise RuntimeError("synthetic history failure")
+        assert self.history_release is not None
+        await self.history_release.wait()
+        yield TelegramHistoryPage(())
+
+
+class CriticalRuntimeWorker:
+    def __init__(self, order: list[str]) -> None:
+        self.order = order
+        self.ready = asyncio.Event()
+        self.fail = asyncio.Event()
+        self.heartbeat_count = 0
+        self.publication_polls = 0
+        self.immediate_job = asyncio.Event()
+        self.immediate_published = asyncio.Event()
+        self.publication_count = 0
+        self.stopped = asyncio.Event()
+        self.second_heartbeat = asyncio.Event()
+
+    async def wait_ready(self) -> None:
+        await self.ready.wait()
+
+    async def run(self) -> None:
+        self.order.extend(("heartbeat_active", "publication_started"))
+        self.heartbeat_count = 1
+        self.publication_polls = 1
+        self.ready.set()
+        try:
+            while not self.fail.is_set():
+                await asyncio.sleep(0.01)
+                self.heartbeat_count += 1
+                self.publication_polls += 1
+                if (
+                    self.immediate_job.is_set()
+                    and not self.immediate_published.is_set()
+                ):
+                    self.publication_count += 1
+                    self.immediate_published.set()
+                if self.heartbeat_count >= 2:
+                    self.second_heartbeat.set()
+            raise RuntimeError("synthetic critical failure")
+        finally:
+            self.order.append("runtime_stopped")
+            self.stopped.set()
+
+
+def runtime_application(
+    gateway: RuntimeGateway,
+    foundation: Foundation,
+    worker: CriticalRuntimeWorker,
+    *,
+    sleeper: object | None = None,
+) -> TextIngestionApplication:
+    async def worker_factory(*_args: object) -> CriticalRuntimeWorker:
+        return worker
+
+    return TextIngestionApplication(
+        TextIngestionDependencies(
+            foundation=foundation,
+            gateway_factory=lambda _loaded: gateway,
+            clock=Clock(),
+            post_id_factory=lambda identity: PostId(
+                f"post-{identity.source_channel_id}-{identity.source_message_id}"
+            ),
+            sleeper=cast("Any", sleeper or (lambda _delay: asyncio.sleep(0))),
+            jitter_source=lambda: 0.5,
+            runtime_worker_factory=worker_factory,
+        )
+    )
+
+
+def test_operational_services_and_live_start_before_blocked_history() -> None:
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        history_entered = asyncio.Event()
+        live_entered = asyncio.Event()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=history_entered,
+            history_release=asyncio.Event(),
+            live_entered=live_entered,
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker)
+
+        await app.start(Path("synthetic.json"), environ={})
+        await asyncio.wait_for(history_entered.wait(), timeout=1)
+        await asyncio.wait_for(live_entered.wait(), timeout=1)
+        worker.immediate_job.set()
+        await asyncio.wait_for(worker.immediate_published.wait(), timeout=1)
+
+        assert app.is_ready
+        assert worker.heartbeat_count >= 1
+        assert worker.publication_polls >= 1
+        assert worker.publication_count == 1
+        assert order.index("heartbeat_active") < order.index("history_started")
+        assert order.index("publication_started") < order.index("history_started")
+        assert order.index("live_started") < order.index("history_started")
+        names = [event["event_name"] for event in sink.events]
+        assert names.index("operational_runtime_starting") < names.index(
+            "operational_runtime_ready"
+        )
+        assert names.index("operational_runtime_ready") < names.index(
+            "history_crawl_started"
+        )
+
+        await app.shutdown()
+        assert worker.stopped.is_set()
+        assert order.index("runtime_stopped") < order.index("telegram_close")
+        assert order.index("telegram_close") < order.index("foundation_shutdown")
+
+    run(scenario())
+
+
+def test_history_failure_retries_without_stopping_critical_services() -> None:
+    async def scenario() -> None:
+        foundation, _, order = setup()
+        retry_started = asyncio.Event()
+
+        async def sleeper(_delay: float) -> None:
+            retry_started.set()
+            await asyncio.sleep(0)
+
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+            second_history_attempt=asyncio.Event(),
+            fail_first_history=True,
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker, sleeper=sleeper)
+
+        await app.start(Path("synthetic.json"), environ={})
+        await asyncio.wait_for(retry_started.wait(), timeout=1)
+        assert gateway.second_history_attempt is not None
+        await asyncio.wait_for(gateway.second_history_attempt.wait(), timeout=1)
+        await asyncio.wait_for(worker.second_heartbeat.wait(), timeout=1)
+
+        assert app.is_ready
+        assert gateway.history_attempts >= 2
+        assert worker.publication_polls >= 2
+        await app.shutdown()
+
+    run(scenario())
+
+
+def test_critical_runtime_failure_propagates_and_drains_every_task() -> None:
+    async def scenario() -> None:
+        foundation, _, order = setup()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker)
+        await app.start(Path("synthetic.json"), environ={})
+        worker.fail.set()
+
+        with pytest.raises(RuntimeError, match="critical"):
+            await app.wait()
+        tasks = tuple(app._listener_tasks)
+        await app.shutdown()
+
+        assert worker.stopped.is_set()
+        assert gateway.close_calls == 1
+        assert foundation.shutdown_calls == 1
+        assert tasks
+        assert all(task.done() for task in tasks)
 
     run(scenario())
 

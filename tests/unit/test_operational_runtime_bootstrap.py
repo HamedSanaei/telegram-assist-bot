@@ -5,16 +5,15 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
+
+import pytest
 
 import telegram_assist_bot.bootstrap.text_ingestion as module
 from telegram_assist_bot.application.ports import PublicationPayload
 from telegram_assist_bot.application.publication import PublishResult, PublishStatus
 from telegram_assist_bot.application.scheduling import RunDueStatus
 from telegram_assist_bot.domain import ScheduledPublication
-
-if TYPE_CHECKING:
-    import pytest
 
 
 class Database(dict[str, object]):
@@ -73,17 +72,21 @@ class Runner:
 
 
 class Worker:
+    instances: ClassVar[list[Worker]] = []
+
     def __init__(self, run_once: object, *, poll_seconds: float) -> None:
         self.run_once = cast("Any", run_once)
         self.poll_seconds = poll_seconds
+        self.instances.append(self)
 
     async def run(self) -> None:
         await self.run_once()
-        await asyncio.sleep(0)
+        await asyncio.Event().wait()
 
 
 class Operational:
     statuses: ClassVar[list[str]] = []
+    completed: ClassVar[asyncio.Event | None] = None
 
     def __init__(self, *args: object) -> None:
         del args
@@ -91,16 +94,21 @@ class Operational:
     async def record_destination_status(self, *args: object, **kwargs: object) -> None:
         del args
         self.statuses.append(cast("str", kwargs["status"]))
+        if len(self.statuses) >= 2 and self.completed is not None:
+            self.completed.set()
 
 
 class Heartbeat:
     beats: ClassVar[list[str]] = []
+    fail: ClassVar[bool] = False
 
     def __init__(self, collection: object) -> None:
         del collection
 
     async def beat(self, *args: object, **kwargs: object) -> None:
         del args
+        if self.fail:
+            raise RuntimeError("synthetic heartbeat failure")
         self.beats.append(cast("str", kwargs["status"]))
 
 
@@ -110,7 +118,11 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
     async def scenario() -> None:
         Runner.instances.clear()
         Operational.statuses.clear()
+        Operational.completed = asyncio.Event()
         Heartbeat.beats.clear()
+        Heartbeat.fail = False
+        Worker.instances.clear()
+        events: list[str] = []
 
         async def initialize(*args: object) -> None:
             del args
@@ -153,7 +165,9 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         database = Database()
         foundation = SimpleNamespace(
             mongodb_client={"test": database},
-            logger=SimpleNamespace(emit=lambda **_: None),
+            logger=SimpleNamespace(
+                emit=lambda **values: events.append(cast("str", values["event_name"]))
+            ),
         )
         shared_publisher = object()
         gateway = SimpleNamespace(
@@ -173,13 +187,30 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
             cast("Any", gateway),
             cast("Any", foundation),
         )
-        await worker.run()
+        task = asyncio.create_task(worker.run())
+        await worker.wait_ready()
+        await asyncio.wait_for(Operational.completed.wait(), timeout=1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         assert [item.action for item in Runner.instances] == [
             "immediate",
             "scheduled",
         ]
         assert Operational.statuses == ["published", "permanent_failed"]
         assert Heartbeat.beats == ["running", "stopped"]
+        assert Worker.instances[0].poll_seconds == 1.0
+        assert "runtime_heartbeat_active" in events
+        assert "publication_worker_started" in events
+
+        Heartbeat.fail = True
+        failing = await module._create_publication_worker(
+            cast("Any", loaded),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        with pytest.raises(RuntimeError, match="heartbeat"):
+            await failing.run()
         monkeypatch.setattr(
             module, "create_foundation_application", lambda **kwargs: object()
         )
