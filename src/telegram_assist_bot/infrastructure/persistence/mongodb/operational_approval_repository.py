@@ -68,7 +68,12 @@ class MongoOperationalApprovalRepository:
         self._max_attempts = max_attempts
 
     async def claim_ready(
-        self, *, owner: str, now: datetime, lease_until: datetime
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        ready_after: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
         """Seed missing outbox identities, then claim one eligible delivery."""
         cursor = self._preparations.find(
@@ -87,19 +92,22 @@ class MongoOperationalApprovalRepository:
                         "sync_required": False,
                     }
                 )
+        query: Document = {
+            "$and": [
+                {"attempt_count": {"$lt": self._max_attempts}},
+                {
+                    "$or": [
+                        {"status": "pending"},
+                        {"status": "retry", "next_attempt_at": {"$lte": now}},
+                        {"status": "claimed", "lease_until": {"$lte": now}},
+                    ]
+                },
+            ]
+        }
+        if ready_after is not None:
+            query["ready_at"] = {"$gt": ready_after}
         document = await self._deliveries.find_one_and_update(
-            {
-                "$and": [
-                    {"attempt_count": {"$lt": self._max_attempts}},
-                    {
-                        "$or": [
-                            {"status": "pending"},
-                            {"status": "retry", "next_attempt_at": {"$lte": now}},
-                            {"status": "claimed", "lease_until": {"$lte": now}},
-                        ]
-                    },
-                ]
-            },
+            query,
             {
                 "$set": {
                     "status": "claimed",
@@ -114,7 +122,9 @@ class MongoOperationalApprovalRepository:
         )
         if document is None:
             return None
-        return ApprovalDeliveryClaim(document["_id"], owner, lease_until)
+        return ApprovalDeliveryClaim(
+            document["_id"], owner, lease_until, document["ready_at"]
+        )
 
     async def complete_delivery(self, post_id: str, *, owner: str) -> bool:
         """Complete one logical delivery only for its current lease owner."""

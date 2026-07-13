@@ -20,6 +20,7 @@ from telegram_assist_bot.application.approvals import (
     RenderApprovalHeader,
     ToggleStatus,
 )
+from telegram_assist_bot.application.ports import ApprovalDeliveryRateLimitError
 from telegram_assist_bot.application.scheduling import (
     CancelRequest,
     CancelScheduledPost,
@@ -96,6 +97,7 @@ class ApprovalDeliveryWorker:
         clock: Callable[[], datetime],
         lease_seconds: float,
         retry_seconds: float,
+        max_backlog_per_startup: int = 10,
         logger: StructuredLogger | None = None,
     ) -> None:
         """Store durable delivery collaborators and bounded lease settings."""
@@ -112,17 +114,60 @@ class ApprovalDeliveryWorker:
         self._lease_seconds = lease_seconds
         self._retry_seconds = retry_seconds
         self._logger = logger
+        self._claimed_post_id: str | None = None
+        self._startup_at = clock().astimezone(UTC)
+        self._backlog_remaining = max_backlog_per_startup
 
     async def execute_once(self) -> bool:
+        """Contain every expected per-delivery failure and release its lease."""
+        self._claimed_post_id = None
+        try:
+            return await self._execute_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - release every claimed post safely.
+            return await self._release_claim_after_failure(error)
+        finally:
+            self._claimed_post_id = None
+
+    async def _release_claim_after_failure(self, error: BaseException) -> bool:
+        """Persist a safe retry state for a claimed delivery failure."""
+        post_id = self._claimed_post_id
+        if post_id is None:
+            raise error
+        category = getattr(error, "error_category", "transient")
+        delay = self._retry_seconds
+        if isinstance(error, ApprovalDeliveryRateLimitError):
+            delay = min(float(error.retry_after_seconds), self._lease_seconds)
+        await self._operational.release_delivery(
+            post_id,
+            owner=self._owner,
+            category=category,
+            next_attempt_at=self._clock().astimezone(UTC) + timedelta(seconds=delay),
+        )
+        self._emit(
+            "approval_delivery_failed",
+            post_id=post_id,
+            error_category=category,
+        )
+        return False
+
+    async def _execute_once(self) -> bool:
         """Deliver one logical Post and retain successful per-admin progress."""
         now = self._clock().astimezone(UTC)
-        claim = await self._operational.claim_ready(
-            owner=self._owner,
-            now=now,
-            lease_until=now + timedelta(seconds=self._lease_seconds),
-        )
+        claim_kwargs: dict[str, object] = {
+            "owner": self._owner,
+            "now": now,
+            "lease_until": now + timedelta(seconds=self._lease_seconds),
+        }
+        if self._backlog_remaining == 0:
+            claim_kwargs["ready_after"] = self._startup_at
+        claim = await self._operational.claim_ready(**claim_kwargs)  # type: ignore[arg-type]
         if claim is None:
             return False
+        self._claimed_post_id = claim.post_id
+        if claim.ready_at is not None and claim.ready_at <= self._startup_at:
+            self._backlog_remaining -= 1
         self._emit("approval_delivery_claimed", post_id=claim.post_id)
         post = await self._loader.load(claim.post_id)
         header = self._header.execute(

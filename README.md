@@ -268,6 +268,10 @@ uv run --python 3.12 python -m telegram_assist_bot approval-bot `
   --config config/configuration.local.json
 ```
 
+`telegram.bot.approval_delivery_max_per_startup` (default `10`) bounds the
+initial approval-delivery backlog. Bot API delivery failures are retried through
+the durable outbox after the administrator starts or unblocks the bot.
+
 فرمان‌های `ingest`، `ingest-text` و `schedule-worker` سازگار مانده‌اند، اما نباید
 هم‌زمان با `runtime` روی همان `session_path` اجرا شوند. lock سیستم‌عامل اجرای رقیب
 را رد می‌کند. `approval-bot` هیچ Session کاربری را باز نمی‌کند.

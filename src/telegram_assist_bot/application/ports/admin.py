@@ -62,6 +62,41 @@ class BotEditOutcome(StrEnum):
     DELETED = "deleted"
 
 
+class ApprovalDeliveryError(RuntimeError):
+    """Represent a safe Bot API approval-delivery failure."""
+
+    error_category = "delivery_error"
+
+
+class ApprovalDeliveryUnavailableError(ApprovalDeliveryError):
+    """Report that an administrator cannot currently receive a Bot message."""
+
+    error_category = "delivery_unavailable"
+
+
+class ApprovalDeliveryRateLimitError(ApprovalDeliveryError):
+    """Report one bounded Bot API retry delay without SDK details."""
+
+    error_category = "rate_limited"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        """Retain only a non-negative provider-supplied retry delay."""
+        self.retry_after_seconds = max(0, retry_after_seconds)
+        super().__init__("Approval delivery is rate limited.")
+
+
+class ApprovalDeliveryTransientError(ApprovalDeliveryError):
+    """Report a retryable transport failure at the Bot API boundary."""
+
+    error_category = "transient"
+
+
+class ApprovalDeliveryRejectedError(ApprovalDeliveryError):
+    """Report a safe retryable Bot API request rejection."""
+
+    error_category = "bad_request"
+
+
 class AdminMessagingGateway(Protocol):
     """Hide Bot SDK requests and exceptions from Application."""
 
@@ -171,6 +206,11 @@ class ApprovalRepository(Protocol):
 __all__ = (
     "AdminMessagingGateway",
     "ApprovalContent",
+    "ApprovalDeliveryError",
+    "ApprovalDeliveryRateLimitError",
+    "ApprovalDeliveryRejectedError",
+    "ApprovalDeliveryTransientError",
+    "ApprovalDeliveryUnavailableError",
     "ApprovalRepository",
     "BotEditOutcome",
     "BotUpdate",

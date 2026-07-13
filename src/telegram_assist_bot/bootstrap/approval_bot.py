@@ -227,6 +227,9 @@ class ApprovalBotApplication:
                 retry_seconds=float(
                     settings.telegram.bot.approval_delivery_poll_seconds
                 ),
+                max_backlog_per_startup=(
+                    settings.telegram.bot.approval_delivery_max_per_startup
+                ),
                 logger=self._foundation.logger,
             )
             loop = ApprovalDeliveryLoop(
@@ -270,11 +273,34 @@ class ApprovalBotApplication:
         if not self._started or self._dispatcher is None or self._gateway is None:
             raise ApprovalBotStartupError
         settings = self._foundation.configuration.settings
-        await self._dispatcher.start_polling(
-            self._gateway.bot,
-            polling_timeout=settings.telegram.bot.polling_timeout_seconds,
-            handle_signals=False,
+        polling = asyncio.create_task(
+            self._dispatcher.start_polling(
+                self._gateway.bot,
+                polling_timeout=settings.telegram.bot.polling_timeout_seconds,
+                handle_signals=False,
+            ),
+            name="approval-polling",
         )
+        watched = {polling, self._delivery_task, self._sync_task}
+        done, _ = await asyncio.wait(
+            {task for task in watched if task is not None},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            if task is polling:
+                continue
+            error = task.exception()
+            if error is not None:
+                self._foundation.logger.emit(
+                    level=LogLevel.ERROR,
+                    event_name="approval_background_task_failed",
+                    fields={
+                        "task_name": task.get_name(),
+                        "error_category": "transient",
+                    },
+                )
+                raise ApprovalBotStartupError from error
+        await polling
 
     async def shutdown(self) -> None:
         """Stop polling and close Bot and MongoDB exactly once."""

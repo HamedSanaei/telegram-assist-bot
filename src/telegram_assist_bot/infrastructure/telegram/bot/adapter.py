@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from aiogram.exceptions import (
     TelegramBadRequest,
+    TelegramForbiddenError,
     TelegramNetworkError,
     TelegramRetryAfter,
 )
@@ -20,6 +21,10 @@ from aiogram.types import (
 
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalDeliveryRateLimitError,
+    ApprovalDeliveryRejectedError,
+    ApprovalDeliveryTransientError,
+    ApprovalDeliveryUnavailableError,
     BotEditOutcome,
     InlineKeyboard,
 )
@@ -77,46 +82,87 @@ class AiogramAdminMessagingGateway:
         self, chat_id: int, text: str, keyboard: InlineKeyboard | None = None
     ) -> int:
         """Send a managerial header with an optional inline keyboard."""
-        async with asyncio.timeout(self._timeout):
-            message = await self._bot.send_message(
-                chat_id, text, reply_markup=_keyboard(keyboard)
-            )
+        try:
+            async with asyncio.timeout(self._timeout):
+                message = await self._bot.send_message(
+                    chat_id, text, reply_markup=_keyboard(keyboard)
+                )
+        except (
+            TelegramForbiddenError,
+            TelegramRetryAfter,
+            TelegramNetworkError,
+            TelegramBadRequest,
+        ) as error:
+            raise self._delivery_error(error) from None
         return message.message_id
 
     async def send_content(
         self, chat_id: int, content: ApprovalContent
     ) -> tuple[int, ...]:
         """Send prepared content without adding managerial metadata."""
-        async with asyncio.timeout(self._timeout):
-            if content.media_paths:
-                # Serialization stays adapter-owned; publication remains absent.
-                caption_entities = _entities(content.caption_entities)
-                if len(content.media_paths) == 1:
-                    message = await self._bot.send_document(
-                        chat_id,
-                        document=FSInputFile(content.media_paths[0]),
-                        caption=content.caption,
-                        caption_entities=caption_entities,
+        try:
+            async with asyncio.timeout(self._timeout):
+                if content.media_paths:
+                    # Serialization stays adapter-owned; publication remains absent.
+                    caption_entities = _entities(content.caption_entities)
+                    if len(content.media_paths) == 1:
+                        message = await self._bot.send_document(
+                            chat_id,
+                            document=FSInputFile(content.media_paths[0]),
+                            caption=content.caption,
+                            caption_entities=caption_entities,
+                        )
+                        return (message.message_id,)
+                    media = [
+                        InputMediaDocument(
+                            media=FSInputFile(path),
+                            caption=content.caption if index == 0 else None,
+                            caption_entities=caption_entities if index == 0 else None,
+                        )
+                        for index, path in enumerate(content.media_paths)
+                    ]
+                    messages = await self._bot.send_media_group(
+                        chat_id, media=cast("Any", media)
                     )
-                    return (message.message_id,)
-                media = [
-                    InputMediaDocument(
-                        media=FSInputFile(path),
-                        caption=content.caption if index == 0 else None,
-                        caption_entities=caption_entities if index == 0 else None,
-                    )
-                    for index, path in enumerate(content.media_paths)
-                ]
-                messages = await self._bot.send_media_group(
-                    chat_id, media=cast("Any", media)
+                    return tuple(message.message_id for message in messages)
+                message = await self._bot.send_message(
+                    chat_id,
+                    content.text or content.caption or "",
+                    entities=_entities(content.text_entities),
                 )
-                return tuple(message.message_id for message in messages)
-            message = await self._bot.send_message(
-                chat_id,
-                content.text or content.caption or "",
-                entities=_entities(content.text_entities),
+                return (message.message_id,)
+        except (
+            TelegramForbiddenError,
+            TelegramRetryAfter,
+            TelegramNetworkError,
+            TelegramBadRequest,
+        ) as error:
+            raise self._delivery_error(error) from None
+
+    @staticmethod
+    def _delivery_error(
+        error: (
+            TelegramForbiddenError
+            | TelegramRetryAfter
+            | TelegramNetworkError
+            | TelegramBadRequest
+        ),
+    ) -> (
+        ApprovalDeliveryUnavailableError
+        | ApprovalDeliveryRateLimitError
+        | ApprovalDeliveryTransientError
+        | ApprovalDeliveryRejectedError
+    ):
+        """Convert Bot SDK failures into safe application-owned errors."""
+        if isinstance(error, TelegramForbiddenError):
+            return ApprovalDeliveryUnavailableError("Approval delivery is unavailable.")
+        if isinstance(error, TelegramRetryAfter):
+            return ApprovalDeliveryRateLimitError(error.retry_after)
+        if isinstance(error, TelegramNetworkError):
+            return ApprovalDeliveryTransientError(
+                "Approval delivery temporarily failed."
             )
-            return (message.message_id,)
+        return ApprovalDeliveryRejectedError("Approval delivery request was rejected.")
 
     async def edit_header(
         self, chat_id: int, message_id: int, text: str, keyboard: InlineKeyboard
