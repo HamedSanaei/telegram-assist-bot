@@ -29,6 +29,7 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryGateway,
     TelegramLiveGateway,
     TelegramLiveSubscription,
+    TelegramPublisherGateway,
     TelegramValidationGateway,
 )
 from telegram_assist_bot.application.prepare_post_pipeline import (
@@ -36,11 +37,16 @@ from telegram_assist_bot.application.prepare_post_pipeline import (
     PreparePostPipeline,
     validate_unimplemented_ai_flags,
 )
+from telegram_assist_bot.application.publication import (
+    PublishImmediately,
+    PublishRequest,
+)
 from telegram_assist_bot.application.runtime_ingestion import (
     RuntimeMessageIngestor,
     RuntimePreparationPolicy,
     RuntimeSourcePolicy,
 )
+from telegram_assist_bot.application.scheduling import RunDuePublication, RunDueStatus
 from telegram_assist_bot.application.validate_telegram_session import (
     TelegramChannelValidationError,
 )
@@ -53,6 +59,14 @@ from telegram_assist_bot.bootstrap.telegram_validation import validate_telegram_
 from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.domain.posts import PostId, SourceMessageIdentity
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
+from telegram_assist_bot.infrastructure.persistence.mongodb import (
+    MongoOperationalApprovalRepository,
+    MongoPublicationPayloadLoader,
+    MongoPublicationRepository,
+    MongoScheduleRepository,
+    initialize_operational_approval_indexes,
+    initialize_publication_indexes,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.content_repository import (
     MongoContentPreparationRepository,
     initialize_content_preparation_indexes,
@@ -63,13 +77,14 @@ from telegram_assist_bot.infrastructure.telegram.user import (
 )
 from telegram_assist_bot.shared.config import LoadedConfiguration, LogLevel
 from telegram_assist_bot.shared.retry import RetryPolicy
-from telegram_assist_bot.workers import LiveTextListener
+from telegram_assist_bot.workers import LiveTextListener, ScheduledPublicationWorker
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from pymongo import AsyncMongoClient
 
+    from telegram_assist_bot.domain import ScheduledPublication
     from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
         MongoDocument,
     )
@@ -172,6 +187,18 @@ class FullTextIngestionGateway(TextIngestionGateway, Protocol):
         """Return a streamer over the already-open owned Telegram client."""
         ...
 
+    def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
+        """Return a publisher over the same already-open User API client."""
+        ...
+
+
+class RuntimeWorker(Protocol):
+    """Describe one cancellation-safe operational background worker."""
+
+    async def run(self) -> None:
+        """Run until cancellation."""
+        ...
+
 
 class SystemClock(Clock):
     """Return current UTC time for concrete composition."""
@@ -194,6 +221,15 @@ type RuntimeIngestorFactory = Callable[
     ],
     Awaitable[RuntimeMessageIngestor],
 ]
+type RuntimeWorkerFactory = Callable[
+    [
+        LoadedConfiguration,
+        TelegramValidationReport,
+        TextIngestionGateway,
+        FoundationLifecycle,
+    ],
+    Awaitable[RuntimeWorker],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +243,9 @@ class TextIngestionDependencies:
     sleeper: AsyncSleeper = field(repr=False)
     jitter_source: JitterSource = field(repr=False)
     runtime_ingestor_factory: RuntimeIngestorFactory | None = field(
+        default=None, repr=False
+    )
+    runtime_worker_factory: RuntimeWorkerFactory | None = field(
         default=None, repr=False
     )
 
@@ -403,6 +442,15 @@ class TextIngestionApplication:
                     self._run_album_finalizer(), name="telegram-album-finalizer"
                 )
                 self._listener_tasks.append(cast_task(album_task))
+            if self._dependencies.runtime_worker_factory is not None:
+                operational_worker = await self._dependencies.runtime_worker_factory(
+                    loaded, report, gateway, self._dependencies.foundation
+                )
+                publication_task = asyncio.create_task(
+                    operational_worker.run(), name="operational-publication"
+                )
+                self._listener_tasks.append(cast_task(publication_task))
+                logger.emit(level=LogLevel.INFO, event_name="operational_runtime_ready")
             self._state = _State.READY
             logger.emit(
                 level=LogLevel.INFO,
@@ -625,6 +673,145 @@ def create_text_ingestion_application(
         sleeper=asyncio.sleep,
         jitter_source=lambda: 0.5,
         runtime_ingestor_factory=_create_runtime_ingestor,
+        runtime_worker_factory=None,
+    )
+    return TextIngestionApplication(dependencies)
+
+
+async def _create_publication_worker(
+    loaded: LoadedConfiguration,
+    report: TelegramValidationReport,
+    gateway: TextIngestionGateway,
+    foundation: FoundationLifecycle,
+) -> RuntimeWorker:
+    """Wire both due-now and scheduled commands over the ingestion-owned client."""
+    settings = loaded.settings
+    owned_foundation = cast("FullFoundationLifecycle", foundation)
+    owned_gateway = cast("FullTextIngestionGateway", gateway)
+    database = owned_foundation.mongodb_client[settings.mongodb.database_name]
+    publications = database["publications"]
+    schedules = database["scheduled_publications"]
+    queues = database["schedule_queues"]
+    deliveries = database["approval_deliveries"]
+    media = database["media_items"]
+    groups = database["media_groups"]
+    preparations = database["content_preparations"]
+    await initialize_publication_indexes(publications, schedules, queues)
+    await initialize_operational_approval_indexes(deliveries)
+    content_repository = MongoContentPreparationRepository(media, groups, preparations)
+    destination_ids = {
+        item.channel.channel_id
+        for item in report.channels
+        if item.role.value == "Destination"
+    }
+    destination_names = {
+        value.telegram_channel_id: value.name
+        for value in settings.destination_channels
+        if value.enabled and value.telegram_channel_id in destination_ids
+    }
+    loader = MongoPublicationPayloadLoader(
+        content_repository,
+        database["posts"],
+        media,
+        groups,
+        destination_names=destination_names,
+    )
+    publisher = owned_gateway.publisher(media_root=settings.media.root)
+    publication_repository = MongoPublicationRepository(publications)
+    schedule_repository = MongoScheduleRepository(schedules, queues)
+    operational = MongoOperationalApprovalRepository(preparations, deliveries)
+    owner = f"runtime-{uuid4().hex}"
+    publishing = settings.publishing
+    publication = PublishImmediately(
+        publication_repository,
+        publisher,
+        clock=lambda: datetime.now(UTC),
+        timeout_seconds=float(publishing.operation_timeout_seconds),
+        lease_seconds=float(publishing.publication_lease_seconds),
+        max_attempts=publishing.publication_max_attempts,
+        initial_delay_seconds=float(publishing.retry_initial_delay_seconds),
+        maximum_delay_seconds=float(publishing.retry_maximum_delay_seconds),
+    )
+
+    def request_builder(action: str) -> Callable[[str, int], Awaitable[PublishRequest]]:
+        async def build(post_id: str, destination_id: int) -> PublishRequest:
+            return PublishRequest(
+                post_id,
+                destination_id,
+                await loader.load(post_id, destination_id),
+                owner,
+                uuid4().hex,
+                True,
+                True,
+                True,
+                True,
+                True,
+                destination_id in destination_ids,
+                action=action,
+            )
+
+        return build
+
+    async def after_result(job: ScheduledPublication, status: RunDueStatus) -> None:
+        if status not in {RunDueStatus.COMPLETED, RunDueStatus.FAILED}:
+            return
+        await operational.record_destination_status(
+            job.post_id,
+            job.destination_id,
+            status="published"
+            if status is RunDueStatus.COMPLETED
+            else "permanent_failed",
+            version=job.version + 1,
+            at=datetime.now(UTC),
+        )
+
+    immediate = RunDuePublication(
+        schedule_repository,
+        owner=owner,
+        clock=lambda: datetime.now(UTC),
+        lease_seconds=float(publishing.publication_lease_seconds),
+        max_attempts=publishing.publication_max_attempts,
+        retry_delay_seconds=float(publishing.retry_initial_delay_seconds),
+        action="immediate",
+        build_request=request_builder("immediate"),
+        publish=publication.execute,
+        after_result=after_result,
+    )
+    scheduled = RunDuePublication(
+        schedule_repository,
+        owner=owner,
+        clock=lambda: datetime.now(UTC),
+        lease_seconds=float(publishing.publication_lease_seconds),
+        max_attempts=publishing.publication_max_attempts,
+        retry_delay_seconds=float(publishing.retry_initial_delay_seconds),
+        action="scheduled",
+        build_request=request_builder("scheduled"),
+        publish=publication.execute,
+        after_result=after_result,
+    )
+
+    async def run_once() -> None:
+        await immediate.execute_once()
+        await scheduled.execute_once()
+
+    return ScheduledPublicationWorker(
+        run_once, poll_seconds=float(publishing.worker_poll_seconds)
+    )
+
+
+def create_operational_runtime_application(
+    *, sink: EventSink
+) -> TextIngestionApplication:
+    """Build full ingestion and publication under one User API session owner."""
+    dependencies = TextIngestionDependencies(
+        foundation=create_foundation_application(sink=sink),
+        gateway_factory=_create_gateway,
+        clock=SystemClock(),
+        post_id_factory=_new_post_id,
+        sleeper=asyncio.sleep,
+        jitter_source=lambda: 0.5,
+        runtime_ingestor_factory=_create_runtime_ingestor,
+        runtime_worker_factory=_create_publication_worker,
     )
     return TextIngestionApplication(dependencies)
 
@@ -661,6 +848,7 @@ __all__ = (
     "TextIngestionDependencies",
     "TextIngestionGateway",
     "TextIngestionStartupError",
+    "create_operational_runtime_application",
     "create_text_ingestion_application",
     "run_text_ingestion_application",
 )

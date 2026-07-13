@@ -143,6 +143,13 @@ class MongoApprovalRepository:
         document = await self._callbacks.find_one({"_id": digest})
         return None if document is None else _claims(document)
 
+    async def consume_callback(self, digest: str) -> bool:
+        """Atomically revoke one currently valid callback token."""
+        result = await self._callbacks.update_one(
+            {"_id": digest, "revoked": False}, {"$set": {"revoked": True}}
+        )
+        return result.modified_count == 1
+
     async def revoke_post_callbacks(self, post_id: str) -> int:
         """Revoke all still-actionable tokens for one Post."""
         result = await self._callbacks.update_many(

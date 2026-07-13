@@ -38,8 +38,28 @@ class ScheduleRepository(Protocol):
         """Reserve one idempotent ordered destination slot."""
         ...
 
+    async def reserve_immediate(
+        self,
+        *,
+        job_id: str,
+        post_id: str,
+        destination_id: int,
+        now: datetime,
+    ) -> ScheduleReservation:
+        """Reserve one idempotent due-now publication command."""
+        ...
+
+    async def get(self, job_id: str) -> ScheduledPublication | None:
+        """Load one durable command for cancellation orchestration."""
+        ...
+
     async def claim_due(
-        self, *, owner: str, now: datetime, lease_until: datetime
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        action: str = "scheduled",
     ) -> ScheduledPublication | None:
         """Claim the oldest eligible due job atomically."""
         ...

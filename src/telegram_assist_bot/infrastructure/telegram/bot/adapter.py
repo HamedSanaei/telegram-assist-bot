@@ -68,6 +68,11 @@ class AiogramAdminMessagingGateway:
         self._timeout = timeout_seconds
         self._closed = False
 
+    @property
+    def bot(self) -> Bot:
+        """Expose the owned Bot only to the concrete polling composition root."""
+        return self._bot
+
     async def send_header(
         self, chat_id: int, text: str, keyboard: InlineKeyboard | None = None
     ) -> int:

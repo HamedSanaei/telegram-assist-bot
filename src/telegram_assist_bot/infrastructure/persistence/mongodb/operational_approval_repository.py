@@ -1,0 +1,312 @@
+"""MongoDB outbox, leases, status, and prepared approval loading."""
+
+from __future__ import annotations
+
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any
+
+from pymongo import ASCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+from telegram_assist_bot.application.ports import (
+    ApprovalContent,
+    ApprovalDeliveryClaim,
+    ApprovalPost,
+    ApprovalSyncClaim,
+)
+from telegram_assist_bot.domain.posts import TelegramEntity
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from pymongo.asynchronous.collection import AsyncCollection
+
+type Document = dict[str, Any]
+
+
+async def initialize_operational_approval_indexes(
+    deliveries: AsyncCollection[Document],
+) -> None:
+    """Create the durable delivery claim and retry index."""
+    await deliveries.create_index(
+        [
+            ("status", ASCENDING),
+            ("next_attempt_at", ASCENDING),
+            ("lease_until", ASCENDING),
+        ],
+        name="ix_approval_delivery_claim_v1",
+    )
+
+
+def _entities(values: list[Document]) -> tuple[TelegramEntity, ...]:
+    return tuple(
+        TelegramEntity(
+            int(item.get("offset_utf16", item.get("offset", 0)) or 0),
+            int(item.get("length_utf16", item.get("length", 0)) or 0),
+            item["entity_type"],
+            item.get("custom_emoji_id"),
+        )
+        for item in values
+    )
+
+
+class MongoOperationalApprovalRepository:
+    """Implement a restart-safe logical delivery outbox over ready preparations."""
+
+    def __init__(
+        self,
+        preparations: AsyncCollection[Document],
+        deliveries: AsyncCollection[Document],
+        *,
+        max_attempts: int = 3,
+    ) -> None:
+        """Store ready-preparation and durable-delivery collections."""
+        if not 1 <= max_attempts <= 10:
+            raise ValueError("max_attempts must be between 1 and 10")
+        self._preparations = preparations
+        self._deliveries = deliveries
+        self._max_attempts = max_attempts
+
+    async def claim_ready(
+        self, *, owner: str, now: datetime, lease_until: datetime
+    ) -> ApprovalDeliveryClaim | None:
+        """Seed missing outbox identities, then claim one eligible delivery."""
+        cursor = self._preparations.find(
+            {"ready_at": {"$exists": True}}, projection={"_id": 1, "ready_at": 1}
+        ).sort([("ready_at", ASCENDING), ("_id", ASCENDING)])
+        async for item in cursor:
+            with suppress(DuplicateKeyError):
+                await self._deliveries.insert_one(
+                    {
+                        "_id": item["_id"],
+                        "status": "pending",
+                        "ready_at": item["ready_at"],
+                        "attempt_count": 0,
+                        "destination_statuses": {},
+                        "sync_version": 0,
+                        "sync_required": False,
+                    }
+                )
+        document = await self._deliveries.find_one_and_update(
+            {
+                "$and": [
+                    {"attempt_count": {"$lt": self._max_attempts}},
+                    {
+                        "$or": [
+                            {"status": "pending"},
+                            {"status": "retry", "next_attempt_at": {"$lte": now}},
+                            {"status": "claimed", "lease_until": {"$lte": now}},
+                        ]
+                    },
+                ]
+            },
+            {
+                "$set": {
+                    "status": "claimed",
+                    "claim_owner": owner,
+                    "lease_until": lease_until,
+                    "next_attempt_at": None,
+                },
+                "$inc": {"attempt_count": 1},
+            },
+            sort=[("ready_at", ASCENDING), ("_id", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            return None
+        return ApprovalDeliveryClaim(document["_id"], owner, lease_until)
+
+    async def complete_delivery(self, post_id: str, *, owner: str) -> bool:
+        """Complete one logical delivery only for its current lease owner."""
+        result = await self._deliveries.update_one(
+            {"_id": post_id, "status": "claimed", "claim_owner": owner},
+            {"$set": {"status": "completed", "claim_owner": None, "lease_until": None}},
+        )
+        return result.modified_count == 1
+
+    async def release_delivery(
+        self, post_id: str, *, owner: str, category: str, next_attempt_at: datetime
+    ) -> bool:
+        """Release one owned delivery with a safe retry category."""
+        result = await self._deliveries.update_one(
+            {"_id": post_id, "status": "claimed", "claim_owner": owner},
+            {
+                "$set": {
+                    "status": "retry",
+                    "claim_owner": None,
+                    "lease_until": None,
+                    "next_attempt_at": next_attempt_at,
+                    "last_error_category": category,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def is_actionable(self, post_id: str) -> bool:
+        """Return whether the Post has durable ready preparation state."""
+        return (
+            await self._preparations.find_one(
+                {"_id": post_id, "ready_at": {"$exists": True}}, projection={"_id": 1}
+            )
+            is not None
+        )
+
+    async def record_destination_status(
+        self,
+        post_id: str,
+        destination_id: int,
+        *,
+        status: str,
+        version: int,
+        at: datetime,
+    ) -> None:
+        """Persist one monotonic safe destination status and request UI sync."""
+        key = f"destination_statuses.{destination_id}"
+        await self._deliveries.update_one(
+            {"_id": post_id, f"{key}.version": {"$not": {"$gt": version}}},
+            {
+                "$set": {
+                    key: {"status": status, "version": version, "updated_at": at},
+                    "sync_required": True,
+                },
+                "$inc": {"sync_version": 1},
+            },
+        )
+
+    async def destination_statuses(self, post_id: str) -> dict[int, str]:
+        """Return detached safe status values for one approval."""
+        document = await self._deliveries.find_one(
+            {"_id": post_id}, projection={"destination_statuses": 1}
+        )
+        if document is None:
+            return {}
+        return {
+            int(key): value["status"]
+            for key, value in document.get("destination_statuses", {}).items()
+        }
+
+    async def claim_sync(
+        self, *, owner: str, now: datetime, lease_until: datetime
+    ) -> ApprovalSyncClaim | None:
+        """Lease one pending UI synchronization request."""
+        document = await self._deliveries.find_one_and_update(
+            {
+                "sync_required": True,
+                "$or": [
+                    {"sync_lease_until": None},
+                    {"sync_lease_until": {"$exists": False}},
+                    {"sync_lease_until": {"$lte": now}},
+                ],
+            },
+            {"$set": {"sync_owner": owner, "sync_lease_until": lease_until}},
+            sort=[("ready_at", ASCENDING), ("_id", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            return None
+        return ApprovalSyncClaim(
+            document["_id"], document.get("sync_version", 0), owner
+        )
+
+    async def complete_sync(self, post_id: str, *, owner: str, version: int) -> bool:
+        """Complete a sync only when no newer status version superseded it."""
+        result = await self._deliveries.update_one(
+            {"_id": post_id, "sync_owner": owner, "sync_version": version},
+            {
+                "$set": {
+                    "sync_required": False,
+                    "sync_owner": None,
+                    "sync_lease_until": None,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+
+class MongoApprovalPostLoader:
+    """Join ready content, source metadata, and ordered private media paths."""
+
+    def __init__(
+        self,
+        posts: AsyncCollection[Document],
+        preparations: AsyncCollection[Document],
+        media: AsyncCollection[Document],
+        groups: AsyncCollection[Document],
+        *,
+        destination_names: tuple[str, ...],
+    ) -> None:
+        """Store source and preparation collections plus destination order."""
+        self._posts = posts
+        self._preparations = preparations
+        self._media = media
+        self._groups = groups
+        self._destination_names = destination_names
+
+    async def load(self, post_id: str) -> ApprovalPost:
+        """Load exact prepared text, entities, and ordered media for approval."""
+        preparation = await self._preparations.find_one(
+            {"_id": post_id, "ready_at": {"$exists": True}}
+        )
+        post = await self._posts.find_one({"_id": post_id})
+        if preparation is None or post is None:
+            raise ValueError("Ready approval content does not exist.")
+        artifacts = preparation.get("artifacts", {})
+        artifact = next(
+            (artifacts[name] for name in self._destination_names if name in artifacts),
+            None,
+        )
+        original = post["original_content"]
+        text = original.get("text")
+        caption = original.get("caption")
+        text_entities = _entities(original.get("text_entities", []))
+        caption_entities = _entities(original.get("caption_entities", []))
+        if artifact is not None:
+            prepared_text = artifact.get("text")
+            if caption is not None:
+                caption = prepared_text
+                caption_entities = _entities(artifact.get("entities", []))
+            else:
+                text = prepared_text
+                text_entities = _entities(artifact.get("entities", []))
+        group = await self._groups.find_one(
+            {
+                "source_channel_id": post["source_channel_id"],
+                "members.source_message_id": post["source_message_id"],
+                "finalized_at": {"$ne": None},
+            }
+        )
+        if group is None:
+            cursor = self._media.find(
+                {
+                    "source_channel_id": post["source_channel_id"],
+                    "source_message_id": post["source_message_id"],
+                    "cleaned_at": None,
+                }
+            ).sort("item_index", ASCENDING)
+            path_values = [str(item["storage_path"]) async for item in cursor]
+            paths: tuple[str, ...] = tuple(path_values)
+        else:
+            paths = tuple(
+                str(item["media"]["storage_path"]) for item in group["members"]
+            )
+        category = preparation.get("category_result", {}).get("category_id")
+        duplicate_value = preparation.get("duplicate_result", {}).get("is_duplicate")
+        duplicate = (
+            None if duplicate_value is None else ("بله" if duplicate_value else "خیر")
+        )
+        return ApprovalPost(
+            post_id,
+            post["source_channel_display_name"],
+            post.get("source_channel_username"),
+            post["source_channel_id"],
+            ApprovalContent(text, caption, text_entities, caption_entities, paths),
+            category=category,
+            duplicate=duplicate,
+        )
+
+
+__all__ = (
+    "MongoApprovalPostLoader",
+    "MongoOperationalApprovalRepository",
+    "initialize_operational_approval_indexes",
+)

@@ -194,6 +194,11 @@ class TelegramBotConfig(_FrozenConfigModel):
         description="Telegram chat or channel receiving approval messages."
     )
     operation_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=120)] = 10
+    polling_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=60)] = 30
+    approval_delivery_poll_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 5
+    approval_claim_lease_seconds: Annotated[StrictInt, Field(ge=10, le=900)] = 60
+    approval_retry_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
+    shutdown_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 10
 
 
 class TelegramIngestionConfig(_FrozenConfigModel):

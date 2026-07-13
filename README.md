@@ -250,6 +250,28 @@ runtime فرمان `ingest` همان session/client بازشده را برای v
 uv run --python 3.12 python -m telegram_assist_bot media-cleanup --config config/configuration.local.json
 ```
 
+## اجرای عملیاتی تأیید و انتشار
+
+Process اول تنها مالک Session و client مربوط به Telegram User API است و ingestion،
+نهایی‌سازی Album و اجرای commandهای انتشار را با همان client انجام می‌دهد:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot runtime `
+  --config config/configuration.local.json
+```
+
+Process دوم فقط Bot API و MongoDB را استفاده می‌کند و تحویل تأیید، `/start`،
+callback امن و همگام‌سازی پیام مدیران را اجرا می‌کند:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot approval-bot `
+  --config config/configuration.local.json
+```
+
+فرمان‌های `ingest`، `ingest-text` و `schedule-worker` سازگار مانده‌اند، اما نباید
+هم‌زمان با `runtime` روی همان `session_path` اجرا شوند. lock سیستم‌عامل اجرای رقیب
+را رد می‌کند. `approval-bot` هیچ Session کاربری را باز نمی‌کند.
+
 Media به‌صورت stream و با timeout/سقف حجم زیر root خصوصی (پیش‌فرض نمونه
 `var/media`) نوشته می‌شود. temp یکتا فقط پس از تکمیل hash/size به‌طور اتمیک rename
 می‌شود و MongoDB فقط metadata و مسیر نسبی امن را نگه می‌دارد، نه bytes فایل.

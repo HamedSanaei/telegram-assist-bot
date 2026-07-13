@@ -14,6 +14,7 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryQuery,
     TelegramLiveSubscription,
     TelegramLoginStep,
+    TelegramPublisherGateway,
     TelegramSessionInvalidError,
     TelegramSessionStatus,
 )
@@ -36,6 +37,7 @@ from telegram_assist_bot.infrastructure.telegram.user.session_adapter import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class TelethonTextClient(
@@ -131,6 +133,16 @@ class TelethonTextIngestionGateway:
     def media_source(self) -> TelethonMediaSource:
         """Build a provider-neutral streamer over the already-owned client."""
         return TelethonMediaSource(self._require_client())
+
+    def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
+        """Build publication over the same already-open session owner."""
+        from telegram_assist_bot.infrastructure.telegram.user_publisher import (
+            TelethonPublisherClient,
+            TelethonPublisherGateway,
+        )
+
+        client = cast("TelethonPublisherClient", self._require_client())
+        return TelethonPublisherGateway(client, media_root=media_root)
 
     async def close(self) -> None:
         """Close the shared client and release its session lock exactly once."""

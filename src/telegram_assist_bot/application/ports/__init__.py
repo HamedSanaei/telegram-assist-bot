@@ -24,6 +24,13 @@ from telegram_assist_bot.application.ports.media import (
     MediaTooLargeError,
     MediaTransientError,
 )
+from telegram_assist_bot.application.ports.operational_approval import (
+    ApprovalDeliveryClaim,
+    ApprovalPost,
+    ApprovalPostLoader,
+    ApprovalSyncClaim,
+    OperationalApprovalRepository,
+)
 from telegram_assist_bot.application.ports.post_repository import (
     InsertPostOutcome,
     InsertPostResult,
@@ -85,7 +92,11 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 __all__ = (
     "AdminMessagingGateway",
     "ApprovalContent",
+    "ApprovalDeliveryClaim",
+    "ApprovalPost",
+    "ApprovalPostLoader",
     "ApprovalRepository",
+    "ApprovalSyncClaim",
     "BotEditOutcome",
     "BotUpdate",
     "Clock",
@@ -106,6 +117,7 @@ __all__ = (
     "MediaStorage",
     "MediaTooLargeError",
     "MediaTransientError",
+    "OperationalApprovalRepository",
     "PostClaimOutcome",
     "PostClaimRequest",
     "PostClaimResult",

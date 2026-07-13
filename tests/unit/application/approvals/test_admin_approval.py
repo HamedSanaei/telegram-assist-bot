@@ -51,6 +51,13 @@ class MemoryRepository:
     async def get_callback(self, digest: str) -> CallbackClaims | None:
         return self.callbacks.get(digest)
 
+    async def consume_callback(self, digest: str) -> bool:
+        claims = self.callbacks.get(digest)
+        if claims is None or claims.revoked:
+            return False
+        self.callbacks[digest] = replace(claims, revoked=True)
+        return True
+
     async def revoke_post_callbacks(self, post_id: str) -> int:
         count = 0
         for key, claims in tuple(self.callbacks.items()):
