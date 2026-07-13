@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiogram import Bot
@@ -39,7 +40,16 @@ async def create_admin_approval_components(
     token = configuration.secrets.get(settings.telegram.bot.token).get_secret_value()
     bot = Bot(token=token)
     gateway = AiogramAdminMessagingGateway(
-        bot, timeout_seconds=settings.telegram.bot.operation_timeout_seconds
+        bot,
+        timeout_seconds=settings.telegram.bot.operation_timeout_seconds,
+        media_root=getattr(getattr(settings, "media", None), "root", Path()),
+        upload_timeout_seconds=(
+            getattr(
+                settings.telegram.bot,
+                "approval_media_upload_timeout_seconds",
+                300,
+            )
+        ),
     )
     callbacks = database["approval_callbacks"]
     references = database["approval_references"]

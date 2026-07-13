@@ -13,6 +13,7 @@ from telegram_assist_bot.application.ports import (
     ApprovalAdministratorDeliveryState,
     ApprovalContent,
     ApprovalDeliveryClaim,
+    ApprovalMedia,
     ApprovalPost,
     ApprovalSyncClaim,
     DestinationPublicationState,
@@ -118,6 +119,7 @@ class MongoOperationalApprovalRepository:
         now: datetime,
         lease_until: datetime,
         ready_after: datetime | None = None,
+        ready_before_or_at: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
         """Seed missing outbox identities, then claim one eligible delivery."""
         cursor = self._preparations.find(
@@ -156,8 +158,12 @@ class MongoOperationalApprovalRepository:
                 {"status": "claimed", "lease_until": {"$lte": now}},
             ]
         }
+        if ready_after is not None and ready_before_or_at is not None:
+            raise ValueError("Approval claim watermark bounds are mutually exclusive.")
         if ready_after is not None:
             query["ready_at"] = {"$gt": ready_after}
+        elif ready_before_or_at is not None:
+            query["ready_at"] = {"$lte": ready_before_or_at}
         document = await self._deliveries.find_one_and_update(
             query,
             {
@@ -485,17 +491,32 @@ class MongoApprovalPostLoader:
                 }
             ).sort("item_index", ASCENDING)
             media_documents = [item async for item in cursor]
-            path_values = [str(item["storage_path"]) for item in media_documents]
-            paths: tuple[str, ...] = tuple(path_values)
+            approval_media = tuple(
+                ApprovalMedia(
+                    str(item.get("media_type", "document")),
+                    str(item["storage_path"]),
+                    item.get("mime_type"),
+                    item.get("original_filename"),
+                )
+                for item in media_documents
+            )
+            paths = tuple(item.storage_path for item in approval_media)
             content_type = (
                 str(media_documents[0].get("media_type", "document")).lower()
                 if media_documents
                 else "text"
             )
         else:
-            paths = tuple(
-                str(item["media"]["storage_path"]) for item in group["members"]
+            approval_media = tuple(
+                ApprovalMedia(
+                    str(item["media"].get("media_type", "document")),
+                    str(item["media"]["storage_path"]),
+                    item["media"].get("mime_type"),
+                    item["media"].get("original_filename"),
+                )
+                for item in group["members"]
             )
+            paths = tuple(item.storage_path for item in approval_media)
             content_type = "album"
         category = preparation.get("category_result", {}).get("category_id")
         duplicate_value = preparation.get("duplicate_result", {}).get("is_duplicate")
@@ -507,7 +528,14 @@ class MongoApprovalPostLoader:
             post["source_channel_display_name"],
             post.get("source_channel_username"),
             post["source_channel_id"],
-            ApprovalContent(text, caption, text_entities, caption_entities, paths),
+            ApprovalContent(
+                text,
+                caption,
+                text_entities,
+                caption_entities,
+                paths,
+                approval_media,
+            ),
             category=category,
             duplicate=duplicate,
             source_message_id=post.get("source_message_id"),

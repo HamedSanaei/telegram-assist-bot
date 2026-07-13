@@ -34,10 +34,6 @@ from telegram_assist_bot.bootstrap.runtime import (
     JsonLineEventSink,
     create_foundation_application,
 )
-from telegram_assist_bot.bootstrap.scheduling import (
-    create_schedule_worker_application,
-    run_schedule_worker_application,
-)
 from telegram_assist_bot.bootstrap.telegram_login import run_telegram_login
 from telegram_assist_bot.bootstrap.text_ingestion import (
     create_operational_runtime_application,
@@ -145,7 +141,7 @@ def _parser() -> _SafeArgumentParser:
         help=(
             "Use 'login' for explicit authentication, 'ingest' (or the compatible "
             "'ingest-text' alias) for full ingestion, 'media-cleanup' for one "
-            "cleanup batch, 'schedule-worker' for standalone durable publication, "
+            "cleanup batch, 'schedule-worker' for a fail-closed legacy notice, "
             "'approval-bot' for Bot API polling, or 'runtime' for the single-owner "
             "ingestion and publication process; publication queue commands never "
             "open Telegram sessions; approval queue commands safely inspect or "
@@ -250,14 +246,18 @@ def main(
             )
         )
     elif arguments.command == "schedule-worker":
-        schedule_application = create_schedule_worker_application(sink=sink)
-        exit_code = asyncio.run(
-            run_schedule_worker_application(
-                schedule_application,
-                configuration_path,
-                environ=environment_snapshot,
-            )
+        logger = StructuredLogger(
+            sink=sink,
+            clock=_utc_now,
+            redactor=redactor,
+            minimum_level=LogLevel.DEBUG,
         )
+        logger.emit(
+            level=LogLevel.ERROR,
+            event_name="legacy_schedule_worker_disabled",
+            fields={"safe_reason": "native_scheduling_requires_runtime"},
+        )
+        exit_code = FoundationExitCode.INFRASTRUCTURE_ERROR
     elif arguments.command == "approval-bot":
         approval_application = create_approval_bot_application(sink=sink)
         exit_code = asyncio.run(

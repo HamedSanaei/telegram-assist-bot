@@ -26,6 +26,8 @@ class PublicationMedia:
     storage_path: str
     expires_at: datetime
     ready: bool = True
+    mime_type: str | None = None
+    original_filename: str | None = None
 
     def __post_init__(self) -> None:
         """Require an aware expiration and non-blank private storage key."""

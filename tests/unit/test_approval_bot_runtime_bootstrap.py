@@ -229,6 +229,7 @@ def test_approval_bot_start_and_shutdown_own_resources_once(
             module, "initialize_operational_approval_indexes", initialize
         )
         monkeypatch.setattr(module, "initialize_publication_indexes", initialize)
+        monkeypatch.setattr(module, "initialize_native_schedule_indexes", initialize)
         monkeypatch.setattr(module, "ApprovalDeliveryLoop", IdleDeliveryLoop)
         monkeypatch.setattr(module, "ApprovalCallbackExecutor", Callbacks)
         monkeypatch.setattr(module, "Router", CapturingRouter)

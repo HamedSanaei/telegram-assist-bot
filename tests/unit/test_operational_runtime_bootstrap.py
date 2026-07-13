@@ -10,7 +10,11 @@ from typing import Any, ClassVar, cast
 import pytest
 
 import telegram_assist_bot.bootstrap.text_ingestion as module
-from telegram_assist_bot.application.ports import PublicationPayload
+from telegram_assist_bot.application.ports import (
+    NativeScheduleCommand,
+    NativeScheduleStatus,
+    PublicationPayload,
+)
 from telegram_assist_bot.application.publication import PublishResult, PublishStatus
 from telegram_assist_bot.application.scheduling import RunDueStatus
 from telegram_assist_bot.domain import ScheduledPublication
@@ -71,6 +75,32 @@ class Runner:
         return status
 
 
+class NativeRunner:
+    instances: ClassVar[list[NativeRunner]] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        del args
+        self.after = cast("Any", kwargs["after_scheduled"])
+        self.instances.append(self)
+
+    async def execute_once(self) -> bool:
+        await self.after(
+            NativeScheduleCommand(
+                "native-1",
+                "post-1",
+                -1001,
+                2,
+                NativeScheduleStatus.SCHEDULED,
+                due_at=datetime(2026, 7, 13, tzinfo=UTC),
+                telegram_message_ids=(9,),
+            )
+        )
+        return True
+
+    async def reconcile_once(self) -> bool:
+        return False
+
+
 class Worker:
     instances: ClassVar[list[Worker]] = []
     fail: ClassVar[bool] = False
@@ -120,6 +150,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
 ) -> None:
     async def scenario() -> None:
         Runner.instances.clear()
+        NativeRunner.instances.clear()
         Operational.statuses.clear()
         Operational.completed = asyncio.Event()
         Heartbeat.beats.clear()
@@ -135,6 +166,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         monkeypatch.setattr(
             module, "initialize_operational_approval_indexes", initialize
         )
+        monkeypatch.setattr(module, "initialize_native_schedule_indexes", initialize)
         monkeypatch.setattr(
             module, "MongoContentPreparationRepository", lambda *args: object()
         )
@@ -143,10 +175,14 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
             module, "MongoPublicationRepository", lambda *args: object()
         )
         monkeypatch.setattr(module, "MongoScheduleRepository", lambda *args: object())
+        monkeypatch.setattr(
+            module, "MongoNativeScheduleRepository", lambda *args: object()
+        )
         monkeypatch.setattr(module, "MongoOperationalApprovalRepository", Operational)
         monkeypatch.setattr(module, "MongoRuntimeHeartbeatRepository", Heartbeat)
         monkeypatch.setattr(module, "PublishImmediately", PublisherUseCase)
         monkeypatch.setattr(module, "RunDuePublication", Runner)
+        monkeypatch.setattr(module, "RunNativeScheduling", NativeRunner)
         monkeypatch.setattr(module, "ScheduledPublicationWorker", Worker)
         publishing = SimpleNamespace(
             operation_timeout_seconds=30,
@@ -155,6 +191,9 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
             retry_initial_delay_seconds=1,
             retry_maximum_delay_seconds=30,
             worker_poll_seconds=5,
+            native_schedule_timeout_seconds=30,
+            native_schedule_lease_seconds=60,
+            native_schedule_poll_seconds=1,
         )
         destination = SimpleNamespace(
             telegram_channel_id=-1001, name="dest", enabled=True
@@ -174,6 +213,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         shared_publisher = object()
         gateway = SimpleNamespace(
             publisher=lambda **kwargs: shared_publisher,
+            native_scheduler=lambda **kwargs: object(),
         )
         report = SimpleNamespace(
             channels=(
@@ -194,11 +234,8 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         await asyncio.wait_for(Operational.completed.wait(), timeout=1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        assert [item.action for item in Runner.instances] == [
-            "immediate",
-            "scheduled",
-        ]
-        assert Operational.statuses == ["published", "permanent_failed"]
+        assert [item.action for item in Runner.instances] == ["immediate"]
+        assert Operational.statuses == ["published", "native_scheduled"]
         assert Heartbeat.beats == ["running", "stopped"]
         assert Worker.instances[0].poll_seconds == 1.0
         names = [cast("str", item["event_name"]) for item in emitted]

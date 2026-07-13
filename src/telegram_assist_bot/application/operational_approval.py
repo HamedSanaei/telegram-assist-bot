@@ -56,6 +56,7 @@ if TYPE_CHECKING:
         ApprovalRepository,
         BotUpdate,
         InlineKeyboard,
+        NativeScheduleRepository,
         OperationalApprovalRepository,
         ScheduleRepository,
     )
@@ -74,6 +75,8 @@ STATUS_LABELS = {
     "published": "منتشر شد",
     "cancelled": "لغو شد",
     "permanent_failed": "انتشار ناموفق",
+    "native_resolved": "دیگر در Scheduled Messages نیست",
+    "native_outcome_unknown": "وضعیت زمان‌بندی نامشخص",
 }
 
 
@@ -104,6 +107,7 @@ class ApprovalDeliveryWorker:
         lease_seconds: float,
         retry_seconds: float,
         max_backlog_per_startup: int = 10,
+        historical_batch_pause_seconds: float = 10,
         max_attempts: int = 3,
         logger: StructuredLogger | None = None,
     ) -> None:
@@ -124,8 +128,10 @@ class ApprovalDeliveryWorker:
         self._claimed_post_id: str | None = None
         self._claimed_attempt_count = 0
         self._startup_at = clock().astimezone(UTC)
-        self._historical_success_limit = max_backlog_per_startup
-        self._historical_successes = 0
+        self._historical_batch_size = max_backlog_per_startup
+        self._historical_batch_successes = 0
+        self._historical_batch_pause_seconds = historical_batch_pause_seconds
+        self._historical_paused_until: datetime | None = None
         self._max_attempts = max_attempts
         self._idle = False
 
@@ -184,14 +190,22 @@ class ApprovalDeliveryWorker:
     async def _execute_once(self) -> bool:
         """Deliver one logical Post and retain successful per-admin progress."""
         now = self._clock().astimezone(UTC)
-        claim_kwargs: dict[str, object] = {
-            "owner": self._owner,
-            "now": now,
-            "lease_until": now + timedelta(seconds=self._lease_seconds),
-        }
-        if self._historical_successes >= self._historical_success_limit:
-            claim_kwargs["ready_after"] = self._startup_at
-        claim = await self._operational.claim_ready(**claim_kwargs)  # type: ignore[arg-type]
+        # Live proposals always bypass historical pacing.
+        claim = await self._operational.claim_ready(
+            owner=self._owner,
+            now=now,
+            lease_until=now + timedelta(seconds=self._lease_seconds),
+            ready_after=self._startup_at,
+        )
+        if claim is None and (
+            self._historical_paused_until is None
+            or now >= self._historical_paused_until
+        ):
+            claim = await self._operational.claim_ready(
+                owner=self._owner,
+                now=now,
+                lease_until=now + timedelta(seconds=self._lease_seconds),
+            )
         if claim is None:
             return False
         self._claimed_post_id = claim.post_id
@@ -381,7 +395,12 @@ class ApprovalDeliveryWorker:
             and claim.ready_at is not None
             and claim.ready_at <= self._startup_at
         ):
-            self._historical_successes += 1
+            self._historical_batch_successes += 1
+            if self._historical_batch_successes >= self._historical_batch_size:
+                self._historical_batch_successes = 0
+                self._historical_paused_until = now + timedelta(
+                    seconds=self._historical_batch_pause_seconds
+                )
         self._emit("approval_delivery_completed", approval_post_id=post.post_id)
         return True
 
@@ -447,7 +466,12 @@ class ApprovalDeliveryWorker:
 
     def _emit(self, event_name: str, **fields: object) -> None:
         if self._logger is not None:
-            self._logger.emit(level=LogLevel.INFO, event_name=event_name, fields=fields)
+            level = LogLevel.INFO
+            if event_name in {"approval_delivery_failed", "approval_delivery_deferred"}:
+                level = LogLevel.WARNING
+            elif event_name == "approval_delivery_permanent_failed":
+                level = LogLevel.ERROR
+            self._logger.emit(level=level, event_name=event_name, fields=fields)
 
 
 class ApprovalCallbackExecutor:
@@ -475,6 +499,7 @@ class ApprovalCallbackExecutor:
         runtime_active: Callable[[], Awaitable[bool]] | None = None,
         timezone: tzinfo = UTC,
         logger: StructuredLogger | None = None,
+        native_schedules: NativeScheduleRepository | None = None,
     ) -> None:
         """Store existing approval, scheduling, and synchronization use cases."""
         self._tokens = tokens
@@ -496,6 +521,7 @@ class ApprovalCallbackExecutor:
         self._runtime_active = runtime_active
         self._timezone = timezone
         self._logger = logger
+        self._native_schedules = native_schedules
 
     async def execute(self, update: BotUpdate) -> bool:
         """Handle one mapped callback without performing User API operations."""
@@ -586,7 +612,36 @@ class ApprovalCallbackExecutor:
         post_id = selection.post_id
         destination_id = selection.destination_id
         correlation_id = uuid4().hex
-        if previous is not SelectionMode.NONE and previous is not current:
+        if (
+            previous is SelectionMode.SCHEDULED
+            and current is not SelectionMode.SCHEDULED
+            and self._native_schedules is not None
+        ):
+            command = await self._native_schedules.request_cancel_latest(
+                post_id=post_id,
+                destination_id=destination_id,
+                now=now,
+                follow_up_immediate=current is SelectionMode.IMMEDIATE,
+            )
+            if command is not None:
+                await self._operational.record_destination_status(
+                    post_id,
+                    destination_id,
+                    status="native_cancelling",
+                    version=selection.version,
+                    at=now,
+                    action="scheduled",
+                    due_at=command.due_at,
+                )
+                return
+        legacy_cancel_allowed = not (
+            previous is SelectionMode.SCHEDULED and self._native_schedules is not None
+        )
+        if (
+            previous is not SelectionMode.NONE
+            and previous is not current
+            and legacy_cancel_allowed
+        ):
             await self._cancel_action(
                 post_id, destination_id, previous, actor_id, correlation_id
             )
@@ -612,6 +667,28 @@ class ApprovalCallbackExecutor:
                 target_destination_id=destination_id,
             )
         elif current is SelectionMode.SCHEDULED:
+            if self._native_schedules is not None:
+                await self._native_schedules.reserve(
+                    post_id=post_id,
+                    destination_id=destination_id,
+                    selection_version=selection.version,
+                    now=now,
+                )
+                await self._operational.record_destination_status(
+                    post_id,
+                    destination_id,
+                    status="native_schedule_pending",
+                    version=selection.version,
+                    at=now,
+                    action="scheduled",
+                )
+                self._emit(
+                    "publication_job_created",
+                    approval_post_id=post_id,
+                    target_destination_id=destination_id,
+                    publication_action="native_scheduled",
+                )
+                return
             reservation = await self._schedule.execute(
                 ScheduleRequest(post_id, destination_id, True, True, True)
             )
@@ -630,9 +707,10 @@ class ApprovalCallbackExecutor:
                 target_destination_id=destination_id,
             )
         else:
-            await self._cancel_action(
-                post_id, destination_id, previous, actor_id, correlation_id
-            )
+            if legacy_cancel_allowed:
+                await self._cancel_action(
+                    post_id, destination_id, previous, actor_id, correlation_id
+                )
             await self._operational.record_destination_status(
                 post_id,
                 destination_id,
@@ -717,8 +795,13 @@ class ApprovalCallbackExecutor:
                         f"🕒 زمان ورود به صف: {local:%Y-%m-%d %H:%M:%S} "
                         f"{timezone_name}"
                     )
+                elif status == "native_schedule_pending":
+                    activity = "فعال" if runtime_active else "غیرفعال"
+                    detail = f"در حال ثبت در Scheduled Messages — Runtime {activity}"
+                elif status == "native_cancelling":
+                    detail = "در حال حذف از Scheduled Messages"
                 elif (
-                    status == "scheduled"
+                    status in {"scheduled", "native_scheduled"}
                     and state is not None
                     and state.due_at is not None
                 ):

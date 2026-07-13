@@ -79,6 +79,8 @@ class MongoPublicationPayloadLoader:
                 item["storage_path"],
                 item["expires_at"],
                 ready=item.get("cleaned_at") is None,
+                mime_type=item.get("mime_type"),
+                original_filename=item.get("original_filename"),
             )
             for item in documents
         )

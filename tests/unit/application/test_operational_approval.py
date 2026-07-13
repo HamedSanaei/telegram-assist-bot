@@ -38,6 +38,8 @@ from telegram_assist_bot.application.ports import (
     BotEditOutcome,
     BotUpdate,
     DestinationPublicationState,
+    NativeScheduleCommand,
+    NativeScheduleStatus,
     OperationalApprovalRepository,
     ScheduleReservation,
 )
@@ -343,6 +345,48 @@ def test_scheduled_callback_uses_existing_slot_calculation_and_deselection_cance
         assert await executor.execute(BotUpdate(7, 7, "private", second, "q2"))
         assert schedules.jobs[identity].status is ScheduleStatus.CANCELLED
         assert operational.statuses[DESTINATION] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_callback_persists_native_command_without_legacy_schedule() -> None:
+    class NativeRepository:
+        def __init__(self) -> None:
+            self.command: NativeScheduleCommand | None = None
+
+        async def reserve(self, **kwargs: object) -> NativeScheduleCommand:
+            self.command = NativeScheduleCommand(
+                "native",
+                str(kwargs["post_id"]),
+                cast("int", kwargs["destination_id"]),
+                cast("int", kwargs["selection_version"]),
+                NativeScheduleStatus.PENDING,
+            )
+            return self.command
+
+        async def request_cancel_latest(
+            self, **kwargs: object
+        ) -> NativeScheduleCommand | None:
+            del kwargs
+            return self.command
+
+    async def scenario() -> None:
+        executor, tokens, schedules, operational = build_executor()
+        native = NativeRepository()
+        executor._native_schedules = cast("Any", native)
+        token = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_SCHEDULED,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", token, "native"))
+        assert native.command is not None
+        assert schedules.jobs == {}
+        assert operational.statuses[DESTINATION] == "native_schedule_pending"
+        gateway = cast("Gateway", executor._gateway)
+        assert "در حال ثبت در Scheduled Messages" in gateway.edits[-1][0]
 
     asyncio.run(scenario())
 
@@ -669,6 +713,12 @@ def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -
         assert "approval_message_delivered" in names
         assert "approval_delivery_completed" in names
         assert "approval_delivery_failed" in names
+        failure = next(
+            event
+            for event in events
+            if event["event_name"] == "approval_delivery_failed"
+        )
+        assert failure["level"] == LogLevel.WARNING.value
         reserved = {
             "timestamp",
             "level",
@@ -822,8 +872,17 @@ def test_failed_retries_do_not_consume_historical_success_budget() -> None:
         for _ in range(5):
             assert await worker.execute_once()
         assert operational.completed == 2
-        assert operational.ready_filters[:4] == [None, None, None, None]
-        assert operational.ready_filters[4] == NOW
+        assert operational.ready_filters == [
+            NOW,
+            NOW,
+            None,
+            NOW,
+            None,
+            NOW,
+            None,
+            NOW,
+            None,
+        ]
 
     asyncio.run(scenario())
 

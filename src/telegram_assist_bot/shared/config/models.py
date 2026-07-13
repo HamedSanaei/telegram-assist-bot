@@ -197,7 +197,13 @@ class TelegramBotConfig(_FrozenConfigModel):
     polling_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=60)] = 30
     approval_delivery_poll_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 5
     approval_delivery_interval_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 1
+    approval_delivery_batch_pause_seconds: Annotated[
+        StrictInt, Field(ge=1, le=3600)
+    ] = 10
     approval_delivery_max_per_startup: Annotated[StrictInt, Field(ge=1, le=1000)] = 10
+    approval_media_upload_timeout_seconds: Annotated[
+        StrictInt, Field(ge=1, le=3600)
+    ] = 300
     approval_claim_lease_seconds: Annotated[StrictInt, Field(ge=10, le=900)] = 60
     approval_retry_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
     shutdown_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 10
@@ -322,6 +328,9 @@ class PublishingConfig(_FrozenConfigModel):
     worker_poll_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 5
     shutdown_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 10
     cancellation_policy: Literal["preserve", "recompact"] = "preserve"
+    native_schedule_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=600)] = 300
+    native_schedule_lease_seconds: Annotated[StrictInt, Field(ge=2, le=900)] = 600
+    native_schedule_poll_seconds: Annotated[StrictInt, Field(ge=1, le=30)] = 1
 
     @model_validator(mode="after")
     def validate_publication_bounds(self) -> Self:
@@ -330,6 +339,10 @@ class PublishingConfig(_FrozenConfigModel):
             raise ValueError("Publication lease must cover the operation timeout.")
         if self.retry_maximum_delay_seconds < self.retry_initial_delay_seconds:
             raise ValueError("Publication retry delay cap is invalid.")
+        if self.native_schedule_lease_seconds <= self.native_schedule_timeout_seconds:
+            raise ValueError(
+                "Native scheduling lease must exceed the operation timeout."
+            )
         return self
 
 
