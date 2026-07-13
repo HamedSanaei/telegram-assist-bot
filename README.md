@@ -268,6 +268,30 @@ uv run --python 3.12 python -m telegram_assist_bot approval-bot `
   --config config/configuration.local.json
 ```
 
+`runtime` یک heartbeat امن و پایدار در MongoDB می‌نویسد. کارت کنترل هر پیشنهاد
+فعال یا غیرفعال بودن Runtime را کنار وضعیت صف نشان می‌دهد؛ غیرفعال بودن Runtime
+job را حذف نمی‌کند و انتشار پس از شروع دوبارهٔ Runtime ادامه می‌یابد. محتوای آماده
+ابتدا فرستاده می‌شود و کارت کنترل به همان پیام (برای Album به اولین عضو) reply
+می‌شود. کارت، زمان انتشار منبع و زمان دقیق صف را در timezone برنامه نشان می‌دهد و
+هر دکمه نام مقصد خودش را دارد.
+
+پیش از شروع Runtime می‌توان صف را بدون بارگذاری متن یا Media و بدون اجرای job دید:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot publication-queue `
+  --config config/configuration.local.json --status pending
+```
+
+لغو فقط برای یک شناسهٔ صریح و با policy موجود انجام می‌شود و تکرار آن idempotent است:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot publication-cancel `
+  --config config/configuration.local.json --job-id <job-id>
+```
+
+هیچ‌یک از دو فرمان صف، Telegram User API یا Session را باز نمی‌کند و inspection
+هیچ job موجودی را اجرا یا خودکار لغو نمی‌کند.
+
 `telegram.bot.approval_delivery_max_per_startup` (default `10`) bounds the
 initial approval-delivery backlog. Bot API delivery failures are retried through
 the durable outbox after the administrator starts or unblocks the bot.

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta, tzinfo
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -22,6 +22,7 @@ from telegram_assist_bot.domain import (
     Administrator,
     AdminPermission,
     AdminRole,
+    ApprovalDeliveryState,
     ApprovalReference,
     CallbackAction,
     CallbackClaims,
@@ -213,6 +214,7 @@ class DestinationOption:
     """Describe one destination in validated configuration order."""
 
     destination_id: int
+    name: str = ""
     active: bool = True
     source_allowed: bool = True
 
@@ -246,6 +248,7 @@ class BuildDestinationKeyboard:
         by_destination = {item.destination_id: item.mode for item in selections}
         rows: list[tuple[InlineButton, InlineButton]] = []
         for destination in allowed:
+            name = destination.name or str(destination.destination_id)
             mode = by_destination.get(destination.destination_id, SelectionMode.NONE)
             scheduled = await self._tokens.issue(
                 actor_id=actor.telegram_user_id,
@@ -264,13 +267,15 @@ class BuildDestinationKeyboard:
             rows.append(
                 (
                     InlineButton(
-                        "✅ زمان‌بندی"
+                        f"✅ زمان‌بندی — {name}"
                         if mode is SelectionMode.SCHEDULED
-                        else "🕒 زمان‌بندی",
+                        else f"🕒 زمان‌بندی — {name}",
                         scheduled,
                     ),
                     InlineButton(
-                        "✅ فوری" if mode is SelectionMode.IMMEDIATE else "⚡ فوری",
+                        f"✅ فوری — {name}"
+                        if mode is SelectionMode.IMMEDIATE
+                        else f"⚡ فوری — {name}",
                         immediate,
                     ),
                 )
@@ -280,6 +285,10 @@ class BuildDestinationKeyboard:
 
 class RenderApprovalHeader:
     """Render deterministic Persian managerial metadata separately from content."""
+
+    def __init__(self, timezone: tzinfo = UTC) -> None:
+        """Store one configured timezone-like object supporting datetime conversion."""
+        self._timezone = timezone
 
     def execute(
         self,
@@ -292,28 +301,54 @@ class RenderApprovalHeader:
         category: str | None,
         duplicate: str | None,
         score: str | None,
+        source_message_id: int | None = None,
+        source_published_at: datetime | None = None,
+        preview: str | None = None,
+        content_type: str = "text",
+        media_count: int = 0,
+        destination_summary: str | None = None,
     ) -> str:
         """Render explicit unavailable/pending values without source content."""
 
         def value(item: str | None, fallback: str) -> str:
             return item if item is not None else fallback
 
+        del source_channel_id, post_id
         username = f"@{source_username}" if source_username else "ناموجود"
+        published = (
+            source_published_at.astimezone(self._timezone).strftime("%Y-%m-%d %H:%M:%S")
+            if source_published_at is not None
+            else "ناموجود"
+        )
+        safe_preview = " ".join((preview or "").split())[:160] or "بدون متن"
+        type_names = {
+            "text": "متن",
+            "photo": "عکس",
+            "video": "ویدئو",
+            "animation": "انیمیشن",
+            "album": f"آلبوم ({media_count} رسانه)",
+            "document": "فایل",
+        }
         return "\n".join(
             (
-                f"منبع: {source_name}",
-                f"شناسه: {username} ({source_channel_id})",
+                f"📰 منبع: {source_name}",
+                f"🔗 {username}",
+                f"🕒 زمان انتشار مبدأ: {published}",
+                f"🆔 پیام مبدأ: {source_message_id or 'ناموجود'}",
+                f"📎 نوع محتوا: {type_names.get(content_type, content_type)}",
+                f"📝 پیش‌نمایش: {safe_preview}",
+                "",
+                destination_summary or "📤 مقصد: در انتظار انتخاب",
+                f"⏳ وضعیت: {status}",
                 f"دسته‌بندی: {value(category, 'نامشخص')}",
                 f"تکراری: {value(duplicate, 'در انتظار بررسی')}",
-                f"امتیاز هوش مصنوعی: {value(score, 'در انتظار بررسی')}",
-                f"شناسه داخلی: {post_id}",
-                f"وضعیت: {status}",
+                f"امتیاز: {value(score, 'در انتظار بررسی')}",
             )
         )
 
 
 class DeliverApproval:
-    """Deliver header then prepared content and persist only identifiable success."""
+    """Deliver content then a replying control card with restart-safe progress."""
 
     def __init__(
         self, gateway: AdminMessagingGateway, repository: ApprovalRepository
@@ -332,26 +367,48 @@ class DeliverApproval:
         content: ApprovalContent,
         keyboard: InlineKeyboard | None = None,
     ) -> ApprovalReference:
-        """Create a reference only after header and content identifiers exist."""
+        """Resume content-first delivery without repeating a persisted phase."""
         existing = await self._repository.get_reference(reference_id)
         if existing is not None and existing.active:
             return existing
         if existing is None:
-            header_id = await self._gateway.send_header(actor_id, header, keyboard)
             existing = await self._repository.save_delivery_progress(
                 ApprovalReference(
                     reference_id,
                     actor_id,
                     actor_id,
                     post_id,
-                    header_id,
+                    0,
                     (),
                     active=False,
+                    delivery_state=ApprovalDeliveryState.PENDING,
                 )
             )
-        content_ids = await self._gateway.send_content(actor_id, content)
+        if not existing.content_message_ids:
+            existing = await self._repository.save_delivery_progress(
+                replace(existing, delivery_state=ApprovalDeliveryState.CONTENT_SENDING)
+            )
+            content_ids = await self._gateway.send_content(actor_id, content)
+            existing = await self._repository.save_delivery_progress(
+                replace(
+                    existing,
+                    content_message_ids=content_ids,
+                    delivery_state=ApprovalDeliveryState.CONTENT_SENT,
+                )
+            )
+        if not existing.content_message_ids:
+            raise RuntimeError("Approval content progress is incomplete.")
+        existing = await self._repository.save_delivery_progress(
+            replace(existing, delivery_state=ApprovalDeliveryState.CONTROL_SENDING)
+        )
+        header_id = await self._gateway.send_header(
+            actor_id,
+            header,
+            keyboard,
+            reply_to_message_id=existing.content_message_ids[0],
+        )
         return await self._repository.complete_reference(
-            existing.reference_id, content_ids
+            existing.reference_id, header_id
         )
 
 

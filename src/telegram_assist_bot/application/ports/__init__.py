@@ -34,6 +34,7 @@ from telegram_assist_bot.application.ports.operational_approval import (
     ApprovalPost,
     ApprovalPostLoader,
     ApprovalSyncClaim,
+    DestinationPublicationState,
     OperationalApprovalRepository,
 )
 from telegram_assist_bot.application.ports.post_repository import (
@@ -112,6 +113,7 @@ __all__ = (
     "Clock",
     "ContentPreparationRepository",
     "DestinationArtifact",
+    "DestinationPublicationState",
     "InlineButton",
     "InlineKeyboard",
     "InsertPostOutcome",

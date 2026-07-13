@@ -45,6 +45,7 @@ from telegram_assist_bot.domain import (
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
     MongoOperationalApprovalRepository,
+    MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
@@ -130,6 +131,16 @@ class ApprovalBotApplication:
                 deliveries,
                 max_attempts=settings.telegram.bot.approval_retry_max_attempts,
             )
+            heartbeat = MongoRuntimeHeartbeatRepository(database["runtime_heartbeats"])
+
+            async def runtime_active() -> bool:
+                return await heartbeat.is_active(
+                    now=_utc_now(),
+                    stale_after_seconds=max(
+                        15.0, float(settings.publishing.worker_poll_seconds) * 3
+                    ),
+                )
+
             loader = MongoApprovalPostLoader(
                 database["posts"],
                 database["content_preparations"],
@@ -165,6 +176,7 @@ class ApprovalBotApplication:
                 interval_seconds=settings.publishing.scheduled_publication_interval_seconds,
                 policy=CancellationPolicy(settings.publishing.cancellation_policy),
             )
+            header = RenderApprovalHeader(settings.timezone)
             callbacks = ApprovalCallbackExecutor(
                 tokens=tokens,
                 authorize=components.authorize,
@@ -178,10 +190,12 @@ class ApprovalBotApplication:
                 keyboard=keyboard,
                 gateway=components.gateway,
                 loader=loader,
-                header=RenderApprovalHeader(),
+                header=header,
                 administrators=administrators,
                 destinations=destinations,
                 clock=_utc_now,
+                runtime_active=runtime_active,
+                timezone=settings.timezone,
                 logger=self._foundation.logger,
             )
             handlers = OperationalBotHandlers(
@@ -223,7 +237,7 @@ class ApprovalBotApplication:
                 loader,
                 DeliverApproval(components.gateway, components.repository),
                 keyboard,
-                RenderApprovalHeader(),
+                header,
                 administrators,
                 destinations,
                 owner=f"approval-bot-{uuid4().hex}",

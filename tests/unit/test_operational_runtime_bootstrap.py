@@ -79,6 +79,7 @@ class Worker:
 
     async def run(self) -> None:
         await self.run_once()
+        await asyncio.sleep(0)
 
 
 class Operational:
@@ -92,12 +93,24 @@ class Operational:
         self.statuses.append(cast("str", kwargs["status"]))
 
 
+class Heartbeat:
+    beats: ClassVar[list[str]] = []
+
+    def __init__(self, collection: object) -> None:
+        del collection
+
+    async def beat(self, *args: object, **kwargs: object) -> None:
+        del args
+        self.beats.append(cast("str", kwargs["status"]))
+
+
 def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
         Runner.instances.clear()
         Operational.statuses.clear()
+        Heartbeat.beats.clear()
 
         async def initialize(*args: object) -> None:
             del args
@@ -115,6 +128,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         )
         monkeypatch.setattr(module, "MongoScheduleRepository", lambda *args: object())
         monkeypatch.setattr(module, "MongoOperationalApprovalRepository", Operational)
+        monkeypatch.setattr(module, "MongoRuntimeHeartbeatRepository", Heartbeat)
         monkeypatch.setattr(module, "PublishImmediately", PublisherUseCase)
         monkeypatch.setattr(module, "RunDuePublication", Runner)
         monkeypatch.setattr(module, "ScheduledPublicationWorker", Worker)
@@ -137,7 +151,10 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         )
         loaded = SimpleNamespace(settings=settings)
         database = Database()
-        foundation = SimpleNamespace(mongodb_client={"test": database})
+        foundation = SimpleNamespace(
+            mongodb_client={"test": database},
+            logger=SimpleNamespace(emit=lambda **_: None),
+        )
         shared_publisher = object()
         gateway = SimpleNamespace(
             publisher=lambda **kwargs: shared_publisher,
@@ -162,6 +179,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
             "scheduled",
         ]
         assert Operational.statuses == ["published", "permanent_failed"]
+        assert Heartbeat.beats == ["running", "stopped"]
         monkeypatch.setattr(
             module, "create_foundation_application", lambda **kwargs: object()
         )

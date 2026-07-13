@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from telegram_assist_bot.application.publication import PublishStatus
+from telegram_assist_bot.shared.config import LogLevel
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
         PublishResult,
     )
     from telegram_assist_bot.domain import ScheduledPublication
+    from telegram_assist_bot.shared.observability import StructuredLogger
 
 
 class RunDueStatus(StrEnum):
@@ -47,6 +49,8 @@ class RunDuePublication:
         publish: Callable[[PublishRequest], Awaitable[PublishResult]],
         after_result: Callable[[ScheduledPublication, RunDueStatus], Awaitable[None]]
         | None = None,
+        before_attempt: Callable[[ScheduledPublication], Awaitable[None]] | None = None,
+        logger: StructuredLogger | None = None,
     ) -> None:
         """Validate and store explicit worker execution boundaries."""
         if (
@@ -67,6 +71,8 @@ class RunDuePublication:
         self._build_request = build_request
         self._publish = publish
         self._after_result = after_result
+        self._before_attempt = before_attempt
+        self._logger = logger
 
     async def execute_once(self) -> RunDueStatus:
         """Execute at most one due job; cancellation propagates without completion."""
@@ -79,6 +85,10 @@ class RunDuePublication:
         )
         if job is None:
             return RunDueStatus.IDLE
+        self._emit("publication_job_claimed", job)
+        if self._before_attempt is not None:
+            await self._before_attempt(job)
+        self._emit("publication_attempt_started", job)
         try:
             request = await self._build_request(job.post_id, job.destination_id)
             result = await self._publish(request)
@@ -89,6 +99,9 @@ class RunDuePublication:
                 job.job_id, owner=self._owner, at=self._now()
             )
             status = RunDueStatus.COMPLETED if changed else RunDueStatus.LEASE_LOST
+            self._emit("publication_succeeded", job)
+            if changed:
+                self._emit("publication_job_completed", job)
             await self._notify(job, status)
             return status
         if (
@@ -103,6 +116,7 @@ class RunDuePublication:
                 category=result.status.value,
             )
             status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
+            self._emit("publication_deferred", job)
             await self._notify(job, status)
             return status
         category = (
@@ -114,6 +128,7 @@ class RunDuePublication:
             job.job_id, owner=self._owner, category=category
         )
         status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
+        self._emit("publication_failed", job)
         await self._notify(job, status)
         return status
 
@@ -126,6 +141,20 @@ class RunDuePublication:
         if value.tzinfo is None:
             raise ValueError("Worker clock must return aware time.")
         return value.astimezone(UTC)
+
+    def _emit(self, event_name: str, job: ScheduledPublication) -> None:
+        if self._logger is not None:
+            self._logger.emit(
+                level=LogLevel.INFO,
+                event_name=event_name,
+                fields={
+                    "approval_post_id": job.post_id,
+                    "target_destination_id": job.destination_id,
+                    "publication_action": job.action,
+                    "scheduled_due_at": job.due_at.isoformat(),
+                    "attempt_count": job.attempt_count,
+                },
+            )
 
 
 __all__ = ("RunDuePublication", "RunDueStatus")

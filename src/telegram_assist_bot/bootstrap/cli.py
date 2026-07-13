@@ -17,6 +17,10 @@ from telegram_assist_bot.bootstrap.approval_bot import (
     run_approval_bot_application,
 )
 from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
+from telegram_assist_bot.bootstrap.publication_queue import (
+    cancel_publication_job,
+    inspect_publication_queue,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     BinaryEventStream,
     FoundationApplication,
@@ -128,6 +132,8 @@ def _parser() -> _SafeArgumentParser:
             "schedule-worker",
             "approval-bot",
             "runtime",
+            "publication-queue",
+            "publication-cancel",
         ),
         default="check",
         help=(
@@ -135,7 +141,8 @@ def _parser() -> _SafeArgumentParser:
             "'ingest-text' alias) for full ingestion, 'media-cleanup' for one "
             "cleanup batch, 'schedule-worker' for standalone durable publication, "
             "'approval-bot' for Bot API polling, or 'runtime' for the single-owner "
-            "ingestion and publication process."
+            "ingestion and publication process; publication queue commands never "
+            "open Telegram sessions."
         ),
     )
     parser.add_argument(
@@ -146,6 +153,8 @@ def _parser() -> _SafeArgumentParser:
             "default config/configuration.json path."
         ),
     )
+    parser.add_argument("--status", choices=("pending",), default="pending")
+    parser.add_argument("--job-id", metavar="ID")
     return parser
 
 
@@ -255,6 +264,31 @@ def main(
                 environ=environment_snapshot,
             )
         )
+    elif arguments.command == "publication-queue":
+        rows = asyncio.run(
+            inspect_publication_queue(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                status=arguments.status,
+            )
+        )
+        for row in rows:
+            sys.stdout.write(f"{row}\n")
+        exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "publication-cancel":
+        if not arguments.job_id:
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        result = asyncio.run(
+            cancel_publication_job(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                job_id=arguments.job_id,
+            )
+        )
+        sys.stdout.write(f"cancellation_result={result.value}\n")
+        exit_code = FoundationExitCode.SUCCESS
     else:
         foundation_application = create_foundation_application(sink=sink)
         exit_code = asyncio.run(

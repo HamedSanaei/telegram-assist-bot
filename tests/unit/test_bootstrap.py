@@ -898,6 +898,85 @@ def test_cli_dispatches_one_shot_media_cleanup(
     assert calls == [Path("media.json")]
 
 
+def test_cli_inspects_queue_without_starting_runtime(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[Path, str]] = []
+
+    async def inspect_queue(
+        path: Path, *, status: str, **_kwargs: object
+    ) -> tuple[str, ...]:
+        calls.append((path, status))
+        return (
+            "job_id=job-1 | post_id=short | source_message_id=42 | "
+            "destination=dest | action=immediate | status=Pending | "
+            "due_at=2026-07-13T12:00:00+00:00 | attempt_count=0",
+        )
+
+    monkeypatch.setattr(cli_module, "inspect_publication_queue", inspect_queue)
+    monkeypatch.setattr(
+        cli_module,
+        "create_operational_runtime_application",
+        lambda **_kwargs: pytest.fail("queue inspection started runtime"),
+    )
+
+    result = cli_module.main(
+        [
+            "publication-queue",
+            "--config",
+            "queue.json",
+            "--status",
+            "pending",
+        ],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [(Path("queue.json"), "pending")]
+    output = capsys.readouterr().out
+    assert "job_id=job-1" in output
+    assert "متن" not in output
+
+
+def test_cli_cancellation_requires_job_id_and_is_explicitly_dispatched(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from telegram_assist_bot.domain import CancellationResult
+
+    calls: list[tuple[Path, str]] = []
+
+    async def cancel(
+        path: Path, *, job_id: str, **_kwargs: object
+    ) -> CancellationResult:
+        calls.append((path, job_id))
+        return CancellationResult.ALREADY_CANCELLED
+
+    monkeypatch.setattr(cli_module, "cancel_publication_job", cancel)
+    assert (
+        cli_module.main(
+            ["publication-cancel", "--config", "queue.json"],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.CONFIGURATION_ERROR
+    )
+    result = cli_module.main(
+        [
+            "publication-cancel",
+            "--config",
+            "queue.json",
+            "--job-id",
+            "job-1",
+        ],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [(Path("queue.json"), "job-1")]
+    assert "AlreadyCancelled" in capsys.readouterr().out
+
+
 def test_import_and_reload_do_not_execute_startup_or_open_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

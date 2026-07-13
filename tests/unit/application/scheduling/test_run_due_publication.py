@@ -12,6 +12,12 @@ from tests.unit.application.publication.test_publish_text_immediately import req
 from telegram_assist_bot.application.publication import PublishResult, PublishStatus
 from telegram_assist_bot.application.scheduling import RunDuePublication, RunDueStatus
 from telegram_assist_bot.domain import ScheduledPublication
+from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.observability import (
+    Redactor,
+    StructuredEvent,
+    StructuredLogger,
+)
 
 if TYPE_CHECKING:
     from telegram_assist_bot.application.ports import ScheduleRepository
@@ -173,3 +179,41 @@ def test_invalid_worker_bounds_and_naive_clock_are_rejected() -> None:
     use_case._clock = lambda: NOW.replace(tzinfo=None)
     with pytest.raises(ValueError, match="aware"):
         asyncio.run(use_case.execute_once())
+
+
+def test_publication_worker_emits_only_safe_operational_events() -> None:
+    async def scenario() -> None:
+        events: list[dict[str, object]] = []
+
+        def capture(event: StructuredEvent) -> None:
+            events.append(dict(event))
+
+        logger = StructuredLogger(
+            sink=capture,
+            clock=lambda: NOW,
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.DEBUG,
+        )
+        use_case = runner(Repository(job()), PublishStatus.SUCCEEDED)
+        use_case._logger = logger
+        assert await use_case.execute_once() is RunDueStatus.COMPLETED
+        assert [event["event_name"] for event in events] == [
+            "publication_job_claimed",
+            "publication_attempt_started",
+            "publication_succeeded",
+            "publication_job_completed",
+        ]
+        safe_keys = {
+            "approval_post_id",
+            "target_destination_id",
+            "publication_action",
+            "scheduled_due_at",
+            "attempt_count",
+        }
+        for event in events:
+            assert safe_keys <= event.keys()
+            assert "error_category" not in event
+            assert "post_content" not in event
+            assert "media_path" not in event
+
+    asyncio.run(scenario())

@@ -130,6 +130,7 @@
 | [T059](tasks/T059-source-channel-username-only.md) | کانال مبدا فقط با Username | T008، T012 | `5.1`، `5.2`، `14` | Completed |
 | [T060](tasks/T060-runtime-media-content-wiring.md) | Runtime media ingestion و content preparation | T012–T019 | `5.2`–`5.11`، `13`، `14`، `16` | Completed |
 | [T061](tasks/T061-operational-approval-publication-runtime.md) | Operational approval bot and publication orchestration | T020–T033، T060 | `5.12`–`5.19`، `13`، `14`، `16` | Completed |
+| [T062](tasks/T062-runtime-publication-visibility-approval-ux.md) | Runtime publication visibility and approval proposal UX | T020–T033، T060، T061 | `5.12`–`5.19`، `13`، `14`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 

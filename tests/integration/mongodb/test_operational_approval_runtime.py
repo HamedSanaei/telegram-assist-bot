@@ -13,6 +13,7 @@ from telegram_assist_bot.domain import publication_identity
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
     MongoOperationalApprovalRepository,
+    MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
@@ -25,6 +26,50 @@ if TYPE_CHECKING:
 def test_delivery_repository_rejects_unbounded_retry_configuration() -> None:
     with pytest.raises(ValueError, match="max_attempts"):
         MongoOperationalApprovalRepository(object(), object(), max_attempts=0)  # type: ignore[arg-type]
+
+
+def test_runtime_heartbeat_freshness_and_staleness(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            collection = client[mongodb_test_settings.database_name][
+                "runtime_heartbeats"
+            ]
+            repository = MongoRuntimeHeartbeatRepository(collection)
+            now = datetime(2026, 7, 13, 12, tzinfo=UTC)
+            await repository.beat(
+                "runtime-safe-id", started_at=now, now=now, status="running"
+            )
+            assert await repository.is_active(now=now, stale_after_seconds=15)
+            assert not await repository.is_active(
+                now=now + timedelta(seconds=16), stale_after_seconds=15
+            )
+            stored = await collection.find_one({"_id": "runtime-safe-id"})
+            assert stored is not None
+            assert set(stored) == {
+                "_id",
+                "instance_id",
+                "started_at",
+                "last_seen_at",
+                "status",
+            }
+            await repository.beat(
+                "runtime-safe-id",
+                started_at=now,
+                now=now + timedelta(seconds=17),
+                status="stopped",
+            )
+            assert not await repository.is_active(
+                now=now + timedelta(seconds=17), stale_after_seconds=15
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
 
 
 def test_ready_delivery_is_claimed_once_and_expired_lease_recovers(
@@ -139,6 +184,7 @@ def test_approval_loader_preserves_prepared_persian_entities_and_media(
                     "source_message_id": 10,
                     "source_channel_display_name": "منبع فارسی",
                     "source_channel_username": "source",
+                    "source_published_at": now - timedelta(hours=1),
                     "original_content": {
                         "text": "متن اصلی",
                         "caption": None,
@@ -175,6 +221,7 @@ def test_approval_loader_preserves_prepared_persian_entities_and_media(
                     "source_message_id": 10,
                     "item_index": 0,
                     "storage_path": "post/photo.jpg",
+                    "media_type": "photo",
                     "cleaned_at": None,
                 }
             )
@@ -191,6 +238,10 @@ def test_approval_loader_preserves_prepared_persian_entities_and_media(
             assert loaded.content.media_paths == ("post/photo.jpg",)
             assert loaded.category == "خبر"
             assert loaded.duplicate == "خیر"
+            assert loaded.source_message_id == 10
+            assert loaded.source_published_at == now - timedelta(hours=1)
+            assert loaded.content_type == "photo"
+            assert loaded.media_count == 1
         finally:
             await client.close()
 
@@ -228,6 +279,89 @@ def test_immediate_command_is_unique_due_now_and_does_not_advance_schedule_queue
             assert results[0].job.due_at == now
             assert results[0].job.action == "immediate"
             assert await queues.count_documents({}) == 0
+            claimed = await repository.claim_due(
+                owner="runtime-after-restart",
+                now=now,
+                lease_until=now + timedelta(seconds=30),
+                action="immediate",
+            )
+            assert claimed is not None
+            assert claimed.job_id == identity
+            assert (
+                await repository.claim_due(
+                    owner="competing-runtime",
+                    now=now,
+                    lease_until=now + timedelta(seconds=30),
+                    action="immediate",
+                )
+                is None
+            )
+            assert await repository.complete(
+                identity, owner="runtime-after-restart", at=now
+            )
+            assert (
+                await repository.claim_due(
+                    owner="runtime-after-restart",
+                    now=now + timedelta(seconds=31),
+                    lease_until=now + timedelta(seconds=61),
+                    action="immediate",
+                )
+                is None
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_future_scheduled_job_is_not_claimed_early_and_due_job_is_claimed_once(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            schedules = database["scheduled_publications"]
+            queues = database["schedule_queues"]
+            await initialize_publication_indexes(
+                database["publications"], schedules, queues
+            )
+            repository = MongoScheduleRepository(schedules, queues)
+            now = datetime(2026, 7, 13, 12, tzinfo=UTC)
+            reservation = await repository.reserve(
+                job_id="future-scheduled",
+                post_id="post-future",
+                destination_id=-1001,
+                now=now,
+                interval=timedelta(minutes=5),
+            )
+            assert reservation.job.due_at == now + timedelta(minutes=5)
+            assert (
+                await repository.claim_due(
+                    owner="runtime",
+                    now=now + timedelta(minutes=4, seconds=59),
+                    lease_until=now + timedelta(minutes=6),
+                    action="scheduled",
+                )
+                is None
+            )
+            claims = await asyncio.gather(
+                repository.claim_due(
+                    owner="runtime-one",
+                    now=reservation.job.due_at,
+                    lease_until=reservation.job.due_at + timedelta(seconds=30),
+                    action="scheduled",
+                ),
+                repository.claim_due(
+                    owner="runtime-two",
+                    now=reservation.job.due_at,
+                    lease_until=reservation.job.due_at + timedelta(seconds=30),
+                    action="scheduled",
+                ),
+            )
+            assert sum(item is not None for item in claims) == 1
         finally:
             await client.close()
 

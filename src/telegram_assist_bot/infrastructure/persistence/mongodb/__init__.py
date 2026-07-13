@@ -28,6 +28,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.indexes import (
 from telegram_assist_bot.infrastructure.persistence.mongodb.operational_approval_repository import (  # noqa: E501
     MongoApprovalPostLoader,
     MongoOperationalApprovalRepository,
+    MongoRuntimeHeartbeatRepository,
     initialize_operational_approval_indexes,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
@@ -65,6 +66,7 @@ __all__ = (
     "MongoPostRepository",
     "MongoPublicationPayloadLoader",
     "MongoPublicationRepository",
+    "MongoRuntimeHeartbeatRepository",
     "MongoScheduleRepository",
     "PostIndexSpec",
     "close_mongodb_client",
