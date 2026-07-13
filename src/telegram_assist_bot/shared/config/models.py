@@ -196,6 +196,7 @@ class TelegramBotConfig(_FrozenConfigModel):
     operation_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=120)] = 10
     polling_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=60)] = 30
     approval_delivery_poll_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 5
+    approval_delivery_max_per_startup: Annotated[StrictInt, Field(ge=1, le=1000)] = 10
     approval_claim_lease_seconds: Annotated[StrictInt, Field(ge=10, le=900)] = 60
     approval_retry_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
     shutdown_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 10

@@ -18,6 +18,7 @@ class ApprovalDeliveryClaim:
     post_id: str
     owner: str
     lease_until: datetime
+    ready_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +48,12 @@ class OperationalApprovalRepository(Protocol):
     """Persist delivery leases and canonical operational status."""
 
     async def claim_ready(
-        self, *, owner: str, now: datetime, lease_until: datetime
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        ready_after: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
         """Claim one ready, incomplete, or lease-expired delivery."""
         ...

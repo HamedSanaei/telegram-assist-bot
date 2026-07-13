@@ -83,6 +83,7 @@ class Foundation:
             polling_timeout_seconds=30,
             approval_claim_lease_seconds=60,
             approval_delivery_poll_seconds=5,
+            approval_delivery_max_per_startup=10,
             approval_retry_max_attempts=3,
         )
         publishing = SimpleNamespace(
