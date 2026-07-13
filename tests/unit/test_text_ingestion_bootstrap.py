@@ -31,6 +31,7 @@ from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
 )
 from telegram_assist_bot.bootstrap.text_ingestion import (
+    OperationalRuntimeError,
     SystemClock,
     TextIngestionApplication,
     TextIngestionDependencies,
@@ -130,6 +131,7 @@ class Foundation:
     logger_value: StructuredLogger
     order: list[str]
     shutdown_calls: int = 0
+    shutdown_reasons: list[str] = field(default_factory=list)
 
     @property
     def repository(self) -> Repository:
@@ -157,10 +159,11 @@ class Foundation:
         self.order.append("foundation_start")
         return self
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, reason: str = "requested") -> None:
         if self.shutdown_calls == 0:
             self.order.append("foundation_shutdown")
         self.shutdown_calls += 1
+        self.shutdown_reasons.append(reason)
 
 
 @dataclass
@@ -325,6 +328,7 @@ def test_subscribes_before_crawl_then_consumes_overlap_idempotently() -> None:
         assert len(foundation.repository.posts) == 2
         assert len(foundation.repository.claims) == 2
         assert foundation.shutdown_calls == 1
+        assert foundation.shutdown_reasons == ["requested"]
         assert gateway.close_calls == 1
         assert gateway.subscription is not None
         assert gateway.subscription.close_calls >= 1
@@ -352,6 +356,7 @@ def test_partial_startup_failure_cleans_reverse_owned_resources() -> None:
         assert gateway.subscription.close_calls == 1
         assert gateway.close_calls == 1
         assert foundation.shutdown_calls == 1
+        assert foundation.shutdown_reasons == ["startup_failed"]
         assert order[-3:] == [
             "subscription_close",
             "telegram_close",
@@ -406,7 +411,7 @@ def test_validation_failure_emits_only_safe_channel_diagnostics(
         assert fields == {
             "configuration_path": "source_channels.0",
             "issue_code": "source_read_denied",
-            "error_category": "permission",
+            "failure_category": "permission",
             "channel_role": "source",
         }
 
@@ -467,6 +472,7 @@ class RuntimeGateway(Gateway):
     second_history_attempt: asyncio.Event | None = None
     fail_first_history: bool = False
     history_attempts: int = 0
+    disconnected: asyncio.Event | None = None
 
     async def subscribe(
         self, source_channel_id: int, *, buffer_size: int
@@ -477,6 +483,11 @@ class RuntimeGateway(Gateway):
             [], self.order, entered=self.live_entered
         )
         return self.subscription
+
+    async def wait_disconnected(self) -> None:
+        if self.disconnected is None:
+            self.disconnected = asyncio.Event()
+        await self.disconnected.wait()
 
     async def iter_history_pages(
         self,
@@ -536,12 +547,24 @@ class CriticalRuntimeWorker:
             self.stopped.set()
 
 
+class ReturningRuntimeWorker(CriticalRuntimeWorker):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__(order)
+        self.return_now = asyncio.Event()
+
+    async def run(self) -> None:
+        self.order.extend(("heartbeat_active", "publication_started"))
+        self.ready.set()
+        await self.return_now.wait()
+
+
 def runtime_application(
     gateway: RuntimeGateway,
     foundation: Foundation,
     worker: CriticalRuntimeWorker,
     *,
     sleeper: object | None = None,
+    runtime_ingestor_factory: object | None = None,
 ) -> TextIngestionApplication:
     async def worker_factory(*_args: object) -> CriticalRuntimeWorker:
         return worker
@@ -556,6 +579,7 @@ def runtime_application(
             ),
             sleeper=cast("Any", sleeper or (lambda _delay: asyncio.sleep(0))),
             jitter_source=lambda: 0.5,
+            runtime_ingestor_factory=cast("Any", runtime_ingestor_factory),
             runtime_worker_factory=worker_factory,
         )
     )
@@ -642,9 +666,181 @@ def test_history_failure_retries_without_stopping_critical_services() -> None:
     run(scenario())
 
 
+def test_completed_history_and_listener_registration_do_not_stop_runtime() -> None:
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        history_release = asyncio.Event()
+        history_release.set()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=history_release,
+            live_entered=asyncio.Event(),
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker)
+        loop = asyncio.get_running_loop()
+        unobserved: list[dict[str, object]] = []
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unobserved.append(context))
+        try:
+            await app.start(Path("synthetic.json"), environ={})
+            assert gateway.history_entered is not None
+            await asyncio.wait_for(gateway.history_entered.wait(), timeout=1)
+            await asyncio.wait_for(worker.second_heartbeat.wait(), timeout=1)
+            waiter = asyncio.create_task(app.wait())
+            await asyncio.sleep(0.03)
+
+            names = [event["event_name"] for event in sink.events]
+            assert names.index("operational_runtime_ready") < names.index(
+                "history_crawl_started"
+            )
+            assert "history_crawl_completed" in names
+            assert "runtime_task_completed_unexpectedly" not in names
+            assert waiter.done() is False
+            assert foundation.shutdown_calls == 0
+            assert worker.publication_polls >= 2
+
+            app.request_stop()
+            await asyncio.wait_for(waiter, timeout=1)
+            await app.shutdown()
+            await asyncio.sleep(0)
+            assert foundation.shutdown_reasons == ["requested"]
+            assert unobserved == []
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+    run(scenario())
+
+
+def test_unexpected_telethon_disconnect_stops_runtime_with_safe_reason() -> None:
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+            disconnected=asyncio.Event(),
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker)
+        await app.start(Path("synthetic.json"), environ={})
+        assert gateway.disconnected is not None
+        gateway.disconnected.set()
+
+        with pytest.raises(OperationalRuntimeError) as captured:
+            await app.wait()
+        await app.shutdown()
+
+        event = next(
+            event
+            for event in sink.events
+            if event["event_name"] == "runtime_task_completed_unexpectedly"
+        )
+        assert event["task_name"] == "telethon-disconnected"
+        assert event["completion_kind"] == "returned"
+        assert "failure_type" not in event
+        assert isinstance(captured.value.__cause__, RuntimeError)
+        assert foundation.shutdown_reasons == ["telethon_disconnected"]
+
+    run(scenario())
+
+
+def test_normally_returned_critical_worker_is_an_infrastructure_failure() -> None:
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+        )
+        worker = ReturningRuntimeWorker(order)
+        app = runtime_application(gateway, foundation, worker)
+        await app.start(Path("synthetic.json"), environ={})
+        worker.return_now.set()
+
+        with pytest.raises(OperationalRuntimeError):
+            await app.wait()
+        await app.shutdown()
+
+        event = next(
+            event
+            for event in sink.events
+            if event["event_name"] == "runtime_task_completed_unexpectedly"
+        )
+        assert event["task_name"] == "operational-publication"
+        assert event["completion_kind"] == "returned"
+        assert "failure_type" not in event
+        assert foundation.shutdown_reasons == ["critical_task_failed"]
+
+    run(scenario())
+
+
+def test_album_finalizer_failure_uses_real_logger_and_reports_exact_task() -> None:
+    class FailingRuntimeIngestor:
+        async def finalize_due_groups(self) -> None:
+            raise ValueError("synthetic private provider detail")
+
+    async def ingestor_factory(*_args: object) -> FailingRuntimeIngestor:
+        return FailingRuntimeIngestor()
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(
+            gateway,
+            foundation,
+            worker,
+            runtime_ingestor_factory=ingestor_factory,
+        )
+        await app.start(Path("synthetic.json"), environ={})
+
+        with pytest.raises(OperationalRuntimeError) as captured:
+            await app.wait()
+        await app.shutdown()
+
+        content_event = next(
+            event
+            for event in sink.events
+            if event["event_name"] == "content_preparation_failed"
+        )
+        assert content_event["failure_category"] == "permanent"
+        assert content_event["failure_type"] == "ValueError"
+        task_event = next(
+            event
+            for event in sink.events
+            if event["event_name"] == "runtime_task_completed_unexpectedly"
+        )
+        assert task_event["task_name"] == "telegram-album-finalizer"
+        assert task_event["completion_kind"] == "failed"
+        assert task_event["failure_type"] == "TextIngestionStartupError"
+        assert isinstance(captured.value.__cause__, TextIngestionStartupError)
+        assert isinstance(captured.value.__cause__.__cause__, ValueError)
+        rendered = repr(sink.events)
+        assert "synthetic private provider detail" not in rendered
+
+    run(scenario())
+
+
 def test_critical_runtime_failure_propagates_and_drains_every_task() -> None:
     async def scenario() -> None:
-        foundation, _, order = setup()
+        foundation, sink, order = setup()
         gateway = RuntimeGateway(
             (),
             [],
@@ -658,7 +854,7 @@ def test_critical_runtime_failure_propagates_and_drains_every_task() -> None:
         await app.start(Path("synthetic.json"), environ={})
         worker.fail.set()
 
-        with pytest.raises(RuntimeError, match="critical"):
+        with pytest.raises(OperationalRuntimeError) as captured:
             await app.wait()
         tasks = tuple(app._listener_tasks)
         await app.shutdown()
@@ -668,6 +864,16 @@ def test_critical_runtime_failure_propagates_and_drains_every_task() -> None:
         assert foundation.shutdown_calls == 1
         assert tasks
         assert all(task.done() for task in tasks)
+        assert isinstance(captured.value.__cause__, RuntimeError)
+        event = next(
+            event
+            for event in sink.events
+            if event["event_name"] == "runtime_task_completed_unexpectedly"
+        )
+        assert event["task_name"] == "operational-publication"
+        assert event["completion_kind"] == "failed"
+        assert event["failure_type"] == "RuntimeError"
+        assert foundation.shutdown_reasons == ["critical_task_failed"]
 
     run(scenario())
 

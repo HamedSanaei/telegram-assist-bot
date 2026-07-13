@@ -724,6 +724,19 @@ def test_successful_event_order_is_deterministic_and_fully_correlated() -> None:
     )
 
 
+def test_shutdown_audit_preserves_an_explicit_safe_runtime_reason() -> None:
+    harness = _FoundationHarness()
+    application = _application(harness)
+
+    _run(application.start(Path("configuration.json")))
+    _run(application.shutdown(reason="critical_task_failed"))
+
+    event = next(
+        item for item in harness.events if item["event_name"] == "shutdown_begun"
+    )
+    assert event["reason"] == "critical_task_failed"
+
+
 def test_high_application_log_level_does_not_suppress_lifecycle_audit_events() -> None:
     loaded = _loaded_configuration()
     critical_settings = loaded.settings.model_copy(

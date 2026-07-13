@@ -351,4 +351,5 @@
 - **Consequences:** دو client رقیب برای یک فایل Session وجود ندارد؛ restart کارهای
   approval/publication را از outbox/lease ادامه می‌دهد. production به دو Process
   `runtime` و `approval-bot` نیاز دارد و `schedule-worker` نباید هم‌زمان با runtime
-  روی همان Session اجرا شود.
+  روی همان Session اجرا شود. عمر process با await کردن signal قطع همان client و
+  stop event صریح نگه داشته می‌شود؛ پایان crawl یا registration دلیل shutdown نیست.

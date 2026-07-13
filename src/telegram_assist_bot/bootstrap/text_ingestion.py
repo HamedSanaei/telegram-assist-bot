@@ -105,6 +105,18 @@ class TextIngestionStartupError(RuntimeError):
             self.__cause__ = cause
 
 
+class OperationalRuntimeError(RuntimeError):
+    """Report one safely classified critical runtime termination."""
+
+    error_category = "transient"
+
+    def __init__(self, *, cause: BaseException | None = None) -> None:
+        """Retain the original task failure without exposing its message."""
+        super().__init__("A critical operational runtime task stopped.")
+        if cause is not None:
+            self.__cause__ = cause
+
+
 class _State(IntEnum):
     NEW = 0
     STARTING = 1
@@ -146,7 +158,7 @@ class FoundationLifecycle(Protocol):
         """Start the foundation before Telegram resources."""
         ...
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, reason: str = "requested") -> None:
         """Close the foundation idempotently."""
         ...
 
@@ -190,6 +202,10 @@ class FullTextIngestionGateway(TextIngestionGateway, Protocol):
 
     def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
         """Return a publisher over the same already-open User API client."""
+        ...
+
+    async def wait_disconnected(self) -> None:
+        """Wait until the already-open shared client disconnects."""
         ...
 
 
@@ -260,13 +276,16 @@ class TextIngestionApplication:
 
     __slots__ = (
         "_crawl_results",
+        "_critical_tasks",
         "_dependencies",
         "_foundation_owned",
         "_gateway",
         "_listener_tasks",
         "_runtime_ingestor",
+        "_shutdown_reason",
         "_shutdown_task",
         "_state",
+        "_stop_event",
         "_subscriptions",
     )
 
@@ -279,8 +298,11 @@ class TextIngestionApplication:
         self._runtime_ingestor: RuntimeMessageIngestor | None = None
         self._subscriptions: list[TelegramLiveSubscription] = []
         self._listener_tasks: list[asyncio.Task[object]] = []
+        self._critical_tasks: list[asyncio.Task[object]] = []
         self._crawl_results: dict[int, CrawlTodayResult] = {}
         self._shutdown_task: asyncio.Task[None] | None = None
+        self._shutdown_reason: str | None = None
+        self._stop_event = asyncio.Event()
 
     @property
     def is_ready(self) -> bool:
@@ -330,7 +352,7 @@ class TextIngestionApplication:
                         fields={
                             "configuration_path": issue.configuration_path,
                             "issue_code": issue.code,
-                            "error_category": issue.error_category,
+                            "failure_category": issue.error_category,
                             "channel_role": role,
                         },
                     )
@@ -344,6 +366,16 @@ class TextIngestionApplication:
                 gateway.register_channel(validated.channel)
             await gateway.open()
             logger.emit(level=LogLevel.INFO, event_name="telegram_session_opened")
+            disconnect_task: asyncio.Task[object] | None = None
+            if self._dependencies.runtime_worker_factory is not None:
+                runtime_gateway = cast("FullTextIngestionGateway", gateway)
+                disconnect_task = cast_task(
+                    asyncio.create_task(
+                        runtime_gateway.wait_disconnected(),
+                        name="telethon-disconnected",
+                    )
+                )
+                self._track_task(disconnect_task, critical=True)
 
             sources = tuple(
                 item.channel for item in report.channels if item.role.value == "Source"
@@ -460,7 +492,10 @@ class TextIngestionApplication:
                     ),
                     name=f"telegram-live-{source.channel_id}",
                 )
-                self._listener_tasks.append(cast_task(task))
+                self._track_task(
+                    cast_task(task),
+                    critical=self._dependencies.runtime_worker_factory is not None,
+                )
                 self._subscriptions.remove(prepared[source.channel_id])
 
             async def run_history_crawl() -> None:
@@ -503,19 +538,31 @@ class TextIngestionApplication:
                 publication_task = asyncio.create_task(
                     operational_worker.run(), name="operational-publication"
                 )
-                self._listener_tasks.append(cast_task(publication_task))
+                tracked_publication = cast_task(publication_task)
+                self._track_task(tracked_publication, critical=True)
                 readiness_task = asyncio.create_task(
                     operational_worker.wait_ready(), name="operational-readiness"
                 )
+                startup_tasks: tuple[asyncio.Task[object], ...]
+                if disconnect_task is None:
+                    startup_tasks = (tracked_publication, cast_task(readiness_task))
+                else:
+                    startup_tasks = (
+                        tracked_publication,
+                        disconnect_task,
+                        cast_task(readiness_task),
+                    )
                 done, _pending = await asyncio.wait(
-                    (publication_task, readiness_task),
+                    startup_tasks,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                if publication_task in done:
+                completed_critical = next(
+                    (task for task in self._critical_tasks if task in done), None
+                )
+                if completed_critical is not None:
                     readiness_task.cancel()
                     await asyncio.gather(readiness_task, return_exceptions=True)
-                    await publication_task
-                    raise TextIngestionStartupError
+                    await self._raise_unexpected_task(completed_critical)
                 await readiness_task
                 for source in sources:
                     start_listener(source)
@@ -529,13 +576,13 @@ class TextIngestionApplication:
                     album_task = asyncio.create_task(
                         self._run_album_finalizer(), name="telegram-album-finalizer"
                     )
-                    self._listener_tasks.append(cast_task(album_task))
+                    self._track_task(cast_task(album_task), critical=True)
                 self._state = _State.READY
                 logger.emit(level=LogLevel.INFO, event_name="operational_runtime_ready")
                 history_task = asyncio.create_task(
                     run_history_crawl(), name="telegram-history-crawl"
                 )
-                self._listener_tasks.append(cast_task(history_task))
+                self._track_task(cast_task(history_task), critical=False)
             else:
                 for source in sources:
                     await crawl_source(source)
@@ -547,7 +594,7 @@ class TextIngestionApplication:
                 album_task = asyncio.create_task(
                     self._run_album_finalizer(), name="telegram-album-finalizer"
                 )
-                self._listener_tasks.append(cast_task(album_task))
+                self._track_task(cast_task(album_task), critical=False)
             self._state = _State.READY
             logger.emit(
                 level=LogLevel.INFO,
@@ -561,10 +608,12 @@ class TextIngestionApplication:
             )
             return self
         except asyncio.CancelledError:
+            self._set_shutdown_reason("requested")
             self._state = _State.FAILED
             await self._cleanup()
             raise
         except Exception as error:
+            self._set_shutdown_reason("startup_failed")
             self._state = _State.FAILED
             await self._cleanup()
             if isinstance(error, TextIngestionStartupError):
@@ -572,14 +621,67 @@ class TextIngestionApplication:
             raise TextIngestionStartupError(cause=error) from error
 
     async def wait(self) -> None:
-        """Wait for all live listeners and propagate their first failure."""
+        """Wait for an explicit stop or one genuinely critical runtime task."""
         if not self.is_ready:
             raise TextIngestionStartupError
-        if self._listener_tasks:
-            await asyncio.gather(*self._listener_tasks)
+        if self._dependencies.runtime_worker_factory is None:
+            if self._listener_tasks:
+                await asyncio.gather(*self._listener_tasks)
+            return
+        stop_task = asyncio.create_task(
+            self._stop_event.wait(), name="operational-stop-request"
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                (stop_task, *self._critical_tasks),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_task in done:
+                return
+            completed = next(task for task in self._critical_tasks if task in done)
+            await self._raise_unexpected_task(completed)
+        finally:
+            if not stop_task.done():
+                stop_task.cancel()
+            await asyncio.gather(stop_task, return_exceptions=True)
+
+    def request_stop(self) -> None:
+        """Request a normal runtime stop without closing resources inline."""
+        self._set_shutdown_reason("requested")
+        self._stop_event.set()
+
+    def _track_task(self, task: asyncio.Task[object], *, critical: bool) -> None:
+        self._listener_tasks.append(task)
+        if critical:
+            self._critical_tasks.append(task)
+
+    async def _raise_unexpected_task(self, task: asyncio.Task[object]) -> None:
+        fields, original = _unexpected_task_details(task)
+        task_name = task.get_name()
+        if isinstance(original, OperationalRuntimeError):
+            self._shutdown_reason = "critical_task_failed"
+            raise original
+        self._dependencies.foundation.logger.emit(
+            level=LogLevel.ERROR,
+            event_name="runtime_task_completed_unexpectedly",
+            fields=fields,
+        )
+        reason = (
+            "telethon_disconnected"
+            if task_name == "telethon-disconnected"
+            else "critical_task_failed"
+        )
+        self._shutdown_reason = reason
+        failure = OperationalRuntimeError(cause=original)
+        raise failure from original
+
+    def _set_shutdown_reason(self, reason: str) -> None:
+        if self._shutdown_reason is None:
+            self._shutdown_reason = reason
 
     async def shutdown(self) -> None:
         """Cancel listeners and close every owned resource exactly once."""
+        self.request_stop()
         if self._shutdown_task is None:
             self._shutdown_task = asyncio.create_task(self._cleanup())
         await self._shutdown_task
@@ -588,12 +690,14 @@ class TextIngestionApplication:
         if self._state is _State.STOPPED:
             return
         self._state = _State.STOPPING
+        self._stop_event.set()
         for task in reversed(self._listener_tasks):
             if not task.done():
                 task.cancel()
         if self._listener_tasks:
             await asyncio.gather(*self._listener_tasks, return_exceptions=True)
         self._listener_tasks.clear()
+        self._critical_tasks.clear()
         for subscription in reversed(self._subscriptions):
             await subscription.close()
         self._subscriptions.clear()
@@ -601,7 +705,9 @@ class TextIngestionApplication:
             await self._gateway.close()
             self._gateway = None
         if self._foundation_owned:
-            await self._dependencies.foundation.shutdown()
+            await self._dependencies.foundation.shutdown(
+                reason=self._shutdown_reason or "requested"
+            )
             self._foundation_owned = False
         self._state = _State.STOPPED
 
@@ -621,7 +727,8 @@ class TextIngestionApplication:
                 level=LogLevel.ERROR,
                 event_name="content_preparation_failed",
                 fields={
-                    "error_category": getattr(error, "error_category", "permanent")
+                    "failure_category": getattr(error, "error_category", "permanent"),
+                    "failure_type": type(error).__name__,
                 },
                 error=safe_error,
             )
@@ -631,6 +738,32 @@ class TextIngestionApplication:
 def cast_task(task: asyncio.Task[object]) -> asyncio.Task[object]:
     """Keep task storage explicit for strict type checking."""
     return task
+
+
+def _unexpected_task_details(
+    task: asyncio.Task[object],
+) -> tuple[dict[str, object], BaseException]:
+    """Classify one completed task without exposing exception details."""
+    if task.cancelled():
+        completion_kind = "cancelled"
+        original: BaseException = RuntimeError(
+            "A critical runtime task was cancelled unexpectedly."
+        )
+    else:
+        task_error = task.exception()
+        if task_error is None:
+            completion_kind = "returned"
+            original = RuntimeError("A critical runtime task returned unexpectedly.")
+        else:
+            completion_kind = "failed"
+            original = task_error
+    fields: dict[str, object] = {
+        "task_name": task.get_name(),
+        "completion_kind": completion_kind,
+    }
+    if completion_kind == "failed":
+        fields["failure_type"] = type(original).__name__
+    return fields, original
 
 
 def _new_post_id(_identity: SourceMessageIdentity) -> PostId:
@@ -969,34 +1102,37 @@ async def _create_publication_worker(
             readiness_task = asyncio.create_task(
                 await_readiness(), name="runtime-critical-readiness"
             )
+            readiness_marker: asyncio.Task[None] | None = None
             try:
-                started, _pending = await asyncio.wait(
-                    (readiness_task, publication_task, heartbeat_task),
-                    return_when=asyncio.FIRST_COMPLETED,
+
+                async def mark_ready() -> None:
+                    await readiness_task
+                    ready.set()
+
+                readiness_marker = asyncio.create_task(
+                    mark_ready(), name="runtime-readiness-marker"
                 )
-                if readiness_task not in started:
-                    completed = next(iter(started))
-                    await completed
-                    raise RuntimeError("Critical operational worker stopped.")
-                await readiness_task
-                ready.set()
                 done, _pending = await asyncio.wait(
                     (publication_task, heartbeat_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 completed = next(iter(done))
-                await completed
-                raise RuntimeError("Critical operational worker stopped.")
+                fields, original = _unexpected_task_details(cast_task(completed))
+                owned_foundation.logger.emit(
+                    level=LogLevel.ERROR,
+                    event_name="runtime_task_completed_unexpectedly",
+                    fields=fields,
+                )
+                failure = OperationalRuntimeError(cause=original)
+                raise failure from original
             finally:
-                for task in (readiness_task, publication_task, heartbeat_task):
+                tasks = [readiness_task, publication_task, heartbeat_task]
+                if readiness_marker is not None:
+                    tasks.append(readiness_marker)
+                for task in tasks:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(
-                    readiness_task,
-                    publication_task,
-                    heartbeat_task,
-                    return_exceptions=True,
-                )
+                await asyncio.gather(*tasks, return_exceptions=True)
                 try:
                     await heartbeat.beat(
                         owner,
