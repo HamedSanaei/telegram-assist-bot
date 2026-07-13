@@ -19,6 +19,20 @@ class ApprovalDeliveryClaim:
     owner: str
     lease_until: datetime
     ready_at: datetime | None = None
+    attempt_count: int = 0
+    administrator_states: tuple[ApprovalAdministratorDeliveryState, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalAdministratorDeliveryState:
+    """Carry safe retry progress for one administrator delivery."""
+
+    administrator_id: int
+    status: str
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    delivery_phase: str = "pending"
+    failure_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +91,33 @@ class OperationalApprovalRepository(Protocol):
         ...
 
     async def release_delivery(
-        self, post_id: str, *, owner: str, category: str, next_attempt_at: datetime
+        self,
+        post_id: str,
+        *,
+        owner: str,
+        category: str,
+        next_attempt_at: datetime,
+        failure_type: str | None = None,
+        delivery_phase: str | None = None,
+        terminal: bool = False,
     ) -> bool:
         """Release an owned delivery for bounded retry."""
+        ...
+
+    async def record_administrator_delivery(
+        self,
+        post_id: str,
+        administrator_id: int,
+        *,
+        owner: str,
+        status: str,
+        attempt_count: int,
+        delivery_phase: str,
+        next_attempt_at: datetime | None = None,
+        failure_category: str | None = None,
+        failure_type: str | None = None,
+    ) -> bool:
+        """Persist isolated safe progress for one administrator."""
         ...
 
     async def is_actionable(self, post_id: str) -> bool:
@@ -130,6 +168,7 @@ class ApprovalPostLoader(Protocol):
 
 
 __all__ = (
+    "ApprovalAdministratorDeliveryState",
     "ApprovalDeliveryClaim",
     "ApprovalPost",
     "ApprovalPostLoader",

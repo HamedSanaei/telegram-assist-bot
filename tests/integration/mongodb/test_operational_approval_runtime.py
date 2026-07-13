@@ -155,6 +155,7 @@ def test_ready_delivery_is_claimed_once_and_expired_lease_recovers(
                 owner="bounded",
                 category="transient",
                 next_attempt_at=now,
+                terminal=True,
             )
             assert (
                 await bounded.claim_ready(
@@ -164,6 +165,97 @@ def test_ready_delivery_is_claimed_once_and_expired_lease_recovers(
                 )
                 is None
             )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_delivery_claim_order_backoff_permanent_failure_and_explicit_retry(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            preparations = database["content_preparations"]
+            deliveries = database["approval_deliveries"]
+            now = datetime(2026, 7, 13, 12, tzinfo=UTC)
+            await preparations.insert_many(
+                [
+                    {"_id": "failing", "ready_at": now},
+                    {"_id": "healthy", "ready_at": now + timedelta(microseconds=1)},
+                ]
+            )
+            repository = MongoOperationalApprovalRepository(preparations, deliveries)
+            first = await repository.claim_ready(
+                owner="worker", now=now, lease_until=now + timedelta(seconds=30)
+            )
+            assert first is not None
+            assert first.post_id == "failing"
+            await repository.record_administrator_delivery(
+                "failing",
+                7,
+                owner="worker",
+                status="retry",
+                attempt_count=1,
+                delivery_phase="content_message_send",
+                next_attempt_at=now + timedelta(seconds=10),
+                failure_category="transient",
+                failure_type="ApprovalDeliveryTransientError",
+            )
+            assert await repository.release_delivery(
+                "failing",
+                owner="worker",
+                category="transient",
+                next_attempt_at=now + timedelta(seconds=10),
+            )
+            following = await repository.claim_ready(
+                owner="worker",
+                now=now + timedelta(seconds=1),
+                lease_until=now + timedelta(seconds=31),
+            )
+            assert following is not None
+            assert following.post_id == "healthy"
+            assert await repository.complete_delivery("healthy", owner="worker")
+            retry = await repository.claim_ready(
+                owner="worker",
+                now=now + timedelta(seconds=11),
+                lease_until=now + timedelta(seconds=41),
+            )
+            assert retry is not None
+            assert retry.post_id == "failing"
+            assert retry.administrator_states[0].attempt_count == 1
+            assert await repository.release_delivery(
+                "failing",
+                owner="worker",
+                category="delivery_unavailable",
+                next_attempt_at=now + timedelta(seconds=11),
+                terminal=True,
+            )
+            assert (
+                await repository.claim_ready(
+                    owner="worker",
+                    now=now + timedelta(minutes=1),
+                    lease_until=now + timedelta(minutes=2),
+                )
+                is None
+            )
+            assert await repository.retry_delivery(
+                "failing", now=now + timedelta(minutes=1)
+            )
+            assert not await repository.retry_delivery(
+                "failing", now=now + timedelta(minutes=1)
+            )
+            explicit = await repository.claim_ready(
+                owner="worker",
+                now=now + timedelta(minutes=1),
+                lease_until=now + timedelta(minutes=2),
+            )
+            assert explicit is not None
+            assert explicit.post_id == "failing"
         finally:
             await client.close()
 

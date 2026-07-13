@@ -117,6 +117,15 @@ active و heartbeat stale/stopped را offline تفسیر می‌کند؛ این
 `CancelScheduledPost` و policy موجود لغو می‌کند؛ هیچ command بازرسی Session را باز
 نمی‌کند.
 
+Outbox تحویل approval از watermark زمان شروع برای تفکیک backlog تاریخی و کار جدید
+استفاده می‌کند. cap زمان startup فقط پس از تکمیل موفق یک Post تاریخی افزایش
+می‌یابد؛ claim ناموفق، retry، deferred و permanent failure سهمیه را مصرف نمی‌کنند.
+هر retry دارای `claim_due_at` است و claimها به‌ترتیب زمان due، زمان ایجاد و شناسه
+مرتب می‌شوند تا یک پیشنهاد خراب پیشنهادهای سالم را گرسنه نگذارد. نتیجه و backoff
+هر مدیر زیر همان outbox جدا ثبت می‌شود، درحالی‌که referenceهای content/control
+موفق منبع idempotency باقی می‌مانند. `approval-queue` فقط projection امن می‌خواند و
+`approval-retry` تنها مدیران terminal همان Post صریح را آزاد می‌کند.
+
 ترتیب startup عملیاتی پس از validation و بازشدن همان Telethon client چنین است:
 subscriptionها ساخته می‌شوند؛ heartbeat اولیه و publication polling حیاتی شروع و
 ready می‌شوند؛ live listenerها شروع می‌شوند؛ `operational_runtime_ready` صادر

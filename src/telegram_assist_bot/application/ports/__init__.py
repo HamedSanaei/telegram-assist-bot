@@ -32,6 +32,7 @@ from telegram_assist_bot.application.ports.media import (
     MediaTransientError,
 )
 from telegram_assist_bot.application.ports.operational_approval import (
+    ApprovalAdministratorDeliveryState,
     ApprovalDeliveryClaim,
     ApprovalPost,
     ApprovalPostLoader,
@@ -100,6 +101,7 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 __all__ = (
     "AdminMessagingGateway",
     "AlbumFinalizationStatus",
+    "ApprovalAdministratorDeliveryState",
     "ApprovalContent",
     "ApprovalDeliveryClaim",
     "ApprovalDeliveryError",
