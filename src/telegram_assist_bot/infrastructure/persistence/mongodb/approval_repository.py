@@ -8,6 +8,7 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from telegram_assist_bot.domain import (
+    ApprovalDeliveryState,
     ApprovalReference,
     ApprovalSyncState,
     CallbackAction,
@@ -67,19 +68,27 @@ def _claims(document: Document) -> CallbackClaims:
 
 
 def _reference(document: Document) -> ApprovalReference:
+    active = document.get("active", True)
+    content_ids = tuple(document.get("content_message_ids", ()))
+    state = document.get("delivery_state")
+    if state is None:
+        state = (
+            "completed" if active else ("content_sent" if content_ids else "pending")
+        )
     return ApprovalReference(
         document["_id"],
         document["actor_id"],
         document["chat_id"],
         document["post_id"],
         document["header_message_id"],
-        tuple(document["content_message_ids"]),
+        content_ids,
         document.get("rendered_version", 0),
-        document.get("active", True),
+        active,
         ApprovalSyncState(document.get("sync_state", "current")),
         document.get("attempt_count", 0),
         document.get("next_retry_at"),
         document.get("last_error_category"),
+        ApprovalDeliveryState(state),
     )
 
 
@@ -172,6 +181,7 @@ class MongoApprovalRepository:
             "attempt_count": reference.attempt_count,
             "next_retry_at": reference.next_retry_at,
             "last_error_category": reference.last_error_category,
+            "delivery_state": reference.delivery_state.value,
         }
         try:
             await self._references.insert_one(document)
@@ -190,20 +200,46 @@ class MongoApprovalRepository:
     async def save_delivery_progress(
         self, reference: ApprovalReference
     ) -> ApprovalReference:
-        """Persist an inactive header identity before sending content."""
-        return await self.save_reference(reference)
+        """Upsert one inactive content/control delivery phase monotonically."""
+        document = await self._references.find_one_and_update(
+            {"_id": reference.reference_id, "active": {"$ne": True}},
+            {
+                "$set": {
+                    "actor_id": reference.actor_id,
+                    "chat_id": reference.chat_id,
+                    "post_id": reference.post_id,
+                    "header_message_id": reference.header_message_id,
+                    "content_message_ids": list(reference.content_message_ids),
+                    "rendered_version": reference.rendered_version,
+                    "active": False,
+                    "sync_state": reference.sync_state.value,
+                    "attempt_count": reference.attempt_count,
+                    "next_retry_at": reference.next_retry_at,
+                    "last_error_category": reference.last_error_category,
+                    "delivery_state": reference.delivery_state.value,
+                }
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            document = await self._references.find_one({"_id": reference.reference_id})
+        if document is None:
+            raise ValueError("Approval delivery progress does not exist.")
+        return _reference(document)
 
     async def complete_reference(
-        self, reference_id: str, content_message_ids: tuple[int, ...]
+        self, reference_id: str, control_message_id: int
     ) -> ApprovalReference:
-        """Activate exactly one reference after identifiable content success."""
+        """Activate exactly one reference after identifiable control success."""
         document = await self._references.find_one_and_update(
             {"_id": reference_id, "active": False},
             {
                 "$set": {
-                    "content_message_ids": list(content_message_ids),
+                    "header_message_id": control_message_id,
                     "active": True,
                     "sync_state": "current",
+                    "delivery_state": "completed",
                 }
             },
             return_document=ReturnDocument.AFTER,

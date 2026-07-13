@@ -101,7 +101,12 @@ class AdminMessagingGateway(Protocol):
     """Hide Bot SDK requests and exceptions from Application."""
 
     async def send_header(
-        self, chat_id: int, text: str, keyboard: InlineKeyboard | None = None
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: InlineKeyboard | None = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> int:
         """Send one canonical managerial header."""
         ...
@@ -157,9 +162,9 @@ class ApprovalRepository(Protocol):
         ...
 
     async def complete_reference(
-        self, reference_id: str, content_message_ids: tuple[int, ...]
+        self, reference_id: str, control_message_id: int
     ) -> ApprovalReference:
-        """Atomically activate a reference after content success."""
+        """Atomically activate a reference after control-card success."""
         ...
 
     async def list_active_references(

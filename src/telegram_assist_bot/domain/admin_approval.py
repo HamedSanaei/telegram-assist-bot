@@ -121,6 +121,16 @@ class ApprovalSyncState(StrEnum):
     INACTIVE = "inactive"
 
 
+class ApprovalDeliveryState(StrEnum):
+    """Represent restart-safe content-first approval delivery phases."""
+
+    PENDING = "pending"
+    CONTENT_SENDING = "content_sending"
+    CONTENT_SENT = "content_sent"
+    CONTROL_SENDING = "control_sending"
+    COMPLETED = "completed"
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovalReference:
     """Reference one independently delivered private administrator UI."""
@@ -137,12 +147,14 @@ class ApprovalReference:
     attempt_count: int = 0
     next_retry_at: datetime | None = None
     last_error_category: str | None = None
+    delivery_state: ApprovalDeliveryState = ApprovalDeliveryState.COMPLETED
 
 
 __all__ = (
     "AdminPermission",
     "AdminRole",
     "Administrator",
+    "ApprovalDeliveryState",
     "ApprovalReference",
     "ApprovalSyncState",
     "CallbackAction",

@@ -31,6 +31,16 @@ class ApprovalSyncClaim:
 
 
 @dataclass(frozen=True, slots=True)
+class DestinationPublicationState:
+    """Carry safe durable publication UI state and timing metadata."""
+
+    status: str
+    action: str | None
+    occurred_at: datetime
+    due_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalPost:
     """Carry prepared approval content and safe source metadata."""
 
@@ -42,6 +52,10 @@ class ApprovalPost:
     category: str | None = None
     duplicate: str | None = None
     score: str | None = None
+    source_message_id: int | None = None
+    source_published_at: datetime | None = None
+    content_type: str = "text"
+    media_count: int = 0
 
 
 class OperationalApprovalRepository(Protocol):
@@ -80,12 +94,20 @@ class OperationalApprovalRepository(Protocol):
         status: str,
         version: int,
         at: datetime,
+        action: str | None = None,
+        due_at: datetime | None = None,
     ) -> None:
         """Persist a monotonic safe status used by every approval message."""
         ...
 
     async def destination_statuses(self, post_id: str) -> dict[int, str]:
         """Load safe per-destination status labels."""
+        ...
+
+    async def destination_states(
+        self, post_id: str
+    ) -> dict[int, DestinationPublicationState]:
+        """Load safe per-destination state with durable timing metadata."""
         ...
 
     async def claim_sync(
@@ -112,5 +134,6 @@ __all__ = (
     "ApprovalPost",
     "ApprovalPostLoader",
     "ApprovalSyncClaim",
+    "DestinationPublicationState",
     "OperationalApprovalRepository",
 )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from pymongo import ASCENDING, ReturnDocument
@@ -13,6 +14,7 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryClaim,
     ApprovalPost,
     ApprovalSyncClaim,
+    DestinationPublicationState,
 )
 from telegram_assist_bot.domain.posts import TelegramEntity
 
@@ -36,6 +38,45 @@ async def initialize_operational_approval_indexes(
         ],
         name="ix_approval_delivery_claim_v1",
     )
+
+
+class MongoRuntimeHeartbeatRepository:
+    """Persist and inspect safe operational-runtime liveness heartbeats."""
+
+    def __init__(self, heartbeats: AsyncCollection[Document]) -> None:
+        self._heartbeats = heartbeats
+
+    async def beat(
+        self, instance_id: str, *, started_at: datetime, now: datetime, status: str
+    ) -> None:
+        """Upsert one safe heartbeat without session or provider metadata."""
+        await self._heartbeats.update_one(
+            {"_id": instance_id},
+            {
+                "$set": {
+                    "instance_id": instance_id,
+                    "started_at": started_at,
+                    "last_seen_at": now,
+                    "status": status,
+                }
+            },
+            upsert=True,
+        )
+
+    async def is_active(self, *, now: datetime, stale_after_seconds: float) -> bool:
+        """Return whether any running instance has a fresh heartbeat."""
+        return (
+            await self._heartbeats.find_one(
+                {
+                    "status": "running",
+                    "last_seen_at": {
+                        "$gte": now - timedelta(seconds=stale_after_seconds)
+                    },
+                },
+                projection={"_id": 1},
+            )
+            is not None
+        )
 
 
 def _entities(values: list[Document]) -> tuple[TelegramEntity, ...]:
@@ -169,6 +210,8 @@ class MongoOperationalApprovalRepository:
         status: str,
         version: int,
         at: datetime,
+        action: str | None = None,
+        due_at: datetime | None = None,
     ) -> None:
         """Persist one monotonic safe destination status and request UI sync."""
         key = f"destination_statuses.{destination_id}"
@@ -176,7 +219,13 @@ class MongoOperationalApprovalRepository:
             {"_id": post_id, f"{key}.version": {"$not": {"$gt": version}}},
             {
                 "$set": {
-                    key: {"status": status, "version": version, "updated_at": at},
+                    key: {
+                        "status": status,
+                        "version": version,
+                        "updated_at": at,
+                        "action": action,
+                        "due_at": due_at,
+                    },
                     "sync_required": True,
                 },
                 "$inc": {"sync_version": 1},
@@ -192,6 +241,25 @@ class MongoOperationalApprovalRepository:
             return {}
         return {
             int(key): value["status"]
+            for key, value in document.get("destination_statuses", {}).items()
+        }
+
+    async def destination_states(
+        self, post_id: str
+    ) -> dict[int, DestinationPublicationState]:
+        """Return safe durable status and timing metadata for control cards."""
+        document = await self._deliveries.find_one(
+            {"_id": post_id}, projection={"destination_statuses": 1}
+        )
+        if document is None:
+            return {}
+        return {
+            int(key): DestinationPublicationState(
+                value["status"],
+                value.get("action"),
+                value["updated_at"],
+                value.get("due_at"),
+            )
             for key, value in document.get("destination_statuses", {}).items()
         }
 
@@ -293,12 +361,19 @@ class MongoApprovalPostLoader:
                     "cleaned_at": None,
                 }
             ).sort("item_index", ASCENDING)
-            path_values = [str(item["storage_path"]) async for item in cursor]
+            media_documents = [item async for item in cursor]
+            path_values = [str(item["storage_path"]) for item in media_documents]
             paths: tuple[str, ...] = tuple(path_values)
+            content_type = (
+                str(media_documents[0].get("media_type", "document")).lower()
+                if media_documents
+                else "text"
+            )
         else:
             paths = tuple(
                 str(item["media"]["storage_path"]) for item in group["members"]
             )
+            content_type = "album"
         category = preparation.get("category_result", {}).get("category_id")
         duplicate_value = preparation.get("duplicate_result", {}).get("is_duplicate")
         duplicate = (
@@ -312,6 +387,10 @@ class MongoApprovalPostLoader:
             ApprovalContent(text, caption, text_entities, caption_entities, paths),
             category=category,
             duplicate=duplicate,
+            source_message_id=post.get("source_message_id"),
+            source_published_at=post.get("source_published_at"),
+            content_type=content_type,
+            media_count=len(paths),
         )
 
 

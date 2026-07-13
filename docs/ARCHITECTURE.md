@@ -100,6 +100,23 @@ Bot API + MongoDB است، outbox تحویل و sync را poll می‌کند و 
 Session کاربر را باز نمی‌کند. lock Session مانع رقابت فرمان‌های سازگار قدیمی با
 `runtime` می‌شود.
 
+Process `runtime` یک heartbeat MongoDB با فیلدهای محدود `instance_id`،
+`started_at`، `last_seen_at` و `status` نگه می‌دارد. approval bot heartbeat تازه را
+active و heartbeat stale/stopped را offline تفسیر می‌کند؛ این فقط presentation است
+و job فوری یا زمان‌بندی‌شدهٔ پایدار را تغییر نمی‌دهد. `due_at` در persistence به UTC
+می‌ماند و کارت کنترل آن را در timezone typed برنامه نمایش می‌دهد.
+
+تحویل پیشنهاد content-first و مرحله‌ای است: `pending`، `content_sending`،
+`content_sent`، `control_sending` و `completed`. شناسه‌های تمام پیام‌های محتوا پیش
+از ارسال control card ثبت می‌شوند و control card به اولین پیام محتوا reply می‌شود؛
+در Album نیز اولین عضو anchor است. restart با دیدن `content_sent` فقط control card
+ناقص را می‌فرستد و reference کامل دوباره تحویل نمی‌شود.
+
+فرمان `publication-queue` projection محدود و read-only روی صف دارد و payload یا
+مسیر Media را بار نمی‌کند. `publication-cancel` فقط job ID صریح را از مسیر
+`CancelScheduledPost` و policy موجود لغو می‌کند؛ هیچ command بازرسی Session را باز
+نمی‌کند.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای

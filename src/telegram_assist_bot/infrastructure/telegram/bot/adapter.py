@@ -79,13 +79,21 @@ class AiogramAdminMessagingGateway:
         return self._bot
 
     async def send_header(
-        self, chat_id: int, text: str, keyboard: InlineKeyboard | None = None
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: InlineKeyboard | None = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> int:
         """Send a managerial header with an optional inline keyboard."""
         try:
             async with asyncio.timeout(self._timeout):
                 message = await self._bot.send_message(
-                    chat_id, text, reply_markup=_keyboard(keyboard)
+                    chat_id,
+                    text,
+                    reply_markup=_keyboard(keyboard),
+                    reply_to_message_id=reply_to_message_id,
                 )
         except (
             TelegramForbiddenError,

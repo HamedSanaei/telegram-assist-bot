@@ -8,6 +8,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -33,6 +34,7 @@ from telegram_assist_bot.application.ports import (
     ApprovalSyncClaim,
     BotEditOutcome,
     BotUpdate,
+    DestinationPublicationState,
     OperationalApprovalRepository,
     ScheduleReservation,
 )
@@ -43,6 +45,7 @@ from telegram_assist_bot.application.scheduling import CancelScheduledPost, Sche
 from telegram_assist_bot.domain import (
     Administrator,
     AdminPermission,
+    ApprovalDeliveryState,
     ApprovalReference,
     ApprovalSyncState,
     CallbackAction,
@@ -76,11 +79,17 @@ class Gateway:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
         self.answers: list[tuple[str, str, bool]] = []
+        self.edits: list[tuple[str, object]] = []
 
     async def send_header(
-        self, chat_id: int, text: str, keyboard: object = None
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: object = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> int:
-        del keyboard
+        del keyboard, reply_to_message_id
         self.sent.append((chat_id, text))
         return len(self.sent)
 
@@ -93,7 +102,8 @@ class Gateway:
     async def edit_header(
         self, chat_id: int, message_id: int, text: str, keyboard: object
     ) -> BotEditOutcome:
-        del chat_id, message_id, text, keyboard
+        del chat_id, message_id
+        self.edits.append((text, keyboard))
         return BotEditOutcome.UPDATED
 
     async def answer_callback(self, query_id: str, text: str, *, alert: bool) -> None:
@@ -108,6 +118,7 @@ class OperationalRepository:
 
     def __init__(self) -> None:
         self.statuses: dict[int, str] = {}
+        self.states: dict[int, DestinationPublicationState] = {}
         self.sync_version = 0
         self.sync_claim: ApprovalSyncClaim | None = None
         self.sync_completed = 0
@@ -123,14 +134,25 @@ class OperationalRepository:
         status: str,
         version: int,
         at: datetime,
+        action: str | None = None,
+        due_at: datetime | None = None,
     ) -> None:
-        del post_id, version, at
+        del post_id, version
         self.statuses[destination_id] = status
+        self.states[destination_id] = DestinationPublicationState(
+            status, action, at, due_at
+        )
         self.sync_version += 1
 
     async def destination_statuses(self, post_id: str) -> dict[int, str]:
         del post_id
         return dict(self.statuses)
+
+    async def destination_states(
+        self, post_id: str
+    ) -> dict[int, DestinationPublicationState]:
+        del post_id
+        return dict(self.states)
 
     async def claim_sync(
         self, *, owner: str, now: datetime, lease_until: datetime
@@ -210,7 +232,14 @@ class ScheduleRepository:
 class Loader:
     async def load(self, post_id: str) -> ApprovalPost:
         return ApprovalPost(
-            post_id, "منبع", "source", -2001, ApprovalContent("سلام", None)
+            post_id,
+            "منبع",
+            "source",
+            -2001,
+            ApprovalContent("سلام از متن اصلی", None),
+            source_message_id=133594,
+            source_published_at=NOW,
+            content_type="text",
         )
 
 
@@ -270,6 +299,14 @@ def test_valid_immediate_callback_creates_one_due_now_job_and_replay_is_harmless
         assert tuple(schedules.jobs) == (identity,)
         assert schedules.jobs[identity].due_at == NOW
         assert operational.statuses[DESTINATION] == "immediate_queued"
+        assert operational.states[DESTINATION].due_at == NOW
+        gateway = cast("Gateway", executor._gateway)
+        assert "در صف انتشار فوری — Runtime غیرفعال" in gateway.edits[-1][0]
+        assert "2026-07-13 15:30:00 Asia/Tehran" in gateway.edits[-1][0]
+        assert "post-1" not in gateway.edits[-1][0]
+        assert "133594" in gateway.edits[-1][0]
+        keyboard = cast("Any", gateway.edits[-1][1])
+        assert all("مقصد" in button.label for row in keyboard.rows for button in row)
 
     asyncio.run(scenario())
 
@@ -289,6 +326,10 @@ def test_scheduled_callback_uses_existing_slot_calculation_and_deselection_cance
         assert await executor.execute(BotUpdate(7, 7, "private", first, "q1"))
         identity = schedule_identity("post-1", DESTINATION)
         assert schedules.jobs[identity].due_at == NOW + timedelta(seconds=300)
+        gateway = cast("Gateway", executor._gateway)
+        rendered = gateway.edits[-1][0]
+        assert "مقصد" in rendered
+        assert "2026-07-13 15:35:00 Asia/Tehran" in rendered
         second = await tokens.issue(
             actor_id=7,
             action=CallbackAction.TOGGLE_SCHEDULED,
@@ -416,12 +457,18 @@ def build_executor() -> tuple[
         keyboard=keyboard,
         gateway=gateway,
         loader=Loader(),
-        header=RenderApprovalHeader(),
+        header=RenderApprovalHeader(ZoneInfo("Asia/Tehran")),
         administrators=(admin,),
         destinations=(OperationalDestination(DESTINATION, "مقصد"),),
         clock=lambda: NOW,
+        runtime_active=lambda: _false(),
+        timezone=ZoneInfo("Asia/Tehran"),
     )
     return executor, tokens, schedules, operational
+
+
+async def _false() -> bool:
+    return False
 
 
 class DeliveryOperational:
@@ -528,7 +575,9 @@ def test_delivery_worker_releases_transient_partial_delivery() -> None:
         )
         assert not await worker.execute_once()
         assert operational.released == 1
-        assert not approvals.references["approval:post-1:7"].active
+        reference = approvals.references["approval:post-1:7"]
+        assert reference.delivery_state is ApprovalDeliveryState.CONTENT_SENDING
+        assert not reference.content_message_ids
 
     asyncio.run(scenario())
 

@@ -149,16 +149,17 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 |---|---|
 | `src/telegram_assist_bot/__init__.py` | metadata عمومی Package و نسخه `0.1.0` |
 | `src/telegram_assist_bot/__main__.py` | Entry point بدون side effect برای `python -m telegram_assist_bot` |
-| `bootstrap/cli.py` | parsing امن `--config`، commandهای default/`login`/`ingest`/`ingest-text`/`media-cleanup`/`schedule-worker`/`approval-bot`/`runtime` و exit codeهای `0/2/3` |
+| `bootstrap/cli.py` | parsing امن `--config`، commandهای runtime/approval و inspection/cancellation صریح صف، و exit codeهای پایدار |
 | `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client |
 | `bootstrap/telegram_login.py` | Composition Root ورود صریح و prompt امن بدون Secret در CLI/log |
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
-| `bootstrap/text_ingestion.py` | orchestration کامل Foundation، validation، subscribe-before-crawl، Post/Media/preparation، Album finalizer محدود، Listener و shutdown معکوس با یک Session |
+| `bootstrap/text_ingestion.py` | orchestration کامل Foundation، ingestion و publication با یک Session، Album finalizer، heartbeat پایدار Runtime و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
-| `application/operational_approval.py` | delivery، callback-to-command، cancellation و sync نتیجه بدون Telegram SDK |
+| `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
+| `application/operational_approval.py` | delivery content-first، callback-to-command، زمان/availability هر مقصد، cancellation و sync نتیجه بدون Telegram SDK |
 | `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
 | `presentation/bot/runtime_handlers.py` | handlerهای SDK-independent برای `/start` و callback عملیاتی |
-| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease آماده‌ها، status/sync outbox و loader متن/Entity/Media تأیید |
+| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease آماده‌ها، heartbeat Runtime، status/due/sync outbox و loader metadata/text/Entity/Media تأیید |
 | `bootstrap/media_cleanup.py` | Composition Root یک‌مرحله‌ای cleanup محدود Media با reuse تنظیمات، repository و storage موجود |
 | `bootstrap/scheduling.py` | Composition Root عملیاتی Session/Premium، MongoDB، Publisher و Worker پایدار |
 | `bootstrap/__init__.py` | API عمومی Composition Root و CLI بدون اجرای Startup هنگام import |

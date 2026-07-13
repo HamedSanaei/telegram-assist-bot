@@ -63,6 +63,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoOperationalApprovalRepository,
     MongoPublicationPayloadLoader,
     MongoPublicationRepository,
+    MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
@@ -721,6 +722,7 @@ async def _create_publication_worker(
     schedule_repository = MongoScheduleRepository(schedules, queues)
     operational = MongoOperationalApprovalRepository(preparations, deliveries)
     owner = f"runtime-{uuid4().hex}"
+    heartbeat = MongoRuntimeHeartbeatRepository(database["runtime_heartbeats"])
     publishing = settings.publishing
     publication = PublishImmediately(
         publication_repository,
@@ -763,6 +765,19 @@ async def _create_publication_worker(
             else "permanent_failed",
             version=job.version + 1,
             at=datetime.now(UTC),
+            action=job.action,
+            due_at=job.due_at,
+        )
+
+    async def before_attempt(job: ScheduledPublication) -> None:
+        await operational.record_destination_status(
+            job.post_id,
+            job.destination_id,
+            status="publishing",
+            version=job.version + 1,
+            at=datetime.now(UTC),
+            action=job.action,
+            due_at=job.due_at,
         )
 
     immediate = RunDuePublication(
@@ -776,6 +791,8 @@ async def _create_publication_worker(
         build_request=request_builder("immediate"),
         publish=publication.execute,
         after_result=after_result,
+        before_attempt=before_attempt,
+        logger=owned_foundation.logger,
     )
     scheduled = RunDuePublication(
         schedule_repository,
@@ -788,15 +805,58 @@ async def _create_publication_worker(
         build_request=request_builder("scheduled"),
         publish=publication.execute,
         after_result=after_result,
+        before_attempt=before_attempt,
+        logger=owned_foundation.logger,
     )
 
     async def run_once() -> None:
         await immediate.execute_once()
         await scheduled.execute_once()
 
-    return ScheduledPublicationWorker(
+    publication_worker = ScheduledPublicationWorker(
         run_once, poll_seconds=float(publishing.worker_poll_seconds)
     )
+
+    class OperationalWorker:
+        async def run(self) -> None:
+            started_at = datetime.now(UTC)
+            interval = max(1.0, float(publishing.worker_poll_seconds))
+
+            async def pulse() -> None:
+                while True:
+                    await heartbeat.beat(
+                        owner,
+                        started_at=started_at,
+                        now=datetime.now(UTC),
+                        status="running",
+                    )
+                    await asyncio.sleep(interval)
+
+            publication_task = asyncio.create_task(
+                publication_worker.run(), name="runtime-publication"
+            )
+            heartbeat_task = asyncio.create_task(pulse(), name="runtime-heartbeat")
+            try:
+                done, _pending = await asyncio.wait(
+                    (publication_task, heartbeat_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                await asyncio.gather(*done)
+            finally:
+                for task in (publication_task, heartbeat_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    publication_task, heartbeat_task, return_exceptions=True
+                )
+                await heartbeat.beat(
+                    owner,
+                    started_at=started_at,
+                    now=datetime.now(UTC),
+                    status="stopped",
+                )
+
+    return OperationalWorker()
 
 
 def create_operational_runtime_application(

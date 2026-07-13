@@ -37,7 +37,8 @@ from telegram_assist_bot.domain import (
 from telegram_assist_bot.shared.config import LogLevel
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
+    from datetime import tzinfo
 
     from telegram_assist_bot.application.approvals import (
         AuthorizeAdminAction,
@@ -63,11 +64,12 @@ if TYPE_CHECKING:
 
 
 STATUS_LABELS = {
-    "immediate_queued": "فوری در صف",
-    "scheduled": "زمان‌بندی‌شده",
+    "immediate_queued": "در صف انتشار فوری",
+    "scheduled": "زمان‌بندی شده",
+    "publishing": "در حال انتشار",
     "published": "منتشر شد",
     "cancelled": "لغو شد",
-    "permanent_failed": "خطای نهایی",
+    "permanent_failed": "انتشار ناموفق",
 }
 
 
@@ -179,6 +181,14 @@ class ApprovalDeliveryWorker:
             category=post.category,
             duplicate=post.duplicate,
             score=post.score,
+            source_message_id=post.source_message_id,
+            source_published_at=post.source_published_at,
+            preview=post.content.text or post.content.caption,
+            content_type=post.content_type,
+            media_count=post.media_count,
+            destination_summary="\n".join(
+                f"📤 مقصد: {item.name}" for item in self._destinations
+            ),
         )
         failed = False
         for admin in self._administrators:
@@ -198,7 +208,7 @@ class ApprovalDeliveryWorker:
                 actor=admin,
                 post_id=post.post_id,
                 destinations=tuple(
-                    DestinationOption(item.destination_id)
+                    DestinationOption(item.destination_id, item.name)
                     for item in self._destinations
                 ),
                 selections=selections,
@@ -260,6 +270,8 @@ class ApprovalCallbackExecutor:
         administrators: tuple[Administrator, ...],
         destinations: tuple[OperationalDestination, ...],
         clock: Callable[[], datetime],
+        runtime_active: Callable[[], Awaitable[bool]] | None = None,
+        timezone: tzinfo = UTC,
         logger: StructuredLogger | None = None,
     ) -> None:
         """Store existing approval, scheduling, and synchronization use cases."""
@@ -279,6 +291,8 @@ class ApprovalCallbackExecutor:
         self._administrators = {item.telegram_user_id: item for item in administrators}
         self._destinations = destinations
         self._clock = clock
+        self._runtime_active = runtime_active
+        self._timezone = timezone
         self._logger = logger
 
     async def execute(self, update: BotUpdate) -> bool:
@@ -387,6 +401,8 @@ class ApprovalCallbackExecutor:
                 status="immediate_queued",
                 version=selection.version,
                 at=now,
+                action="immediate",
+                due_at=reservation.job.due_at,
             )
             self._emit(
                 "publication_job_created",
@@ -403,6 +419,8 @@ class ApprovalCallbackExecutor:
                 status="scheduled",
                 version=selection.version,
                 at=now,
+                action="scheduled",
+                due_at=reservation.job.due_at,
             )
             self._emit(
                 "publication_job_created",
@@ -453,6 +471,11 @@ class ApprovalCallbackExecutor:
 
     async def _sync(self, post_id: str, version: int, now: datetime) -> None:
         statuses = await self._operational.destination_statuses(post_id)
+        state_loader = getattr(self._operational, "destination_states", None)
+        states = await state_loader(post_id) if state_loader is not None else {}
+        runtime_active = (
+            await self._runtime_active() if self._runtime_active is not None else False
+        )
         post = await self._loader.load(post_id)
 
         async def render(reference: ApprovalReference) -> tuple[str, InlineKeyboard]:
@@ -467,26 +490,62 @@ class ApprovalCallbackExecutor:
                 actor=admin,
                 post_id=post_id,
                 destinations=tuple(
-                    DestinationOption(item.destination_id)
+                    DestinationOption(item.destination_id, item.name)
                     for item in self._destinations
                 ),
                 selections=selections,
                 now=now,
             )
-            summary = "، ".join(
-                f"{item.name}: {STATUS_LABELS[statuses[item.destination_id]]}"
-                for item in self._destinations
-                if item.destination_id in statuses
-            )
+            summaries: list[str] = []
+            for item in self._destinations:
+                status = statuses.get(item.destination_id)
+                state = states.get(item.destination_id)
+                if status is None:
+                    summaries.append(
+                        f"📤 مقصد: {item.name}\n⏳ وضعیت: در انتظار انتخاب"
+                    )
+                    continue
+                if status == "immediate_queued":
+                    activity = "فعال" if runtime_active else "غیرفعال"
+                    occurred_at = state.occurred_at if state is not None else now
+                    local = occurred_at.astimezone(self._timezone)
+                    timezone_name = getattr(self._timezone, "key", str(self._timezone))
+                    detail = (
+                        f"در صف انتشار فوری — Runtime {activity}\n"
+                        f"🕒 زمان ورود به صف: {local:%Y-%m-%d %H:%M:%S} "
+                        f"{timezone_name}"
+                    )
+                elif (
+                    status == "scheduled"
+                    and state is not None
+                    and state.due_at is not None
+                ):
+                    local = state.due_at.astimezone(self._timezone)
+                    timezone_name = getattr(self._timezone, "key", str(self._timezone))
+                    activity = "فعال" if runtime_active else "غیرفعال"
+                    detail = (
+                        f"زمان‌بندی شده برای {local:%Y-%m-%d %H:%M:%S} "
+                        f"{timezone_name} — Runtime {activity}"
+                    )
+                else:
+                    detail = STATUS_LABELS.get(status, status)
+                summaries.append(f"📤 مقصد: {item.name}\n⏳ وضعیت: {detail}")
+            summary = "\n\n".join(summaries)
             header = self._header.execute(
                 source_name=post.source_name,
                 source_username=post.source_username,
                 source_channel_id=post.source_channel_id,
                 post_id=post.post_id,
-                status=summary or "در انتظار انتخاب",
+                status="جزئیات هر مقصد در بالا",
                 category=post.category,
                 duplicate=post.duplicate,
                 score=post.score,
+                source_message_id=post.source_message_id,
+                source_published_at=post.source_published_at,
+                preview=post.content.text or post.content.caption,
+                content_type=post.content_type,
+                media_count=post.media_count,
+                destination_summary=summary,
             )
             return header, keyboard
 

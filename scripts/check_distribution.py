@@ -114,6 +114,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/media_cleanup.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/admin_approval.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/approval_bot.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/publication_queue.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/scheduling.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",

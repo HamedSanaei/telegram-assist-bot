@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -47,9 +48,14 @@ class Gateway:
         self.closed += 1
 
     async def send_header(
-        self, chat_id: int, text: str, keyboard: object = None
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: object = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> int:
-        del chat_id, text, keyboard
+        del chat_id, text, keyboard, reply_to_message_id
         return 1
 
     async def send_content(self, chat_id: int, content: object) -> tuple[int, ...]:
@@ -104,6 +110,7 @@ class Foundation:
                 admins=(admin,),
                 destination_channels=(destination,),
                 publishing=publishing,
+                timezone=ZoneInfo("Asia/Tehran"),
             )
         )
         self.mongodb_client = {"test": Database()}

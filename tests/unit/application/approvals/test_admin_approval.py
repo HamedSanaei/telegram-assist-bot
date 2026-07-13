@@ -28,6 +28,7 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.domain import (
     Administrator,
     AdminPermission,
+    ApprovalDeliveryState,
     ApprovalReference,
     CallbackAction,
     CallbackClaims,
@@ -75,15 +76,20 @@ class MemoryRepository:
     async def save_delivery_progress(
         self, reference: ApprovalReference
     ) -> ApprovalReference:
-        return await self.save_reference(reference)
+        existing = self.references.get(reference.reference_id)
+        if existing is not None and existing.active:
+            return existing
+        self.references[reference.reference_id] = reference
+        return reference
 
     async def complete_reference(
-        self, reference_id: str, content_message_ids: tuple[int, ...]
+        self, reference_id: str, control_message_id: int
     ) -> ApprovalReference:
         completed = replace(
             self.references[reference_id],
-            content_message_ids=content_message_ids,
+            header_message_id=control_message_id,
             active=True,
+            delivery_state=ApprovalDeliveryState.COMPLETED,
         )
         self.references[reference_id] = completed
         return completed
@@ -155,24 +161,39 @@ class FakeGateway:
         self.outcomes: dict[int, BotEditOutcome | Exception] = {}
         self.closed = 0
         self.header_sends = 0
+        self.content_sends = 0
+        self.reply_message_ids: list[int | None] = []
+        self.content_ids: tuple[int, ...] = (11, 12)
+        self.contents: list[ApprovalContent] = []
         self.fail_content = False
+        self.fail_header = False
 
     async def send_header(
-        self, chat_id: int, text: str, keyboard: InlineKeyboard | None = None
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: InlineKeyboard | None = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> int:
         del chat_id, text, keyboard
         self.header_sends += 1
+        self.reply_message_ids.append(reply_to_message_id)
+        if self.fail_header:
+            self.fail_header = False
+            raise TimeoutError
         return 10
 
     async def send_content(
         self, chat_id: int, content: ApprovalContent
     ) -> tuple[int, ...]:
         del chat_id
+        self.content_sends += 1
+        self.contents.append(content)
         if self.fail_content:
             self.fail_content = False
             raise TimeoutError
-        assert content.text == "سلام‌دنیا\n😀"
-        return (11, 12)
+        return self.content_ids
 
     async def edit_header(
         self, chat_id: int, message_id: int, text: str, keyboard: InlineKeyboard
@@ -363,8 +384,11 @@ def test_keyboard_labels_order_filter_overflow_and_header() -> None:
             selections=(DestinationSelection("post", -2001, SelectionMode.IMMEDIATE),),
             now=NOW,
         )
-        assert [row[0].label for row in keyboard.rows] == ["🕒 زمان‌بندی", "🕒 زمان‌بندی"]
-        assert keyboard.rows[1][1].label == "✅ فوری"
+        assert [row[0].label for row in keyboard.rows] == [
+            "🕒 زمان‌بندی — -2002",
+            "🕒 زمان‌بندی — -2001",
+        ]
+        assert keyboard.rows[1][1].label == "✅ فوری — -2001"
         with pytest.raises(ValueError, match="at most 20"):
             await builder.execute(
                 actor=replace(admin(), allowed_destination_ids=frozenset(range(21))),
@@ -451,11 +475,11 @@ def test_delivery_toggle_conflict_and_best_effort_sync() -> None:
     asyncio.run(scenario())
 
 
-def test_partial_delivery_reuses_header_after_restart() -> None:
+def test_partial_delivery_reuses_content_after_restart() -> None:
     async def scenario() -> None:
         repository = MemoryRepository()
         gateway = FakeGateway()
-        gateway.fail_content = True
+        gateway.fail_header = True
         delivery = DeliverApproval(gateway, repository)
         content = ApprovalContent("سلام‌دنیا\n😀", None)
         with pytest.raises(TimeoutError):
@@ -468,7 +492,7 @@ def test_partial_delivery_reuses_header_after_restart() -> None:
             )
         progress = repository.references["stable"]
         assert not progress.active
-        assert progress.content_message_ids == ()
+        assert progress.content_message_ids == (11, 12)
         completed = await DeliverApproval(gateway, repository).execute(
             reference_id="stable",
             actor_id=1001,
@@ -478,7 +502,54 @@ def test_partial_delivery_reuses_header_after_restart() -> None:
         )
         assert completed.active
         assert completed.content_message_ids == (11, 12)
+        assert gateway.header_sends == 2
+        assert gateway.content_sends == 1
+        assert gateway.reply_message_ids == [11, 11]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        ApprovalContent("متن", None),
+        ApprovalContent(None, "عکس", media_paths=("photo.jpg",)),
+        ApprovalContent(None, "ویدئو", media_paths=("video.mp4",)),
+        ApprovalContent(None, "انیمیشن", media_paths=("animation.gif",)),
+        ApprovalContent(
+            None,
+            "آلبوم",
+            media_paths=("first.jpg", "second.mp4", "third.jpg"),
+        ),
+    ],
+)
+def test_every_content_shape_is_followed_by_one_replying_control_card(
+    content: ApprovalContent,
+) -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository()
+        gateway = FakeGateway()
+        gateway.content_ids = tuple(range(21, 21 + max(1, len(content.media_paths))))
+        delivery = DeliverApproval(gateway, repository)
+        completed = await delivery.execute(
+            reference_id="shape",
+            actor_id=1001,
+            post_id="post",
+            header="کارت کنترل",
+            content=content,
+        )
+        repeated = await delivery.execute(
+            reference_id="shape",
+            actor_id=1001,
+            post_id="post",
+            header="کارت کنترل",
+            content=content,
+        )
+        assert completed == repeated
+        assert completed.content_message_ids == gateway.content_ids
+        assert gateway.content_sends == 1
         assert gateway.header_sends == 1
+        assert gateway.reply_message_ids == [gateway.content_ids[0]]
 
     asyncio.run(scenario())
 
