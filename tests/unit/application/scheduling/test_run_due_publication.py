@@ -11,7 +11,11 @@ from tests.unit.application.publication.test_publish_text_immediately import req
 
 from telegram_assist_bot.application.publication import PublishResult, PublishStatus
 from telegram_assist_bot.application.scheduling import RunDuePublication, RunDueStatus
-from telegram_assist_bot.domain import ScheduledPublication
+from telegram_assist_bot.domain import (
+    Publication,
+    PublicationState,
+    ScheduledPublication,
+)
 from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.observability import (
     Redactor,
@@ -33,6 +37,8 @@ class Repository:
     ) -> None:
         self.job, self.changed = job, changed
         self.completed = self.deferred = self.failed = False
+        self.deferred_values: dict[str, object] = {}
+        self.failed_values: dict[str, object] = {}
 
     async def claim_due(self, **_values: object) -> ScheduledPublication | None:
         value, self.job = self.job, None
@@ -44,10 +50,12 @@ class Repository:
 
     async def defer(self, *_args: object, **_kwargs: object) -> bool:
         self.deferred = True
+        self.deferred_values = dict(_kwargs)
         return self.changed
 
     async def fail(self, *_args: object, **_kwargs: object) -> bool:
         self.failed = True
+        self.failed_values = dict(_kwargs)
         return self.changed
 
 
@@ -130,6 +138,59 @@ def test_cancellation_propagates_without_terminal_transition() -> None:
         asyncio.run(use_case.execute_once())
     assert not repository.completed
     assert not repository.failed
+
+
+def test_worker_persists_safe_pre_send_and_ambiguous_failure_details() -> None:
+    async def scenario() -> None:
+        preparation_repository = Repository(job(attempts=1))
+        preparation = runner(preparation_repository, PublishStatus.SUCCEEDED)
+
+        async def broken_build(_post_id: str, _destination_id: int) -> object:
+            raise ValueError("private payload detail")
+
+        preparation._build_request = broken_build  # type: ignore[assignment]
+        assert await preparation.execute_once() is RunDueStatus.DEFERRED
+        assert preparation_repository.deferred_values["category"] == (
+            "preparation_failure"
+        )
+        assert preparation_repository.deferred_values["failure_type"] == "ValueError"
+
+        ambiguous_repository = Repository(job())
+        ambiguous = runner(ambiguous_repository, PublishStatus.SUCCEEDED)
+
+        async def broken_publish(_request: object) -> PublishResult:
+            raise RuntimeError("private Telegram detail")
+
+        ambiguous._publish = broken_publish
+        assert await ambiguous.execute_once() is RunDueStatus.FAILED
+        assert ambiguous_repository.failed_values == {
+            "owner": "worker",
+            "category": "ambiguous",
+            "failure_type": "RuntimeError",
+        }
+
+        terminal_repository = Repository(job())
+        terminal = runner(terminal_repository, PublishStatus.OUTCOME_UNKNOWN)
+
+        async def terminal_result(_request: object) -> PublishResult:
+            return PublishResult(
+                PublishStatus.OUTCOME_UNKNOWN,
+                Publication(
+                    "publication",
+                    "post",
+                    -1,
+                    state=PublicationState.OUTCOME_UNKNOWN,
+                    error_category="timeout",
+                    failure_type="PublisherError",
+                ),
+            )
+
+        terminal._publish = terminal_result
+        assert await terminal.execute_once() is RunDueStatus.FAILED
+        assert terminal_repository.failed_values["category"] == "ambiguous"
+        assert terminal_repository.failed_values["failure_type"] == "PublisherError"
+
+    asyncio.run(scenario())
 
 
 def test_action_filter_and_post_result_hook_are_explicit() -> None:

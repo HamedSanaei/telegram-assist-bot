@@ -6,9 +6,13 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from telethon import types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublicationMedia, PublicationPayload
 from telegram_assist_bot.domain.media import MediaType
+from telegram_assist_bot.infrastructure.telegram.media_serializer import (
+    TelethonMediaSerializationError,
+)
 from telegram_assist_bot.infrastructure.telegram.native_scheduler import (
     TelethonNativeSchedulerGateway,
 )
@@ -96,7 +100,7 @@ def test_native_adapter_reads_external_schedules_and_schedules_every_payload_kin
         assert text.message_ids == (51,)
         assert client.calls[-1][2]["schedule"] == due_at
 
-        for item in media:
+        for index, item in enumerate(media):
             receipt = await gateway.schedule(
                 PublicationPayload(-1001, "کپشن", (), (item,)),
                 due_at=due_at,
@@ -104,6 +108,26 @@ def test_native_adapter_reads_external_schedules_and_schedules_every_payload_kin
             )
             assert receipt.message_ids == (52,)
             assert client.calls[-1][2]["schedule"] == due_at
+            serialized = client.calls[-1][1]
+            if index == 0:
+                assert isinstance(serialized, types.InputMediaUploadedPhoto)
+            else:
+                assert isinstance(serialized, types.InputMediaUploadedDocument)
+                document = cast("types.InputMediaUploadedDocument", serialized)
+                if item.media_type is MediaType.VIDEO:
+                    video = next(
+                        value
+                        for value in document.attributes
+                        if isinstance(value, types.DocumentAttributeVideo)
+                    )
+                    assert video.supports_streaming
+                elif item.media_type is MediaType.ANIMATION:
+                    assert any(
+                        isinstance(value, types.DocumentAttributeAnimated)
+                        for value in document.attributes
+                    )
+                else:
+                    assert document.force_file
 
         album = await gateway.schedule(
             PublicationPayload(-1001, "آلبوم", (), tuple(media[:2])),
@@ -111,7 +135,10 @@ def test_native_adapter_reads_external_schedules_and_schedules_every_payload_kin
             timeout_seconds=1,
         )
         assert album.message_ids == (52, 53)
-        assert len(cast("list[object]", client.calls[-1][1])) == 2
+        serialized_album = cast("list[object]", client.calls[-1][1])
+        assert len(serialized_album) == 2
+        assert isinstance(serialized_album[0], types.InputMediaUploadedPhoto)
+        assert isinstance(serialized_album[1], types.InputMediaUploadedDocument)
 
         await gateway.cancel(-1001, (52, 53), timeout_seconds=1)
         request = cast("Any", client.raw)
@@ -148,12 +175,39 @@ def test_native_adapter_rejects_invalid_receipts_and_confined_paths(
                 timeout_seconds=1,
             )
         await gateway.cancel(-1, (), timeout_seconds=1)
-        with pytest.raises(ValueError, match="path"):
-            gateway._resolve("../outside")
-        with pytest.raises(ValueError, match="path"):
-            gateway._resolve("missing.bin")
+        invalid = PublicationMedia(
+            MediaType.DOCUMENT,
+            "../outside",
+            NOW + timedelta(days=1),
+        )
+        with pytest.raises(TelethonMediaSerializationError, match="path"):
+            await gateway.schedule(
+                PublicationPayload(-1, None, (), (invalid,)),
+                due_at=NOW + timedelta(minutes=5),
+                timeout_seconds=1,
+            )
+        missing = PublicationMedia(
+            MediaType.DOCUMENT,
+            "missing.bin",
+            NOW + timedelta(days=1),
+        )
+        with pytest.raises(TelethonMediaSerializationError, match="path"):
+            await gateway.schedule(
+                PublicationPayload(-1, None, (), (missing,)),
+                due_at=NOW + timedelta(minutes=5),
+                timeout_seconds=1,
+            )
         (tmp_path / "directory").mkdir()
-        with pytest.raises(ValueError, match="path"):
-            gateway._resolve("directory")
+        directory = PublicationMedia(
+            MediaType.DOCUMENT,
+            "directory",
+            NOW + timedelta(days=1),
+        )
+        with pytest.raises(TelethonMediaSerializationError, match="path"):
+            await gateway.schedule(
+                PublicationPayload(-1, None, (), (directory,)),
+                due_at=NOW + timedelta(minutes=5),
+                timeout_seconds=1,
+            )
 
     asyncio.run(scenario())

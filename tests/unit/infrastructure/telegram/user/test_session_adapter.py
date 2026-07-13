@@ -171,15 +171,17 @@ def test_concrete_client_factory_uses_bounded_connection_resilience(
             123456,
             "synthetic-api-hash",
             1.0,
+            connection_retries=7,
+            retry_delay_seconds=4,
         )
         await client.disconnect()
 
     run(scenario())
     assert captured["timeout"] == 1.0
-    assert captured["connection_retries"] == 1
+    assert captured["connection_retries"] == 7
     assert captured["request_retries"] == 1
-    assert captured["retry_delay"] == 1
-    assert captured["auto_reconnect"] is False
+    assert captured["retry_delay"] == 4
+    assert captured["auto_reconnect"] is True
     assert captured["receive_updates"] is True
 
 
@@ -403,4 +405,24 @@ def test_rejects_session_path_outside_approved_runtime_root(tmp_path: Path) -> N
             api_hash="synthetic-api-hash",
             timeout_seconds=1.0,
             client_factory=FakeFactory(SessionState()),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("connection_retries", 0),
+        ("connection_retries", 11),
+        ("retry_delay_seconds", -1),
+        ("retry_delay_seconds", 301),
+    ],
+)
+def test_rejects_invalid_connection_retry_policy(
+    tmp_path: Path, field_name: str, value: int
+) -> None:
+    with pytest.raises(ValueError, match="connection retry settings"):
+        adapter(
+            tmp_path,
+            FakeFactory(SessionState()),
+            **{field_name: value},
         )

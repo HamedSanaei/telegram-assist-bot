@@ -137,6 +137,8 @@
 | [T066](tasks/T066-approval-delivery-fairness.md) | Approval delivery fairness and continuous queue processing | T020–T026، T061–T065 | `5.12`–`5.19`، `13`، `14`، `16` | Completed |
 | [T067](tasks/T067-approval-media-native-scheduling.md) | Approval media delivery and native Telegram scheduling | T020–T033، T060–T066 | `5.12`–`5.19`، `13`، `14`، `16` | Completed |
 | [T068](tasks/T068-approval-image-preview-recovery.md) | Approval image preview recovery | T020–T026، T067 | `5.12`–`5.16`، `13`، `14`، `16` | Completed |
+| [T069](tasks/T069-immediate-publication-media-serialization.md) | Immediate publication claiming and media serialization | T027–T033، T060–T068 | `5.16`–`5.19`، `13`، `14`، `16` | Completed |
+| [T070](tasks/T070-telethon-transient-reconnection.md) | Telethon transient reconnection | T007–T012، T060–T069 | `5.1`–`5.3`، `13`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 

@@ -139,6 +139,7 @@ class PublicationRepository(Protocol):
         now: datetime,
         next_attempt_at: datetime | None,
         outcome_unknown: bool,
+        failure_type: str | None = None,
     ) -> Publication:
         """Record a safe retry or terminal failure."""
         ...

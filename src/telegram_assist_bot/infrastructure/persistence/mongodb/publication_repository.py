@@ -90,6 +90,7 @@ def _publication(document: Document) -> Publication:
         published_at=document.get("published_at"),
         error_category=document.get("error_category"),
         correlation_id=document.get("correlation_id"),
+        failure_type=document.get("failure_type"),
     )
 
 
@@ -121,6 +122,7 @@ def _schedule(document: Document) -> ScheduledPublication:
         last_error_category=document.get("last_error_category"),
         due_time_history=history,
         action=document.get("action", "scheduled"),
+        last_failure_type=document.get("last_failure_type"),
     )
 
 
@@ -243,6 +245,7 @@ class MongoPublicationRepository:
         now: datetime,
         next_attempt_at: datetime | None,
         outcome_unknown: bool,
+        failure_type: str | None = None,
     ) -> Publication:
         """Persist only a safe category and never raw exception details."""
         state = (
@@ -262,6 +265,7 @@ class MongoPublicationRepository:
                 "$set": {
                     "state": state.value,
                     "error_category": category.value,
+                    "failure_type": failure_type,
                     "next_attempt_at": next_attempt_at,
                     "claim_owner": None,
                     "lease_until": None,
@@ -500,7 +504,13 @@ class MongoScheduleRepository:
         return result.modified_count == 1
 
     async def defer(
-        self, job_id: str, *, owner: str, next_attempt_at: datetime, category: str
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        next_attempt_at: datetime,
+        category: str,
+        failure_type: str | None = None,
     ) -> bool:
         """Release an owned claim into retry waiting."""
         result = await self._schedules.update_one(
@@ -514,6 +524,7 @@ class MongoScheduleRepository:
                     "status": ScheduleStatus.WAITING_FOR_RETRY.value,
                     "next_attempt_at": next_attempt_at,
                     "last_error_category": category,
+                    "last_failure_type": failure_type,
                     "claim_owner": None,
                     "lease_until": None,
                 },
@@ -522,7 +533,14 @@ class MongoScheduleRepository:
         )
         return result.modified_count == 1
 
-    async def fail(self, job_id: str, *, owner: str, category: str) -> bool:
+    async def fail(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        category: str,
+        failure_type: str | None = None,
+    ) -> bool:
         """Persist a terminal safe failure category."""
         state = (
             ScheduleStatus.OUTCOME_UNKNOWN
@@ -539,6 +557,7 @@ class MongoScheduleRepository:
                 "$set": {
                     "status": state.value,
                     "last_error_category": category,
+                    "last_failure_type": failure_type,
                     "claim_owner": None,
                     "lease_until": None,
                 },

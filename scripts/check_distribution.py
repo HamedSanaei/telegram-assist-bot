@@ -206,6 +206,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/session_adapter.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user/text_ingestion_gateway.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user_publisher.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/media_serializer.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/native_scheduler.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/crawl_once.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/live_text_listener.py",

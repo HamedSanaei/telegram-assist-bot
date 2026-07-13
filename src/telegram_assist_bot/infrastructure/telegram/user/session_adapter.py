@@ -118,17 +118,20 @@ def create_telethon_client(
     api_id: int,
     api_hash: str,
     timeout_seconds: float,
+    *,
+    connection_retries: int = 3,
+    retry_delay_seconds: float = 1,
 ) -> TelethonClientProtocol:
-    """Create an inert Telethon client with bounded retries and no prompting."""
+    """Create an inert client with bounded transport recovery and no prompting."""
     client = TelegramClient(
         str(session_path),
         api_id,
         api_hash,
         timeout=timeout_seconds,
         request_retries=1,
-        connection_retries=1,
-        retry_delay=1,
-        auto_reconnect=False,
+        connection_retries=connection_retries,
+        retry_delay=retry_delay_seconds,
+        auto_reconnect=True,
         flood_sleep_threshold=0,
         receive_updates=True,
     )
@@ -219,10 +222,9 @@ class TelethonSessionAdapter:
     timeout_seconds: float
     lock_timeout_seconds: float = 2.0
     runtime_root: Path = Path("var/sessions")
-    client_factory: TelethonClientFactory = field(
-        default=create_telethon_client,
-        repr=False,
-    )
+    connection_retries: int = 3
+    retry_delay_seconds: float = 1
+    client_factory: TelethonClientFactory | None = field(default=None, repr=False)
     sleeper: AsyncSleep = field(default=asyncio.sleep, repr=False)
     monotonic_clock: MonotonicClock = field(default=monotonic, repr=False)
     peer_id_resolver: PeerIdResolver = field(
@@ -243,6 +245,13 @@ class TelethonSessionAdapter:
         for value in (self.timeout_seconds, self.lock_timeout_seconds):
             if isinstance(value, bool) or value <= 0:
                 raise ValueError("timeouts must be positive numbers")
+        if (
+            type(self.connection_retries) is not int
+            or not 1 <= self.connection_retries <= 10
+            or isinstance(self.retry_delay_seconds, bool)
+            or not 0 <= self.retry_delay_seconds <= 300
+        ):
+            raise ValueError("connection retry settings are invalid")
 
         root = self.runtime_root.resolve()
         resolved = self.session_path.resolve()
@@ -271,12 +280,7 @@ class TelethonSessionAdapter:
         if not self.session_path.exists():
             raise TelegramSessionInvalidError
         await self._acquire_lock()
-        client = self.client_factory(
-            self.session_path,
-            self.api_id,
-            self.api_hash,
-            float(self.timeout_seconds),
-        )
+        client = self._create_client()
         self._client = client
         try:
             await self._bounded(client.connect())
@@ -295,12 +299,7 @@ class TelethonSessionAdapter:
         if not self.session_path.exists():
             return TelegramSessionStatus.MISSING
         await self._acquire_lock()
-        client = self.client_factory(
-            self.session_path,
-            self.api_id,
-            self.api_hash,
-            float(self.timeout_seconds),
-        )
+        client = self._create_client()
         try:
             await self._bounded(client.connect())
             authorized = await self._bounded(client.is_user_authorized())
@@ -326,12 +325,7 @@ class TelethonSessionAdapter:
         await self._acquire_lock()
         client = cast(
             "TelethonValidationClientProtocol",
-            self.client_factory(
-                self.session_path,
-                self.api_id,
-                self.api_hash,
-                float(self.timeout_seconds),
-            ),
+            self._create_client(),
         )
         try:
             await self._bounded(client.connect())
@@ -365,12 +359,7 @@ class TelethonSessionAdapter:
         await self._acquire_lock()
         client = cast(
             "TelethonValidationClientProtocol",
-            self.client_factory(
-                self.session_path,
-                self.api_id,
-                self.api_hash,
-                float(self.timeout_seconds),
-            ),
+            self._create_client(),
         )
         try:
             await self._bounded(client.connect())
@@ -440,12 +429,7 @@ class TelethonSessionAdapter:
             if self._recover_unauthorized_session:
                 self._discard_unauthorized_session()
                 self._recover_unauthorized_session = False
-            client = self.client_factory(
-                self.session_path,
-                self.api_id,
-                self.api_hash,
-                float(self.timeout_seconds),
-            )
+            client = self._create_client()
             self._client = client
             self._phone_number = phone_number
             await self._bounded(client.connect())
@@ -496,6 +480,24 @@ class TelethonSessionAdapter:
         """Wait for the already-owned client to disconnect without opening another."""
         client = cast("TelethonDisconnectClientProtocol", self.connected_client)
         await client.disconnected
+
+    def _create_client(self) -> TelethonClientProtocol:
+        """Create one client, preserving injectable four-argument test factories."""
+        if self.client_factory is not None:
+            return self.client_factory(
+                self.session_path,
+                self.api_id,
+                self.api_hash,
+                float(self.timeout_seconds),
+            )
+        return create_telethon_client(
+            self.session_path,
+            self.api_id,
+            self.api_hash,
+            float(self.timeout_seconds),
+            connection_retries=self.connection_retries,
+            retry_delay_seconds=float(self.retry_delay_seconds),
+        )
 
     async def _finish_login(self) -> None:
         client = self._client

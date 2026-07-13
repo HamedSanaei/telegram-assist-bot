@@ -106,6 +106,7 @@ def test_owned_claim_can_be_deferred_and_terminally_failed(
                         owner="worker",
                         next_attempt_at=now + timedelta(seconds=1),
                         category="transient",
+                        failure_type="PublisherError",
                     )
                     reclaimed = await repository.claim_due(
                         owner="worker",
@@ -115,7 +116,10 @@ def test_owned_claim_can_be_deferred_and_terminally_failed(
                     assert reclaimed is not None
                     claimed = reclaimed
                 assert await repository.fail(
-                    claimed.job_id, owner="worker", category=category
+                    claimed.job_id,
+                    owner="worker",
+                    category=category,
+                    failure_type="PublisherError",
                 )
                 document = await schedules.find_one({"_id": reserved.job.job_id})
                 assert document is not None
@@ -123,6 +127,7 @@ def test_owned_claim_can_be_deferred_and_terminally_failed(
                     "OutcomeUnknown" if category == "ambiguous" else "PermanentFailed"
                 )
                 assert document["status"] == expected
+                assert document["last_failure_type"] == "PublisherError"
         finally:
             await client.close()
 

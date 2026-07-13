@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
 from telethon import errors, types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublisherError
 from telegram_assist_bot.domain import PublicationFailureCategory, PublishedMessage
+from telegram_assist_bot.infrastructure.telegram.media_serializer import (
+    TelethonMediaSerializationError,
+    TelethonMediaSerializer,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from telegram_assist_bot.application.ports import PublicationPayload
     from telegram_assist_bot.domain.posts import TelegramEntity
@@ -28,6 +32,10 @@ class TelethonPublisherClient(Protocol):
 
     async def send_file(self, entity: int, file: object, **kwargs: object) -> object:
         """Send one media item or album."""
+        ...
+
+    async def upload_file(self, file: object, **kwargs: object) -> object:
+        """Upload one media item with explicit filename metadata."""
         ...
 
 
@@ -74,7 +82,7 @@ class TelethonPublisherGateway:
     def __init__(self, client: TelethonPublisherClient, *, media_root: Path) -> None:
         """Store the client and canonical private media root."""
         self._client = client
-        self._media_root = media_root.resolve(strict=True)
+        self._media = TelethonMediaSerializer(client, media_root=media_root)
 
     async def publish(
         self, payload: PublicationPayload, *, timeout_seconds: float
@@ -93,10 +101,10 @@ class TelethonPublisherGateway:
                         parse_mode=None,
                     )
                 else:
-                    paths = [
-                        self._resolve_media(item.storage_path) for item in payload.media
-                    ]
-                    file_value: object = paths[0] if len(paths) == 1 else paths
+                    serialized = await self._media.serialize(payload.media)
+                    file_value: object = (
+                        serialized[0] if len(serialized) == 1 else list(serialized)
+                    )
                     result = await self._client.send_file(
                         payload.destination_id,
                         file_value,
@@ -106,6 +114,8 @@ class TelethonPublisherGateway:
                     )
         except asyncio.CancelledError:
             raise
+        except TelethonMediaSerializationError as error:
+            raise PublisherError(PublicationFailureCategory.PERMANENT) from error
         except TimeoutError as error:
             raise PublisherError(
                 PublicationFailureCategory.TIMEOUT,
@@ -133,19 +143,6 @@ class TelethonPublisherGateway:
                 request_may_have_reached_telegram=True,
             )
         return PublishedMessage(message_ids, datetime.now(UTC))
-
-    def _resolve_media(self, storage_path: str) -> str:
-        candidate = Path(storage_path)
-        if not candidate.is_absolute():
-            candidate = self._media_root / candidate
-        try:
-            resolved = candidate.resolve(strict=True)
-            resolved.relative_to(self._media_root)
-        except (OSError, ValueError):
-            raise PublisherError(PublicationFailureCategory.PERMANENT) from None
-        if not resolved.is_file():
-            raise PublisherError(PublicationFailureCategory.PERMANENT)
-        return str(resolved)
 
 
 __all__ = ("TelethonPublisherClient", "TelethonPublisherGateway")

@@ -1054,4 +1054,6 @@ def test_concrete_factory_and_gateway_factory_are_inert() -> None:
     assert app.is_ready is False
     assert gateway.session.api_id == 123456
     assert gateway.session.timeout_seconds == 10
+    assert gateway.session.connection_retries == 3
+    assert gateway.session.retry_delay_seconds == 1
     assert SystemClock().utc_now().tzinfo is UTC

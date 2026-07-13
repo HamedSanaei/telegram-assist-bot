@@ -77,6 +77,7 @@ class Runner:
 
 class NativeRunner:
     instances: ClassVar[list[NativeRunner]] = []
+    blocker: ClassVar[asyncio.Event | None] = None
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         del args
@@ -84,6 +85,8 @@ class NativeRunner:
         self.instances.append(self)
 
     async def execute_once(self) -> bool:
+        if self.blocker is not None:
+            await self.blocker.wait()
         await self.after(
             NativeScheduleCommand(
                 "native-1",
@@ -103,15 +106,16 @@ class NativeRunner:
 
 class Worker:
     instances: ClassVar[list[Worker]] = []
-    fail: ClassVar[bool] = False
+    fail_index: ClassVar[int | None] = None
 
     def __init__(self, run_once: object, *, poll_seconds: float) -> None:
         self.run_once = cast("Any", run_once)
         self.poll_seconds = poll_seconds
+        self.index = len(self.instances)
         self.instances.append(self)
 
     async def run(self) -> None:
-        if self.fail:
+        if self.fail_index == self.index:
             raise RuntimeError("synthetic publication loop failure")
         await self.run_once()
         await asyncio.Event().wait()
@@ -151,12 +155,13 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
     async def scenario() -> None:
         Runner.instances.clear()
         NativeRunner.instances.clear()
+        NativeRunner.blocker = None
         Operational.statuses.clear()
         Operational.completed = asyncio.Event()
         Heartbeat.beats.clear()
         Heartbeat.fail = False
         Worker.instances.clear()
-        Worker.fail = False
+        Worker.fail_index = None
         emitted: list[dict[str, object]] = []
 
         async def initialize(*args: object) -> None:
@@ -237,10 +242,30 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         assert [item.action for item in Runner.instances] == ["immediate"]
         assert Operational.statuses == ["published", "native_scheduled"]
         assert Heartbeat.beats == ["running", "stopped"]
-        assert Worker.instances[0].poll_seconds == 1.0
+        assert [item.poll_seconds for item in Worker.instances] == [1.0, 1.0]
         names = [cast("str", item["event_name"]) for item in emitted]
         assert "runtime_heartbeat_active" in names
         assert "publication_worker_started" in names
+
+        NativeRunner.blocker = asyncio.Event()
+        Operational.statuses.clear()
+        Worker.instances.clear()
+        isolated = await module._create_publication_worker(
+            cast("Any", loaded),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        isolated_task = asyncio.create_task(isolated.run())
+        await isolated.wait_ready()
+        for _attempt in range(100):
+            if "published" in Operational.statuses:
+                break
+            await asyncio.sleep(0.01)
+        assert Operational.statuses == ["published"]
+        isolated_task.cancel()
+        await asyncio.gather(isolated_task, return_exceptions=True)
+        NativeRunner.blocker = None
 
         Heartbeat.fail = True
         failing = await module._create_publication_worker(
@@ -264,7 +289,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         }
 
         Heartbeat.fail = False
-        Worker.fail = True
+        Worker.fail_index = len(Worker.instances)
         publication_failing = await module._create_publication_worker(
             cast("Any", loaded),
             cast("Any", report),

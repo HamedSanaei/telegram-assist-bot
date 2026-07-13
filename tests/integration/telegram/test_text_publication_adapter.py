@@ -40,6 +40,9 @@ class Client:
     async def send_file(self, entity: int, file: object, **kwargs: object) -> object:
         raise AssertionError("Text publication must not use media sending.")
 
+    async def upload_file(self, file: object, **kwargs: object) -> object:
+        raise AssertionError("Text publication must not upload media.")
+
 
 def test_maps_persian_zwnj_and_custom_emoji_without_bot_metadata(
     tmp_path: Path,

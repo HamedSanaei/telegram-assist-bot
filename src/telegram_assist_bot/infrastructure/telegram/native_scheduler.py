@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from telethon import functions, types  # type: ignore[import-untyped]
+from telethon import functions  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import (
     NativeScheduledMessage,
     NativeScheduleReceipt,
 )
-from telegram_assist_bot.domain.media import MediaType
+from telegram_assist_bot.infrastructure.telegram.media_serializer import (
+    TelethonMediaSerializer,
+)
 from telegram_assist_bot.infrastructure.telegram.user_publisher import _map_entity
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
+    from pathlib import Path
 
     from telegram_assist_bot.application.ports import PublicationPayload
 
@@ -59,7 +61,7 @@ class TelethonNativeSchedulerGateway:
     ) -> None:
         """Store the existing client and canonical media root."""
         self._client = client
-        self._media_root = media_root.resolve(strict=True)
+        self._media = TelethonMediaSerializer(client, media_root=media_root)
 
     async def list_scheduled(
         self, destination_id: int, *, timeout_seconds: float
@@ -97,33 +99,16 @@ class TelethonNativeSchedulerGateway:
                     schedule=due_at,
                 )
             else:
-                paths = [self._resolve(item.storage_path) for item in payload.media]
-                uploads = [
-                    await self._client.upload_file(
-                        path,
-                        file_name=item.original_filename or Path(path).name,
-                    )
-                    for path, item in zip(paths, payload.media, strict=True)
-                ]
+                uploads = await self._media.serialize(payload.media)
                 kwargs: dict[str, object] = {
                     "caption": payload.text,
                     "formatting_entities": entities,
                     "parse_mode": None,
                     "schedule": due_at,
                 }
-                if len(payload.media) == 1:
-                    media_type = payload.media[0].media_type
-                    kwargs["force_document"] = media_type in {
-                        MediaType.DOCUMENT,
-                        MediaType.ANIMATION,
-                    }
-                    if media_type is MediaType.VIDEO:
-                        kwargs["supports_streaming"] = True
-                    elif media_type is MediaType.ANIMATION:
-                        kwargs["attributes"] = [types.DocumentAttributeAnimated()]
                 result = await self._client.send_file(
                     payload.destination_id,
-                    uploads[0] if len(uploads) == 1 else uploads,
+                    uploads[0] if len(uploads) == 1 else list(uploads),
                     **kwargs,
                 )
         values = result if isinstance(result, list | tuple) else (result,)
@@ -149,24 +134,6 @@ class TelethonNativeSchedulerGateway:
                     peer=peer, id=list(message_ids)
                 )
             )
-
-    def _resolve(self, storage_path: str) -> str:
-        candidate = Path(storage_path)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise ValueError("Native schedule media path is invalid.")
-        current = self._media_root
-        for part in candidate.parts:
-            current /= part
-            if current.is_symlink():
-                raise ValueError("Native schedule media path is invalid.")
-        try:
-            resolved = (self._media_root / candidate).resolve(strict=True)
-            resolved.relative_to(self._media_root)
-        except (OSError, ValueError):
-            raise ValueError("Native schedule media path is invalid.") from None
-        if not resolved.is_file() or resolved.is_symlink():
-            raise ValueError("Native schedule media path is invalid.")
-        return str(resolved)
 
 
 __all__ = ("TelethonNativeSchedulerClient", "TelethonNativeSchedulerGateway")
