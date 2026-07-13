@@ -147,8 +147,8 @@ class ApprovalDeliveryWorker:
         )
         self._emit(
             "approval_delivery_failed",
-            post_id=post_id,
-            error_category=category,
+            approval_post_id=post_id,
+            failure_category=category,
         )
         return False
 
@@ -168,7 +168,7 @@ class ApprovalDeliveryWorker:
         self._claimed_post_id = claim.post_id
         if claim.ready_at is not None and claim.ready_at <= self._startup_at:
             self._backlog_remaining -= 1
-        self._emit("approval_delivery_claimed", post_id=claim.post_id)
+        self._emit("approval_delivery_claimed", approval_post_id=claim.post_id)
         post = await self._loader.load(claim.post_id)
         header = self._header.execute(
             source_name=post.source_name,
@@ -215,7 +215,7 @@ class ApprovalDeliveryWorker:
                 )
                 self._emit(
                     "approval_message_delivered",
-                    post_id=post.post_id,
+                    approval_post_id=post.post_id,
                     administrator_id=admin.telegram_user_id,
                 )
             except (TimeoutError, OSError, RuntimeError):
@@ -227,10 +227,10 @@ class ApprovalDeliveryWorker:
                 category="transient",
                 next_attempt_at=now + timedelta(seconds=self._retry_seconds),
             )
-            self._emit("approval_delivery_failed", post_id=post.post_id)
+            self._emit("approval_delivery_failed", approval_post_id=post.post_id)
             return False
         await self._operational.complete_delivery(post.post_id, owner=self._owner)
-        self._emit("approval_delivery_completed", post_id=post.post_id)
+        self._emit("approval_delivery_completed", approval_post_id=post.post_id)
         return True
 
     def _emit(self, event_name: str, **fields: object) -> None:
@@ -309,7 +309,7 @@ class ApprovalCallbackExecutor:
             self._emit(
                 "approval_callback_rejected",
                 administrator_id=update.actor_id,
-                error_category=resolution.status.value,
+                failure_category=resolution.status.value,
             )
             return False
         if claims.destination_id is None or not await self._tokens.consume(data):
@@ -317,7 +317,7 @@ class ApprovalCallbackExecutor:
             self._emit(
                 "approval_callback_rejected",
                 administrator_id=update.actor_id,
-                error_category="replay",
+                failure_category="replay",
             )
             return False
         self._emit("approval_callback_authorized", administrator_id=update.actor_id)
@@ -353,8 +353,8 @@ class ApprovalCallbackExecutor:
         await self._sync(claims.post_id, updated.version, now)
         self._emit(
             "approval_selection_changed",
-            post_id=claims.post_id,
-            destination_id=claims.destination_id,
+            approval_post_id=claims.post_id,
+            target_destination_id=claims.destination_id,
         )
         await self._answer(update, "انتخاب ذخیره شد.", alert=False)
         return True
@@ -390,8 +390,8 @@ class ApprovalCallbackExecutor:
             )
             self._emit(
                 "publication_job_created",
-                post_id=post_id,
-                destination_id=destination_id,
+                approval_post_id=post_id,
+                target_destination_id=destination_id,
             )
         elif current is SelectionMode.SCHEDULED:
             reservation = await self._schedule.execute(
@@ -406,8 +406,8 @@ class ApprovalCallbackExecutor:
             )
             self._emit(
                 "publication_job_created",
-                post_id=post_id,
-                destination_id=destination_id,
+                approval_post_id=post_id,
+                target_destination_id=destination_id,
             )
         else:
             await self._cancel_action(
@@ -493,7 +493,7 @@ class ApprovalCallbackExecutor:
         await self._synchronize.execute(
             post_id=post_id, version=version, render=render, now=now
         )
-        self._emit("approval_messages_synchronized", post_id=post_id)
+        self._emit("approval_messages_synchronized", approval_post_id=post_id)
 
     async def synchronize_pending_once(
         self, *, owner: str, lease_seconds: float
@@ -514,7 +514,7 @@ class ApprovalCallbackExecutor:
                 claim.post_id, owner=owner, version=claim.version
             )
         else:
-            self._emit("approval_sync_failed", post_id=claim.post_id)
+            self._emit("approval_sync_failed", approval_post_id=claim.post_id)
         return True
 
     async def _answer(self, update: BotUpdate, text: str, *, alert: bool) -> None:

@@ -101,6 +101,7 @@ class ApprovalBotApplication:
         """Create an inert Bot API lifecycle without opening resources."""
         self._foundation = foundation
         self._dispatcher: Dispatcher | None = None
+        self._polling_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._sync_task: asyncio.Task[None] | None = None
         self._gateway: AiogramAdminMessagingGateway | None = None
@@ -285,32 +286,39 @@ class ApprovalBotApplication:
             ),
             name="approval-polling",
         )
-        watched = {polling, self._delivery_task, self._sync_task}
-        done, _ = await asyncio.wait(
-            {task for task in watched if task is not None},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in done:
-            if task is polling:
-                continue
-            if task.cancelled():
-                error: BaseException = asyncio.CancelledError()
-            else:
-                error = task.exception() or ApprovalBackgroundTaskStoppedError()
-            self._foundation.logger.emit(
-                level=LogLevel.ERROR,
-                event_name="approval_background_task_failed",
-                fields={
-                    "task_name": task.get_name(),
-                    "failure_category": "transient",
-                    "failure_type": type(error).__name__,
-                },
+        self._polling_task = polling
+        try:
+            watched = {polling, self._delivery_task, self._sync_task}
+            done, _ = await asyncio.wait(
+                {task for task in watched if task is not None},
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            if not polling.done():
-                polling.cancel()
+            for task in done:
+                if task is polling:
+                    continue
+                if task.cancelled():
+                    error: BaseException = asyncio.CancelledError()
+                else:
+                    error = task.exception() or ApprovalBackgroundTaskStoppedError()
+                self._foundation.logger.emit(
+                    level=LogLevel.ERROR,
+                    event_name="approval_background_task_failed",
+                    fields={
+                        "task_name": task.get_name(),
+                        "failure_category": "transient",
+                        "failure_type": type(error).__name__,
+                    },
+                )
+                if not polling.done():
+                    polling.cancel()
                 await asyncio.gather(polling, return_exceptions=True)
-            raise ApprovalBotStartupError from error
-        await polling
+                raise ApprovalBotStartupError from error
+            await polling
+        finally:
+            if polling.done():
+                await asyncio.gather(polling, return_exceptions=True)
+                if self._polling_task is polling:
+                    self._polling_task = None
 
     async def shutdown(self) -> None:
         """Stop polling and close Bot and MongoDB exactly once."""
@@ -320,6 +328,11 @@ class ApprovalBotApplication:
         if self._dispatcher is not None:
             with suppress(RuntimeError):
                 await self._dispatcher.stop_polling()
+        if self._polling_task is not None:
+            if not self._polling_task.done():
+                self._polling_task.cancel()
+            await asyncio.gather(self._polling_task, return_exceptions=True)
+            self._polling_task = None
         if self._delivery_task is not None:
             self._delivery_task.cancel()
             await asyncio.gather(self._delivery_task, return_exceptions=True)

@@ -58,6 +58,12 @@ from telegram_assist_bot.presentation.bot.runtime_handlers import (
     AUTHORIZED_START_TEXT,
     OperationalBotHandlers,
 )
+from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.observability import (
+    Redactor,
+    StructuredEvent,
+    StructuredLogger,
+)
 from tests.unit.application.approvals.test_admin_approval import MemoryRepository
 
 NOW = datetime(2026, 7, 13, 12, tzinfo=UTC)
@@ -523,6 +529,89 @@ def test_delivery_worker_releases_transient_partial_delivery() -> None:
         assert not await worker.execute_once()
         assert operational.released == 1
         assert not approvals.references["approval:post-1:7"].active
+
+    asyncio.run(scenario())
+
+
+def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -> None:
+    class FailingGateway(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            del chat_id, content
+            raise TimeoutError
+
+    async def scenario() -> None:
+        events: list[dict[str, object]] = []
+
+        def capture(event: StructuredEvent) -> None:
+            events.append(dict(event))
+
+        logger = StructuredLogger(
+            sink=capture,
+            clock=lambda: NOW,
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.DEBUG,
+        )
+
+        def worker(
+            operational: DeliveryOperational, gateway: Gateway
+        ) -> ApprovalDeliveryWorker:
+            approvals = MemoryRepository()
+            return ApprovalDeliveryWorker(
+                cast("OperationalApprovalRepository", operational),
+                approvals,
+                Loader(),
+                DeliverApproval(gateway, approvals),
+                BuildDestinationKeyboard(
+                    CallbackTokenService(approvals, lambda size: b"r" * size)
+                ),
+                RenderApprovalHeader(),
+                (administrator(),),
+                (OperationalDestination(DESTINATION, "مقصد"),),
+                owner="worker",
+                clock=lambda: NOW,
+                lease_seconds=30,
+                retry_seconds=1,
+                logger=logger,
+            )
+
+        successful = DeliveryOperational()
+        assert await worker(successful, Gateway()).execute_once()
+        assert successful.completed == 1
+
+        retrying = DeliveryOperational()
+        assert not await worker(retrying, FailingGateway()).execute_once()
+        assert retrying.released == 1
+
+        names = [event["event_name"] for event in events]
+        assert "approval_delivery_claimed" in names
+        assert "approval_message_delivered" in names
+        assert "approval_delivery_completed" in names
+        assert "approval_delivery_failed" in names
+        reserved = {
+            "timestamp",
+            "level",
+            "event_name",
+            "correlation_id",
+            "task_id",
+            "job_id",
+            "post_id",
+            "channel_id",
+            "destination_id",
+            "admin_id",
+            "error_type",
+            "error_category",
+            "error_message",
+        }
+        custom_keys = {
+            key
+            for event in events
+            for key in event
+            if key not in {"timestamp", "level", "event_name", "correlation_id"}
+        }
+        assert custom_keys.isdisjoint(reserved)
+        assert all(event.get("approval_post_id") == "post-1" for event in events)
 
     asyncio.run(scenario())
 

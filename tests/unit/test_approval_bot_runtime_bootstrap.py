@@ -430,3 +430,64 @@ def test_approval_background_supervisor_uses_safe_structured_logging() -> None:
         assert event["failure_type"] == "CancelledError"
 
     asyncio.run(scenario())
+
+
+def test_approval_shutdown_drains_polling_before_closing_bot_session() -> None:
+    async def scenario() -> None:
+        order: list[str] = []
+        entered = asyncio.Event()
+        loop_errors: list[dict[str, object]] = []
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+
+        class DrainingPoller(Poller):
+            async def start_polling(self, bot: object, **kwargs: object) -> None:
+                del bot, kwargs
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(0)
+                    order.append("polling-finished")
+
+            async def stop_polling(self) -> None:
+                order.append("stop-requested")
+
+        class OrderedGateway(Gateway):
+            async def close(self) -> None:
+                assert "polling-finished" in order
+                order.append("bot-session-closed")
+                await super().close()
+
+        async def block() -> None:
+            await asyncio.Event().wait()
+
+        foundation = Foundation()
+        application = module.ApprovalBotApplication(cast("Any", foundation))
+        application._started = True
+        application._dispatcher = cast("Any", DrainingPoller())
+        gateway = OrderedGateway()
+        application._gateway = cast("Any", gateway)
+        application._delivery_task = asyncio.create_task(
+            block(), name="approval-delivery"
+        )
+        application._sync_task = asyncio.create_task(block(), name="approval-sync")
+        wait_task = asyncio.create_task(application.wait(), name="approval-wait")
+        try:
+            await entered.wait()
+            await application.shutdown()
+            await asyncio.gather(wait_task, return_exceptions=True)
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert order == [
+            "stop-requested",
+            "polling-finished",
+            "bot-session-closed",
+        ]
+        assert gateway.closed == 1
+        assert not loop_errors
+
+    asyncio.run(scenario())
