@@ -16,8 +16,10 @@ from telegram_assist_bot.application.ports.admin import (
 )
 from telegram_assist_bot.application.ports.clock import Clock
 from telegram_assist_bot.application.ports.media import (
+    AlbumFinalizationStatus,
     ContentPreparationRepository,
     DestinationArtifact,
+    InvalidMediaGroupRecordError,
     MediaDownloadSpec,
     MediaGroup,
     MediaGroupMember,
@@ -97,6 +99,7 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 
 __all__ = (
     "AdminMessagingGateway",
+    "AlbumFinalizationStatus",
     "ApprovalContent",
     "ApprovalDeliveryClaim",
     "ApprovalDeliveryError",
@@ -118,6 +121,7 @@ __all__ = (
     "InlineKeyboard",
     "InsertPostOutcome",
     "InsertPostResult",
+    "InvalidMediaGroupRecordError",
     "InvalidPostRepositoryRequestError",
     "MediaDownloadSpec",
     "MediaGroup",

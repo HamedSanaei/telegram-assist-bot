@@ -16,6 +16,7 @@ from telegram_assist_bot.application.ingest_post_idempotently import (
     IngestionResult,
 )
 from telegram_assist_bot.application.ports import (
+    AlbumFinalizationStatus,
     MediaPermanentError,
     PostRepository,
     TelegramMediaReference,
@@ -35,6 +36,8 @@ from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import Post, PostId, SourceMessageIdentity
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
+from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.observability import Redactor, StructuredLogger
 from tests.unit.application.m2_fakes import FakePreparationRepository
 
 if TYPE_CHECKING:
@@ -119,6 +122,21 @@ class Source:
             yield self.payload[2:]
 
         return stream()
+
+
+class BlockingSecondSource(Source):
+    """Block the second provider open after the group arrival is persisted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_started = asyncio.Event()
+        self.release_second = asyncio.Event()
+
+    async def open(self, opaque_reference: str) -> AsyncIterator[bytes]:
+        if self.opens == 1:
+            self.second_started.set()
+            await self.release_second.wait()
+        return await super().open(opaque_reference)
 
 
 @dataclass
@@ -280,6 +298,7 @@ def test_album_waits_then_finalizes_once_in_deterministic_order(tmp_path: Path) 
             await use_case.execute(item, correlation_id="album-correlation")
         assert repository.ready == set()
 
+        clock.now += timedelta(seconds=3)
         assert await use_case.finalize_due_groups() == 1
         assert await use_case.finalize_due_groups() == 0
         group = repository.groups["-100:album"]
@@ -287,6 +306,163 @@ def test_album_waits_then_finalizes_once_in_deterministic_order(tmp_path: Path) 
         assert repository.ready == {"post--100-1"}
         duplicate = repository.duplicates["post--100-1"]
         assert len(duplicate.content_hash) == 64
+
+    asyncio.run(scenario())
+
+
+def test_incomplete_grouped_document_is_deferred_then_recovers_with_anchor(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        now = datetime(2026, 7, 13, 8, 0, tzinfo=UTC)
+        clock = Clock(now)
+        source = BlockingSecondSource()
+        use_case, repository, _, logger = coordinator(tmp_path, clock, source=source)
+        await use_case.execute(
+            message(
+                106231,
+                now + timedelta(seconds=1),
+                media_type=MediaType.DOCUMENT,
+                group_id="documents",
+            ),
+            correlation_id="first-document",
+        )
+        second = asyncio.create_task(
+            use_case.execute(
+                message(
+                    106230,
+                    now,
+                    media_type=MediaType.DOCUMENT,
+                    group_id="documents",
+                    caption="سند گروهی",
+                ),
+                correlation_id="second-document",
+            )
+        )
+        await asyncio.wait_for(source.second_started.wait(), timeout=1)
+
+        clock.now += timedelta(seconds=3)
+        assert await use_case.finalize_due_groups() == 0
+        group = repository.groups["-100:documents"]
+        assert group.finalization_status is AlbumFinalizationStatus.PENDING
+        assert group.attempt_count == 1
+        assert set(group.observed_message_ids) == {106230, 106231}
+        assert "album_finalization_deferred" in repr(logger.events)
+
+        source.release_second.set()
+        await second
+        clock.now += timedelta(seconds=6)
+        assert await use_case.finalize_due_groups() == 1
+        group = repository.groups["-100:documents"]
+        assert group.finalization_status is AlbumFinalizationStatus.COMPLETED
+        assert group.canonical_source_message_id == 106230
+        assert repository.ready == {"post--100-106230"}
+        assert "album_finalization_recovered" in repr(logger.events)
+
+    asyncio.run(scenario())
+
+
+def test_missing_post_becomes_group_local_permanent_failure_and_next_runs(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        now = datetime(2026, 7, 13, 8, 0, tzinfo=UTC)
+        clock = Clock(now)
+        use_case, repository, _, logger = coordinator(tmp_path, clock)
+        await use_case.execute(
+            message(
+                10,
+                now,
+                media_type=MediaType.PHOTO,
+                group_id="malformed",
+            ),
+            correlation_id="malformed",
+        )
+        cast("PostStore", use_case.post_repository).posts.clear()
+        clock.now += timedelta(seconds=3)
+        assert await use_case.finalize_due_groups() == 0
+        clock.now += timedelta(seconds=5)
+        assert await use_case.finalize_due_groups() == 0
+
+        await use_case.execute(
+            message(
+                20,
+                clock.now,
+                media_type=MediaType.VIDEO,
+                group_id="valid",
+                caption="ویدیوی معتبر",
+            ),
+            correlation_id="valid",
+        )
+        clock.now += timedelta(seconds=5)
+        assert await use_case.finalize_due_groups() == 1
+        malformed = repository.groups["-100:malformed"]
+        valid = repository.groups["-100:valid"]
+        assert malformed.attempt_count == 3
+        assert malformed.finalization_status is AlbumFinalizationStatus.PERMANENT_FAILED
+        assert valid.finalization_status is AlbumFinalizationStatus.COMPLETED
+        assert "album_finalization_permanent_failed" in repr(logger.events)
+
+    asyncio.run(scenario())
+
+
+def test_real_structured_logger_accepts_album_retry_and_success_fields(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        now = datetime(2026, 7, 13, 8, 0, tzinfo=UTC)
+        clock = Clock(now)
+        use_case, _, _, _ = coordinator(tmp_path, clock)
+        events: list[dict[str, object]] = []
+        structured = StructuredLogger(
+            sink=lambda event: events.append(dict(event)),
+            clock=clock.utc_now,
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.INFO,
+        )
+        use_case.logger = cast("RetryEventLogger", structured)
+
+        await use_case.execute(
+            message(
+                30,
+                now,
+                media_type=MediaType.ANIMATION,
+                group_id="logged",
+            ),
+            correlation_id="logged-first",
+        )
+        await use_case.assembler.observe_member(
+            source_channel_id=-100,
+            telegram_group_id="logged",
+            source_message_id=31,
+            observed_at=now,
+        )
+        clock.now += timedelta(seconds=3)
+        assert await use_case.finalize_due_groups() == 0
+
+        await use_case.execute(
+            message(
+                31,
+                now + timedelta(seconds=1),
+                media_type=MediaType.ANIMATION,
+                group_id="logged",
+            ),
+            correlation_id="logged-second",
+        )
+        clock.now += timedelta(seconds=6)
+        assert await use_case.finalize_due_groups() == 1
+
+        names = [event["event_name"] for event in events]
+        assert "album_finalization_deferred" in names
+        assert "album_finalization_completed" in names
+        deferred = next(
+            event
+            for event in events
+            if event["event_name"] == "album_finalization_deferred"
+        )
+        assert deferred["failure_category"] == "incomplete_media_group"
+        assert deferred["failure_type"] == "AlbumFinalizationDataError"
+        assert "error_category" not in deferred
 
     asyncio.run(scenario())
 

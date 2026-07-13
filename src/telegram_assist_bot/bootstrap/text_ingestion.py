@@ -886,6 +886,16 @@ async def _create_runtime_ingestor(
         clock=clock,
         logger=foundation.logger,
         correlation_id=correlation_id,
+        album_finalization_owner=f"album-finalizer-{uuid4().hex}",
+        album_finalization_max_attempts=(
+            settings.media.album_finalization_max_attempts
+        ),
+        album_finalization_retry_delay=timedelta(
+            seconds=settings.media.album_finalization_retry_seconds
+        ),
+        album_finalization_lease=timedelta(
+            seconds=settings.media.album_finalization_lease_seconds
+        ),
     )
 
 

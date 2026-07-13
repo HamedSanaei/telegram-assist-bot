@@ -185,18 +185,18 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ingest_post_idempotently.py` | تنها write path Crawl/Listener؛ Created/AlreadyExists/Conflict و claim اتمیک |
 | `application/download_post_media.py` | دانلود stream محدود، ثبت metadata و بازیابی file-commit/database-failure |
 | `application/cleanup_expired_media.py` | پاک‌سازی batchدار و idempotent با recheck reference و containment |
-| `application/assemble_media_group.py` | عضوگیری replay-safe و finalization اتمیک Album با deadline پایدار |
+| `application/assemble_media_group.py` | ثبت arrival پیش از دانلود، عضوگیری replay-safe و quiet/max deadline پایدار Album |
 | `application/text_normalization.py` و `detect_exact_duplicate.py` | normalization حداقلی نسخه ۱ و hash قطعی نسخه ۱ در پنجرهٔ دقیق ۱۴روزه |
 | `application/content/` و `prepare_destination_content.py` | تبدیل خالص مقصد با edit span و rebasing Entityهای UTF-16؛ policy نسخه ۱ |
 | `application/categorize_post.py` | precedence دستی، keyword قطعی و default منبع؛ policy نسخه ۱ |
 | `application/prepare_post_pipeline.py` | resume مرحله‌ای از MongoDB، artifact مستقل مقصد و readiness اتمیک |
-| `application/runtime_ingestion.py` | مسیر مشترک History/Live از Post canonical تا دانلود/reuse Media، Album پایدار و content preparation idempotent |
+| `application/runtime_ingestion.py` | مسیر مشترک History/Live؛ observation پیش‌دانلود، claim/lease و anchor canonical Album، isolation خطای هر گروه و preparation idempotent |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
 | `infrastructure/persistence/mongodb/indexes.py` | تعریف، ساخت تکرارشونده و Fail-fast دو Index دقیق `uq_posts_source_identity_v1` و `ttl_posts_expires_at_v1` |
 | `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity و markerهای افزایشی claim با backward read |
 | `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim اتمیک، query غیرمنقضی و CAS |
-| `infrastructure/persistence/mongodb/content_repository.py` | collections/indexهای restart-safe برای Media، Album و state/artifactهای آماده‌سازی |
+| `infrastructure/persistence/mongodb/content_repository.py` | Media و preparation به‌همراه mapper سازگار legacy و claim/lease/retry/permanent state برای Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |

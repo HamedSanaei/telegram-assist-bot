@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 import telegram_assist_bot.bootstrap.text_ingestion as ingestion_module
+from telegram_assist_bot.application.ingest_post_idempotently import (
+    IngestionOutcome,
+    IngestionResult,
+)
 from telegram_assist_bot.application.ports import (
     InsertPostOutcome,
     InsertPostResult,
@@ -834,6 +838,66 @@ def test_album_finalizer_failure_uses_real_logger_and_reports_exact_task() -> No
         assert isinstance(captured.value.__cause__.__cause__, ValueError)
         rendered = repr(sink.events)
         assert "synthetic private provider detail" not in rendered
+
+    run(scenario())
+
+
+def test_isolated_album_deferral_keeps_publication_heartbeat_and_live_active() -> None:
+    class IsolatedAlbumIngestor:
+        def __init__(self) -> None:
+            self.finalizer_polled = asyncio.Event()
+
+        async def finalize_due_groups(self) -> int:
+            self.finalizer_polled.set()
+            return 0
+
+        async def execute(
+            self, item: TelegramTextMessage, *, correlation_id: str
+        ) -> IngestionResult:
+            del item, correlation_id
+            return IngestionResult(
+                IngestionOutcome.ALREADY_EXISTS, PostId("isolated-album"), False
+            )
+
+    ingestor = IsolatedAlbumIngestor()
+
+    async def ingestor_factory(*_args: object) -> IsolatedAlbumIngestor:
+        return ingestor
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = RuntimeGateway(
+            (),
+            [],
+            order,
+            history_entered=asyncio.Event(),
+            history_release=asyncio.Event(),
+            live_entered=asyncio.Event(),
+        )
+        worker = CriticalRuntimeWorker(order)
+        app = runtime_application(
+            gateway,
+            foundation,
+            worker,
+            runtime_ingestor_factory=ingestor_factory,
+        )
+        await app.start(Path("synthetic.json"), environ={})
+        await asyncio.wait_for(ingestor.finalizer_polled.wait(), timeout=1)
+        await asyncio.wait_for(worker.second_heartbeat.wait(), timeout=1)
+        assert gateway.live_entered is not None
+        await asyncio.wait_for(gateway.live_entered.wait(), timeout=1)
+        waiter = asyncio.create_task(app.wait())
+        await asyncio.sleep(0.02)
+
+        assert waiter.done() is False
+        assert worker.publication_polls >= 2
+        assert "operational_runtime_ready" in {
+            event["event_name"] for event in sink.events
+        }
+
+        app.request_stop()
+        await waiter
+        await app.shutdown()
 
     run(scenario())
 

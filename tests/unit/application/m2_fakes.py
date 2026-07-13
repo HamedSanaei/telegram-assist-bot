@@ -1,9 +1,10 @@
 """In-memory application-port fakes for Milestone 2 unit tests."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from telegram_assist_bot.application.ports import (
+    AlbumFinalizationStatus,
     DestinationArtifact,
     MediaGroup,
     MediaGroupMember,
@@ -74,8 +75,6 @@ class FakePreparationRepository:
             for item in current.members
         ):
             return current
-        from dataclasses import replace
-
         current = replace(
             group,
             members=tuple(
@@ -88,12 +87,26 @@ class FakePreparationRepository:
         self.groups[group.group_key] = current
         return current
 
+    async def observe_group_member(
+        self, group: MediaGroup, *, source_message_id: int
+    ) -> MediaGroup:
+        current = self.groups.get(group.group_key, group)
+        if current.finalized_at is not None:
+            return current
+        current = replace(
+            group,
+            members=current.members,
+            observed_message_ids=tuple(
+                sorted({*current.observed_message_ids, source_message_id})
+            ),
+        )
+        self.groups[group.group_key] = current
+        return current
+
     async def get_group(self, group_key: str) -> MediaGroup | None:
         return self.groups.get(group_key)
 
     async def finalize_group(self, group_key: str, *, at: datetime) -> bool:
-        from dataclasses import replace
-
         group = self.groups[group_key]
         if group.finalized_at is not None:
             return False
@@ -113,6 +126,109 @@ class FakePreparationRepository:
                 key=lambda group: (group.finalize_after, group.group_key),
             )[:limit]
         )
+
+    async def claim_due_group(
+        self, *, now: datetime, owner: str, lease_until: datetime
+    ) -> MediaGroup | None:
+        candidates = sorted(
+            (
+                group
+                for group in self.groups.values()
+                if group.finalization_status
+                not in {
+                    AlbumFinalizationStatus.COMPLETED,
+                    AlbumFinalizationStatus.PERMANENT_FAILED,
+                }
+                and group.finalize_after <= now
+                and (group.next_attempt_at is None or group.next_attempt_at <= now)
+                and (
+                    group.claim_owner is None
+                    or (
+                        group.claim_expires_at is not None
+                        and group.claim_expires_at <= now
+                    )
+                )
+            ),
+            key=lambda group: (group.finalize_after, group.group_key),
+        )
+        if not candidates:
+            return None
+        group = candidates[0]
+        claimed = replace(
+            group,
+            finalization_status=AlbumFinalizationStatus.PROCESSING,
+            attempt_count=group.attempt_count + 1,
+            claim_owner=owner,
+            claim_expires_at=lease_until,
+        )
+        self.groups[group.group_key] = claimed
+        return claimed
+
+    async def complete_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        canonical_source_message_id: int,
+    ) -> bool:
+        group = self.groups[group_key]
+        if group.claim_owner != owner:
+            return False
+        self.groups[group_key] = replace(
+            group,
+            finalized_at=at,
+            finalization_status=AlbumFinalizationStatus.COMPLETED,
+            canonical_source_message_id=canonical_source_message_id,
+            claim_owner=None,
+            claim_expires_at=None,
+            next_attempt_at=None,
+            failure_category=None,
+        )
+        return True
+
+    async def defer_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        next_attempt_at: datetime,
+        failure_category: str,
+    ) -> bool:
+        group = self.groups[group_key]
+        if group.claim_owner != owner:
+            return False
+        self.groups[group_key] = replace(
+            group,
+            finalization_status=AlbumFinalizationStatus.PENDING,
+            next_attempt_at=next_attempt_at,
+            failure_category=failure_category,
+            claim_owner=None,
+            claim_expires_at=None,
+        )
+        return True
+
+    async def fail_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        failure_category: str,
+    ) -> bool:
+        del at
+        group = self.groups[group_key]
+        if group.claim_owner != owner:
+            return False
+        self.groups[group_key] = replace(
+            group,
+            finalization_status=AlbumFinalizationStatus.PERMANENT_FAILED,
+            failure_category=failure_category,
+            claim_owner=None,
+            claim_expires_at=None,
+            next_attempt_at=None,
+        )
+        return True
 
     async def find_duplicate(
         self, *, content_hash: str, post_id: PostId, since: datetime

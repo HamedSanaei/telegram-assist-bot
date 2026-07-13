@@ -9,7 +9,9 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from telegram_assist_bot.application.ports import (
+    AlbumFinalizationStatus,
     DestinationArtifact,
+    InvalidMediaGroupRecordError,
     MediaGroup,
     MediaGroupMember,
 )
@@ -50,6 +52,15 @@ async def initialize_content_preparation_indexes(
     await groups.create_index(
         [("finalized_at", ASCENDING), ("finalize_after", ASCENDING)],
         name="ix_media_group_finalization_v1",
+    )
+    await groups.create_index(
+        [
+            ("finalization_status", ASCENDING),
+            ("next_attempt_at", ASCENDING),
+            ("claim_expires_at", ASCENDING),
+            ("finalize_after", ASCENDING),
+        ],
+        name="ix_media_group_claim_v1",
     )
     await preparations.create_index(
         [
@@ -110,6 +121,128 @@ def _entity_from(document: Document) -> TelegramEntity:
         document["entity_type"],
         document.get("custom_emoji_id"),
     )
+
+
+def _valid_channel_id(value: object) -> int | None:
+    return value if type(value) is int and value != 0 else None
+
+
+def _valid_message_id(value: object) -> int | None:
+    return value if type(value) is int and value > 0 else None
+
+
+def _group_from_document(document: Document) -> MediaGroup:
+    """Load current and legacy group documents with safe identity recovery."""
+    group_key = str(document.get("_id", ""))
+    attempt_count_value = document.get("attempt_count", 0)
+    attempt_count = (
+        attempt_count_value
+        if type(attempt_count_value) is int and attempt_count_value >= 0
+        else 0
+    )
+    raw_members = document.get("members", [])
+    media_member_count = len(raw_members) if type(raw_members) is list else 0
+    try:
+        if not group_key or type(raw_members) is not list:
+            raise ValueError
+        media_channels = {
+            channel
+            for item in raw_members
+            if type(item) is dict and type(item.get("media")) is dict
+            if (channel := _valid_channel_id(item["media"].get("source_channel_id")))
+            is not None
+        }
+        source_channel_id = _valid_channel_id(document.get("source_channel_id"))
+        if source_channel_id is None and len(media_channels) == 1:
+            source_channel_id = next(iter(media_channels))
+        if source_channel_id is None:
+            prefix, separator, _suffix = group_key.partition(":")
+            parsed = int(prefix) if separator else 0
+            source_channel_id = _valid_channel_id(parsed)
+        if source_channel_id is None or any(
+            channel != source_channel_id for channel in media_channels
+        ):
+            raise ValueError
+
+        telegram_group_id_value = document.get("telegram_group_id")
+        telegram_group_id = (
+            telegram_group_id_value
+            if type(telegram_group_id_value) is str and telegram_group_id_value
+            else group_key.partition(":")[2]
+        )
+        if not telegram_group_id:
+            raise ValueError
+
+        members: list[MediaGroupMember] = []
+        for item in raw_members:
+            if type(item) is not dict or type(item.get("media")) is not dict:
+                raise ValueError
+            media_document = dict(item["media"])
+            member_message_id = _valid_message_id(item.get("source_message_id"))
+            media_message_id = _valid_message_id(
+                media_document.get("source_message_id")
+            )
+            if member_message_id is None:
+                member_message_id = media_message_id
+            if member_message_id is None or (
+                media_message_id is not None and media_message_id != member_message_id
+            ):
+                raise ValueError
+            media_document["source_channel_id"] = source_channel_id
+            media_document["source_message_id"] = member_message_id
+            media = _media_from(media_document)
+            members.append(
+                MediaGroupMember(
+                    member_message_id,
+                    item["source_date"],
+                    media,
+                    item.get("caption"),
+                    tuple(
+                        _entity_from(entity)
+                        for entity in item.get("caption_entities", [])
+                    ),
+                    item.get("observed_at"),
+                    item.get("telegram_group_id"),
+                )
+            )
+        members.sort(key=lambda value: (value.source_date, value.source_message_id))
+        observed_values = document.get("observed_message_ids", [])
+        observed_ids = {
+            value for value in observed_values if _valid_message_id(value) is not None
+        }
+        observed_ids.update(member.source_message_id for member in members)
+        status_value = document.get(
+            "finalization_status", AlbumFinalizationStatus.PENDING.value
+        )
+        status = AlbumFinalizationStatus(status_value)
+        canonical_source_message_id = _valid_message_id(
+            document.get("canonical_source_message_id")
+        )
+        return MediaGroup(
+            group_key,
+            source_channel_id,
+            telegram_group_id,
+            tuple(members),
+            document["first_member_at"],
+            document["last_member_at"],
+            document["finalize_after"],
+            document["maximum_wait_until"],
+            document.get("finalized_at"),
+            tuple(sorted(observed_ids)),
+            status,
+            attempt_count,
+            document.get("next_attempt_at"),
+            document.get("claim_owner"),
+            document.get("claim_expires_at"),
+            document.get("failure_category"),
+            canonical_source_message_id,
+        )
+    except (KeyError, TypeError, ValueError):
+        raise InvalidMediaGroupRecordError(
+            group_key or "unknown-media-group",
+            attempt_count=attempt_count,
+            media_member_count=media_member_count,
+        ) from None
 
 
 class MongoContentPreparationRepository:
@@ -199,6 +332,8 @@ class MongoContentPreparationRepository:
             "caption_entities": [
                 _entity_document(item) for item in member.caption_entities
             ],
+            "observed_at": member.observed_at,
+            "telegram_group_id": member.telegram_group_id,
         }
         with contextlib.suppress(DuplicateKeyError):
             await self._groups.update_one(
@@ -214,6 +349,12 @@ class MongoContentPreparationRepository:
                         "first_member_at": group.first_member_at,
                         "maximum_wait_until": group.maximum_wait_until,
                         "finalized_at": None,
+                        "finalization_status": AlbumFinalizationStatus.PENDING.value,
+                        "attempt_count": 0,
+                        "next_attempt_at": None,
+                        "claim_owner": None,
+                        "claim_expires_at": None,
+                        "failure_category": None,
                     },
                     "$set": {
                         "last_member_at": group.last_member_at,
@@ -223,6 +364,9 @@ class MongoContentPreparationRepository:
                         "members": member_document,
                         "member_ids": member.source_message_id,
                     },
+                    "$addToSet": {
+                        "observed_message_ids": member.source_message_id,
+                    },
                 },
                 upsert=True,
             )
@@ -231,37 +375,48 @@ class MongoContentPreparationRepository:
             raise RuntimeError("Media group write did not produce a document.")
         return loaded
 
+    async def observe_group_member(
+        self,
+        group: MediaGroup,
+        *,
+        source_message_id: int,
+    ) -> MediaGroup:
+        """Record arrival before download and extend the durable quiet window."""
+        await self._groups.update_one(
+            {"_id": group.group_key, "finalized_at": None},
+            {
+                "$setOnInsert": {
+                    "source_channel_id": group.source_channel_id,
+                    "telegram_group_id": group.telegram_group_id,
+                    "first_member_at": group.first_member_at,
+                    "maximum_wait_until": group.maximum_wait_until,
+                    "members": [],
+                    "member_ids": [],
+                    "finalized_at": None,
+                    "finalization_status": AlbumFinalizationStatus.PENDING.value,
+                    "attempt_count": 0,
+                    "next_attempt_at": None,
+                    "claim_owner": None,
+                    "claim_expires_at": None,
+                    "failure_category": None,
+                },
+                "$set": {
+                    "last_member_at": group.last_member_at,
+                    "finalize_after": group.finalize_after,
+                },
+                "$addToSet": {"observed_message_ids": source_message_id},
+            },
+            upsert=True,
+        )
+        loaded = await self.get_group(group.group_key)
+        if loaded is None:
+            raise RuntimeError("Media group observation was not persisted.")
+        return loaded
+
     async def get_group(self, group_key: str) -> MediaGroup | None:
         """Load and deterministically order a durable group."""
         document = await self._groups.find_one({"_id": group_key})
-        if document is None:
-            return None
-        members = tuple(
-            MediaGroupMember(
-                item["source_message_id"],
-                item["source_date"],
-                _media_from(item["media"]),
-                item.get("caption"),
-                tuple(
-                    _entity_from(entity) for entity in item.get("caption_entities", [])
-                ),
-            )
-            for item in sorted(
-                document.get("members", []),
-                key=lambda value: (value["source_date"], value["source_message_id"]),
-            )
-        )
-        return MediaGroup(
-            document["_id"],
-            document["source_channel_id"],
-            document["telegram_group_id"],
-            members,
-            document["first_member_at"],
-            document["last_member_at"],
-            document["finalize_after"],
-            document["maximum_wait_until"],
-            document.get("finalized_at"),
-        )
+        return None if document is None else _group_from_document(document)
 
     async def finalize_group(self, group_key: str, *, at: datetime) -> bool:
         """Conditionally finalize one due group."""
@@ -269,7 +424,13 @@ class MongoContentPreparationRepository:
         if group is None or at < min(group.finalize_after, group.maximum_wait_until):
             return False
         result = await self._groups.update_one(
-            {"_id": group_key, "finalized_at": None}, {"$set": {"finalized_at": at}}
+            {"_id": group_key, "finalized_at": None},
+            {
+                "$set": {
+                    "finalized_at": at,
+                    "finalization_status": AlbumFinalizationStatus.COMPLETED.value,
+                }
+            },
         )
         return result.modified_count == 1
 
@@ -278,7 +439,23 @@ class MongoContentPreparationRepository:
     ) -> tuple[MediaGroup, ...]:
         """Load a bounded deterministic batch whose persisted quiet window elapsed."""
         cursor = (
-            self._groups.find({"finalized_at": None, "finalize_after": {"$lte": now}})
+            self._groups.find(
+                {
+                    "finalized_at": None,
+                    "finalize_after": {"$lte": now},
+                    "finalization_status": {
+                        "$nin": [
+                            AlbumFinalizationStatus.COMPLETED.value,
+                            AlbumFinalizationStatus.PERMANENT_FAILED.value,
+                        ]
+                    },
+                    "$or": [
+                        {"next_attempt_at": None},
+                        {"next_attempt_at": {"$lte": now}},
+                        {"next_attempt_at": {"$exists": False}},
+                    ],
+                }
+            )
             .sort([("finalize_after", ASCENDING), ("_id", ASCENDING)])
             .limit(limit)
         )
@@ -288,6 +465,146 @@ class MongoContentPreparationRepository:
             if loaded is not None:
                 groups.append(loaded)
         return tuple(groups)
+
+    async def claim_due_group(
+        self,
+        *,
+        now: datetime,
+        owner: str,
+        lease_until: datetime,
+    ) -> MediaGroup | None:
+        """Atomically claim one due group, including legacy and expired claims."""
+        query: Document = {
+            "finalize_after": {"$lte": now},
+            "$and": [
+                {
+                    "$or": [
+                        {"finalized_at": None},
+                        {"finalized_at": {"$exists": False}},
+                    ]
+                },
+                {
+                    "$or": [
+                        {"finalization_status": {"$exists": False}},
+                        {
+                            "finalization_status": {
+                                "$in": [
+                                    AlbumFinalizationStatus.PENDING.value,
+                                    AlbumFinalizationStatus.PROCESSING.value,
+                                ]
+                            }
+                        },
+                    ]
+                },
+                {
+                    "$or": [
+                        {"next_attempt_at": None},
+                        {"next_attempt_at": {"$lte": now}},
+                        {"next_attempt_at": {"$exists": False}},
+                    ]
+                },
+                {
+                    "$or": [
+                        {"claim_owner": None},
+                        {"claim_owner": {"$exists": False}},
+                        {"claim_expires_at": {"$lte": now}},
+                    ]
+                },
+            ],
+        }
+        document = await self._groups.find_one_and_update(
+            query,
+            {
+                "$set": {
+                    "finalization_status": AlbumFinalizationStatus.PROCESSING.value,
+                    "claim_owner": owner,
+                    "claim_expires_at": lease_until,
+                    "last_attempt_at": now,
+                },
+                "$inc": {"attempt_count": 1},
+            },
+            sort=[("finalize_after", ASCENDING), ("_id", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        return None if document is None else _group_from_document(document)
+
+    async def complete_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        canonical_source_message_id: int,
+    ) -> bool:
+        """Complete one owned group without changing unrelated records."""
+        result = await self._groups.update_one(
+            {
+                "_id": group_key,
+                "claim_owner": owner,
+                "finalization_status": AlbumFinalizationStatus.PROCESSING.value,
+            },
+            {
+                "$set": {
+                    "finalized_at": at,
+                    "finalization_status": AlbumFinalizationStatus.COMPLETED.value,
+                    "canonical_source_message_id": canonical_source_message_id,
+                    "next_attempt_at": None,
+                    "failure_category": None,
+                    "claim_owner": None,
+                    "claim_expires_at": None,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def defer_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        next_attempt_at: datetime,
+        failure_category: str,
+    ) -> bool:
+        """Release one owned group for its next bounded retry."""
+        result = await self._groups.update_one(
+            {"_id": group_key, "claim_owner": owner},
+            {
+                "$set": {
+                    "finalization_status": AlbumFinalizationStatus.PENDING.value,
+                    "next_attempt_at": next_attempt_at,
+                    "failure_category": failure_category,
+                    "claim_owner": None,
+                    "claim_expires_at": None,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def fail_group_finalization(
+        self,
+        group_key: str,
+        *,
+        owner: str,
+        at: datetime,
+        failure_category: str,
+    ) -> bool:
+        """Permanently fail one owned malformed group without deleting it."""
+        result = await self._groups.update_one(
+            {"_id": group_key, "claim_owner": owner},
+            {
+                "$set": {
+                    "finalization_status": (
+                        AlbumFinalizationStatus.PERMANENT_FAILED.value
+                    ),
+                    "permanent_failed_at": at,
+                    "next_attempt_at": None,
+                    "failure_category": failure_category,
+                    "claim_owner": None,
+                    "claim_expires_at": None,
+                }
+            },
+        )
+        return result.modified_count == 1
 
     async def find_duplicate(
         self, *, content_hash: str, post_id: PostId, since: datetime
