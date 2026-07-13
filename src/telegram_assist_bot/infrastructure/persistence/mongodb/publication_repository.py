@@ -120,6 +120,7 @@ def _schedule(document: Document) -> ScheduledPublication:
         completed_at=document.get("completed_at"),
         last_error_category=document.get("last_error_category"),
         due_time_history=history,
+        action=document.get("action", "scheduled"),
     )
 
 
@@ -401,12 +402,51 @@ class MongoScheduleRepository:
             return ScheduleReservation(_schedule(canonical), False)
         return ScheduleReservation(_schedule(document), True)
 
+    async def reserve_immediate(
+        self,
+        *,
+        job_id: str,
+        post_id: str,
+        destination_id: int,
+        now: datetime,
+    ) -> ScheduleReservation:
+        """Insert one due-now command without occupying a scheduled queue slot."""
+        document = {
+            "_id": job_id,
+            "post_id": post_id,
+            "destination_id": destination_id,
+            "action": "immediate",
+            "due_at": now,
+            "status": ScheduleStatus.PENDING.value,
+            "version": 0,
+            "attempt_count": 0,
+        }
+        try:
+            await self._schedules.insert_one(document)
+        except DuplicateKeyError:
+            existing = await self._schedules.find_one({"_id": job_id})
+            if existing is None:
+                raise
+            return ScheduleReservation(_schedule(existing), False)
+        return ScheduleReservation(_schedule(document), True)
+
+    async def get(self, job_id: str) -> ScheduledPublication | None:
+        """Load one publication command by deterministic identity."""
+        document = await self._schedules.find_one({"_id": job_id})
+        return None if document is None else _schedule(document)
+
     async def claim_due(
-        self, *, owner: str, now: datetime, lease_until: datetime
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        action: str = "scheduled",
     ) -> ScheduledPublication | None:
         """Claim the globally oldest eligible due job."""
         document = await self._schedules.find_one_and_update(
             {
+                "action": action,
                 "due_at": {"$lte": now},
                 "$or": [
                     {"status": ScheduleStatus.PENDING.value},
@@ -557,10 +597,14 @@ class MongoScheduleRepository:
         )
         if result.modified_count != 1:
             return CancellationResult.CONFLICT
-        if policy is CancellationPolicy.RECOMPACT:
+        if (
+            policy is CancellationPolicy.RECOMPACT
+            and document.get("action", "scheduled") == "scheduled"
+        ):
             cursor = self._schedules.find(
                 {
                     "destination_id": destination_id,
+                    "action": "scheduled",
                     "due_at": {"$gt": document["due_at"]},
                     "status": {
                         "$in": [

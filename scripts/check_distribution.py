@@ -113,6 +113,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/text_ingestion.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/media_cleanup.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/admin_approval.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/approval_bot.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/bootstrap/scheduling.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/shared/config/errors.py",
@@ -148,6 +149,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/admin.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/publication.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/scheduling.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/ports/operational_approval.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/publication/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/publication/publish_immediately.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/scheduling/__init__.py",
@@ -156,6 +158,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/application/scheduling/schedule_post.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/approvals/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/approvals/services.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/operational_approval.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/assemble_media_group.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/categorize_post.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/cleanup_expired_media.py",
@@ -186,6 +189,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/post_repository.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/publication_payload_loader.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/publication_repository.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/persistence/mongodb/operational_approval_repository.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/bot/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/bot/adapter.py",
@@ -207,6 +211,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/scheduled_publication_worker.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/presentation/bot/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/presentation/bot/handlers.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/presentation/bot/runtime_handlers.py",
                 *{
                     f"{EXPECTED_IMPORT_PACKAGE}/{layer}/__init__.py"
                     for layer in (

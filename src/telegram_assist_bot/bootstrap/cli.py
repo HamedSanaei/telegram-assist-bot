@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Never
 from uuid import uuid4
 
+from telegram_assist_bot.bootstrap.approval_bot import (
+    create_approval_bot_application,
+    run_approval_bot_application,
+)
 from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
 from telegram_assist_bot.bootstrap.runtime import (
     BinaryEventStream,
@@ -28,6 +32,7 @@ from telegram_assist_bot.bootstrap.scheduling import (
 )
 from telegram_assist_bot.bootstrap.telegram_login import run_telegram_login
 from telegram_assist_bot.bootstrap.text_ingestion import (
+    create_operational_runtime_application,
     create_text_ingestion_application,
     run_text_ingestion_application,
 )
@@ -121,12 +126,16 @@ def _parser() -> _SafeArgumentParser:
             "ingest-text",
             "media-cleanup",
             "schedule-worker",
+            "approval-bot",
+            "runtime",
         ),
         default="check",
         help=(
             "Use 'login' for explicit authentication, 'ingest' (or the compatible "
             "'ingest-text' alias) for full ingestion, 'media-cleanup' for one "
-            "cleanup batch, or 'schedule-worker' for durable publication."
+            "cleanup batch, 'schedule-worker' for standalone durable publication, "
+            "'approval-bot' for Bot API polling, or 'runtime' for the single-owner "
+            "ingestion and publication process."
         ),
     )
     parser.add_argument(
@@ -224,6 +233,24 @@ def main(
         exit_code = asyncio.run(
             run_schedule_worker_application(
                 schedule_application,
+                configuration_path,
+                environ=environment_snapshot,
+            )
+        )
+    elif arguments.command == "approval-bot":
+        approval_application = create_approval_bot_application(sink=sink)
+        exit_code = asyncio.run(
+            run_approval_bot_application(
+                approval_application,
+                configuration_path,
+                environ=environment_snapshot,
+            )
+        )
+    elif arguments.command == "runtime":
+        runtime_application = create_operational_runtime_application(sink=sink)
+        exit_code = asyncio.run(
+            run_text_ingestion_application(
+                runtime_application,
                 configuration_path,
                 environ=environment_snapshot,
             )

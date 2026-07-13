@@ -280,7 +280,8 @@
 - **Status:** Accepted
 - **Decision:** Callback با `c1_` و ۱۲۸ بیت CSPRNG بدون padding ساخته، claim فقط
   server-side ذخیره و پس از ۱۴ روز صریحاً منقضی می‌شود. Token برای actor/action/
-  post/destination bind، تا terminal شدن reusable و سپس revoke می‌شود. برای هر
+  post/destination bind و در نخستین اجرای مجاز اتمیک consume/revoke می‌شود؛
+  keyboard همگام‌شده Token تازه می‌سازد. برای هر
   مدیر یک header canonical قابل‌ویرایش و content مستقل ارسال می‌شود؛ metadata
   مدیریتی هرگز وارد artifact انتشار نمی‌شود.
 - **Consequences:** MongoDB unique/TTL index منبع حقیقت است؛ HMAC/JWT و claim در
@@ -337,3 +338,17 @@
 - **Status:** Accepted
 - **Decision:** فرمان `ingest` و alias `ingest-text` یک Composition Root مشترک دارند. همان client قفل‌شدهٔ Telethon برای validation، History، Listener و stream Media استفاده می‌شود. Crawl و Listener فقط `RuntimeMessageIngestor` را صدا می‌زنند؛ این مسیر قراردادهای موجود دانلود، Album و preparation را روی state پایدار MongoDB ادامه می‌دهد. finalizer آلبوم یک task محدود است و deadline پایدار collection منبع حقیقت باقی می‌ماند. cleanup به‌صورت command یک‌مرحله‌ای `media-cleanup` اجرا می‌شود.
 - **Consequences:** session رقیب، write path موازی و task نامحدود ایجاد نمی‌شود. restart فایل و metadata سالم را reuse می‌کند، اما اجرای زنده همچنان به session معتبر، Premium account، دسترسی کانال و storage پایدار نیاز دارد.
+
+## ADR-025 — مالک واحد User API و تفکیک Approval Bot
+
+- **Status:** Accepted
+- **Decision:** فرمان `runtime` ingestion، Media/Album finalization و اجرای commandهای
+  انتشار فوری و زمان‌بندی‌شده را با یک `TelethonTextIngestionGateway` و یک client
+  مشترک اجرا می‌کند. callback فقط command پایدار MongoDB می‌سازد. فرمان
+  `approval-bot` تنها Aiogram Bot API و MongoDB را مالک است و Session کاربر را باز
+  نمی‌کند. `schedule-worker` و `ingest` سازگار می‌مانند، ولی lock همان Session اجازه
+  رقابت آن‌ها با `runtime` را نمی‌دهد.
+- **Consequences:** دو client رقیب برای یک فایل Session وجود ندارد؛ restart کارهای
+  approval/publication را از outbox/lease ادامه می‌دهد. production به دو Process
+  `runtime` و `approval-bot` نیاز دارد و `schedule-worker` نباید هم‌زمان با runtime
+  روی همان Session اجرا شود.

@@ -85,12 +85,15 @@ class ScheduledPublication:
     completed_at: datetime | None = None
     last_error_category: str | None = None
     due_time_history: tuple[DueTimeAudit, ...] = ()
+    action: str = "scheduled"
 
     def __post_init__(self) -> None:
         """Require and canonicalize an aware UTC due time."""
         if self.due_at.tzinfo is None:
             raise ValueError("Schedule due time must be timezone-aware.")
         object.__setattr__(self, "due_at", self.due_at.astimezone(UTC))
+        if self.action not in {"immediate", "scheduled"}:
+            raise ValueError("Scheduled publication action is invalid.")
 
 
 __all__ = (

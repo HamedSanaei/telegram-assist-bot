@@ -25,6 +25,11 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.indexes import (
     PostIndexSpec,
     initialize_post_indexes,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.operational_approval_repository import (  # noqa: E501
+    MongoApprovalPostLoader,
+    MongoOperationalApprovalRepository,
+    initialize_operational_approval_indexes,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
     POST_DOCUMENT_SCHEMA_VERSION,
     post_from_document,
@@ -51,9 +56,11 @@ __all__ = (
     "POST_INDEX_SPECS",
     "POST_SOURCE_IDENTITY_INDEX_NAME",
     "InvalidPostDocumentError",
+    "MongoApprovalPostLoader",
     "MongoApprovalRepository",
     "MongoConnectionError",
     "MongoIndexInitializationError",
+    "MongoOperationalApprovalRepository",
     "MongoPersistenceError",
     "MongoPostRepository",
     "MongoPublicationPayloadLoader",
@@ -64,6 +71,7 @@ __all__ = (
     "create_mongodb_client",
     "get_posts_collection",
     "initialize_approval_indexes",
+    "initialize_operational_approval_indexes",
     "initialize_post_indexes",
     "initialize_publication_indexes",
     "post_from_document",

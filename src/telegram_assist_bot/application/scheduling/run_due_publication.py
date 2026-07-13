@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         PublishRequest,
         PublishResult,
     )
+    from telegram_assist_bot.domain import ScheduledPublication
 
 
 class RunDueStatus(StrEnum):
@@ -41,8 +42,11 @@ class RunDuePublication:
         lease_seconds: float,
         max_attempts: int,
         retry_delay_seconds: float,
+        action: str = "scheduled",
         build_request: Callable[[str, int], Awaitable[PublishRequest]],
         publish: Callable[[PublishRequest], Awaitable[PublishResult]],
+        after_result: Callable[[ScheduledPublication, RunDueStatus], Awaitable[None]]
+        | None = None,
     ) -> None:
         """Validate and store explicit worker execution boundaries."""
         if (
@@ -57,8 +61,12 @@ class RunDuePublication:
         self._lease_seconds = lease_seconds
         self._max_attempts = max_attempts
         self._retry_delay_seconds = retry_delay_seconds
+        if action not in {"immediate", "scheduled"}:
+            raise ValueError("Publication command action is invalid.")
+        self._action = action
         self._build_request = build_request
         self._publish = publish
+        self._after_result = after_result
 
     async def execute_once(self) -> RunDueStatus:
         """Execute at most one due job; cancellation propagates without completion."""
@@ -67,6 +75,7 @@ class RunDuePublication:
             owner=self._owner,
             now=now,
             lease_until=now + timedelta(seconds=self._lease_seconds),
+            action=self._action,
         )
         if job is None:
             return RunDueStatus.IDLE
@@ -79,7 +88,9 @@ class RunDuePublication:
             changed = await self._repository.complete(
                 job.job_id, owner=self._owner, at=self._now()
             )
-            return RunDueStatus.COMPLETED if changed else RunDueStatus.LEASE_LOST
+            status = RunDueStatus.COMPLETED if changed else RunDueStatus.LEASE_LOST
+            await self._notify(job, status)
+            return status
         if (
             result.status in {PublishStatus.RETRY_PENDING, PublishStatus.BUSY}
             and job.attempt_count < self._max_attempts
@@ -91,7 +102,9 @@ class RunDuePublication:
                 + timedelta(seconds=self._retry_delay_seconds),
                 category=result.status.value,
             )
-            return RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
+            status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
+            await self._notify(job, status)
+            return status
         category = (
             "ambiguous"
             if result.status is PublishStatus.OUTCOME_UNKNOWN
@@ -100,7 +113,13 @@ class RunDuePublication:
         changed = await self._repository.fail(
             job.job_id, owner=self._owner, category=category
         )
-        return RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
+        status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
+        await self._notify(job, status)
+        return status
+
+    async def _notify(self, job: ScheduledPublication, status: RunDueStatus) -> None:
+        if self._after_result is not None:
+            await self._after_result(job, status)
 
     def _now(self) -> datetime:
         value = self._clock()

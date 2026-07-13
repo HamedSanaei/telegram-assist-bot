@@ -124,3 +124,52 @@ def test_cancellation_propagates_without_terminal_transition() -> None:
         asyncio.run(use_case.execute_once())
     assert not repository.completed
     assert not repository.failed
+
+
+def test_action_filter_and_post_result_hook_are_explicit() -> None:
+    async def scenario() -> None:
+        repository = Repository(job())
+        notified: list[RunDueStatus] = []
+        use_case = runner(repository, PublishStatus.SUCCEEDED)
+        use_case._action = "immediate"
+
+        async def notify(value: ScheduledPublication, status: RunDueStatus) -> None:
+            del value
+            notified.append(status)
+
+        use_case._after_result = notify
+        assert await use_case.execute_once() is RunDueStatus.COMPLETED
+        assert notified == [RunDueStatus.COMPLETED]
+
+    asyncio.run(scenario())
+    with pytest.raises(ValueError, match="action"):
+        RunDuePublication(
+            cast("ScheduleRepository", Repository(None)),
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=30,
+            max_attempts=3,
+            retry_delay_seconds=2,
+            action="invalid",
+            build_request=cast("object", lambda: None),  # type: ignore[arg-type]
+            publish=cast("object", lambda: None),  # type: ignore[arg-type]
+        )
+
+
+def test_invalid_worker_bounds_and_naive_clock_are_rejected() -> None:
+    repository = cast("ScheduleRepository", Repository(job()))
+    with pytest.raises(ValueError, match="configuration"):
+        RunDuePublication(
+            repository,
+            owner="worker",
+            clock=lambda: NOW,
+            lease_seconds=0,
+            max_attempts=3,
+            retry_delay_seconds=2,
+            build_request=cast("object", lambda: None),  # type: ignore[arg-type]
+            publish=cast("object", lambda: None),  # type: ignore[arg-type]
+        )
+    use_case = runner(Repository(job()), PublishStatus.SUCCEEDED)
+    use_case._clock = lambda: NOW.replace(tzinfo=None)
+    with pytest.raises(ValueError, match="aware"):
+        asyncio.run(use_case.execute_once())

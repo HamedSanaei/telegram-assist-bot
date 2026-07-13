@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from telegram_assist_bot.application.ports.admin import (
     AdminMessagingGateway,
@@ -38,6 +38,10 @@ INVALID_ACTION_TEXT = "این عملیات دیگر معتبر نیست."
 TEMPORARY_FAILURE_TEXT = "در حال حاضر انجام عملیات ممکن نیست. دوباره تلاش کنید."
 CALLBACK_LIFETIME = timedelta(days=14)
 MAX_DESTINATIONS = 20
+
+
+class _CallbackConsumer(Protocol):
+    async def consume_callback(self, digest: str) -> bool: ...
 
 
 class AuthorizationStatus(StrEnum):
@@ -196,6 +200,12 @@ class CallbackTokenService:
         if decision.status is not AuthorizationStatus.ALLOWED:
             return CallbackResolution(CallbackStatus.DESTINATION_DENIED)
         return resolution
+
+    async def consume(self, callback_data: str) -> bool:
+        """Atomically consume one valid opaque token after authorization."""
+        digest = hashlib.sha256(callback_data.encode("utf-8")).hexdigest()
+        repository = cast("_CallbackConsumer", self._repository)
+        return await repository.consume_callback(digest)
 
 
 @dataclass(frozen=True, slots=True)

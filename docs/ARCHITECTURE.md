@@ -93,6 +93,13 @@ command `schedule-worker` نیز Foundation را reuse می‌کند، Session/P
 مقصد را non-interactive می‌سنجد، Indexهای Publication/Schedule را می‌سازد، payload
 آمادهٔ متن/Media/Album را بار می‌کند و Worker پایدار را تا cancellation اجرا می‌کند.
 
+فرمان `runtime` همین ingestion و اجرای publication فوری/زمان‌بندی‌شده را زیر یک
+مالک lifecycle و یک Telethon client قفل‌شده جمع می‌کند. publisher از همان client
+بازشدهٔ ingestion ساخته می‌شود و Session دوم ندارد. `approval-bot` lifecycle مستقل
+Bot API + MongoDB است، outbox تحویل و sync را poll می‌کند و هیچ User API adapter یا
+Session کاربر را باز نمی‌کند. lock Session مانع رقابت فرمان‌های سازگار قدیمی با
+`runtime` می‌شود.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای
@@ -283,6 +290,8 @@ Collectionهای پیاده‌شدهٔ Milestone 2:
 Collectionهای بعدی فقط برای Taskهای صریح آینده برنامه‌ریزی شده‌اند:
 
 - `approvals`: Reference پیام‌های تأیید و وضعیت آخرین Sync؛
+- `approval_deliveries`: outbox منطقی آماده‌ها، claim/lease تحویل، retry، وضعیت امن
+  مقصدها و درخواست پایدار همگام‌سازی UI؛
 - `publications`: Unique Idempotency Key برای هر تصمیم انتشار؛
 - `scheduled_publications`: Index روی `status + due_at`، Unique Key و فیلدهای Lease؛
 - `ai_jobs` و `ai_results`: Job پایدار، نتیجه، Prompt/Schema version و Claim اتمیک؛
