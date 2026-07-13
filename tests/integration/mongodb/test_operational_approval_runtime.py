@@ -463,7 +463,63 @@ def test_future_scheduled_job_is_not_claimed_early_and_due_job_is_claimed_once(
     asyncio.run(scenario())
 
 
-def test_runtime_poll_claims_new_immediate_job_within_two_seconds_and_restart_is_idle(
+def test_ambiguous_immediate_job_persists_safe_details_and_is_not_reclaimed(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            schedules = database["scheduled_publications"]
+            queues = database["schedule_queues"]
+            await initialize_publication_indexes(
+                database["publications"], schedules, queues
+            )
+            repository = MongoScheduleRepository(schedules, queues)
+            now = datetime(2026, 7, 13, 12, tzinfo=UTC)
+            identity = publication_identity("ambiguous-post", -1001, "immediate")
+            await repository.reserve_immediate(
+                job_id=identity,
+                post_id="ambiguous-post",
+                destination_id=-1001,
+                now=now,
+            )
+            claimed = await repository.claim_due(
+                owner="runtime",
+                now=now,
+                lease_until=now + timedelta(seconds=30),
+                action="immediate",
+            )
+            assert claimed is not None
+            assert await repository.fail(
+                identity,
+                owner="runtime",
+                category="ambiguous",
+                failure_type="PublisherError",
+            )
+            stored = await repository.get(identity)
+            assert stored is not None
+            assert stored.status is ScheduleStatus.OUTCOME_UNKNOWN
+            assert stored.last_error_category == "ambiguous"
+            assert stored.last_failure_type == "PublisherError"
+            assert (
+                await repository.claim_due(
+                    owner="runtime-after-restart",
+                    now=now + timedelta(days=1),
+                    lease_until=now + timedelta(days=1, seconds=30),
+                    action="immediate",
+                )
+                is None
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_poll_claims_new_immediate_job_within_one_second_and_restart_is_idle(
     mongodb_test_settings: MongoTestSettings,
 ) -> None:
     async def scenario() -> None:
@@ -516,13 +572,13 @@ def test_runtime_poll_claims_new_immediate_job_within_two_seconds_and_restart_is
                 destination_id=-1001,
                 now=datetime.now(UTC),
             )
-            await asyncio.wait_for(published.wait(), timeout=2)
+            await asyncio.wait_for(published.wait(), timeout=1)
             elapsed = asyncio.get_running_loop().time() - started
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
             stored = await repository.get(identity)
-            assert elapsed < 2
+            assert elapsed < 1
             assert publication_count == 1
             assert stored is not None
             assert stored.status is ScheduleStatus.COMPLETED

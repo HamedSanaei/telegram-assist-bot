@@ -103,12 +103,21 @@ class AiogramAdminMessagingGateway:
         """Send a managerial header with an optional inline keyboard."""
         try:
             async with asyncio.timeout(self._timeout):
-                message = await self._bot.send_message(
-                    chat_id,
-                    text,
-                    reply_markup=_keyboard(keyboard),
-                    reply_to_message_id=reply_to_message_id,
-                )
+                try:
+                    message = await self._bot.send_message(
+                        chat_id,
+                        text,
+                        reply_markup=_keyboard(keyboard),
+                        reply_to_message_id=reply_to_message_id,
+                    )
+                except TelegramBadRequest:
+                    if reply_to_message_id is None:
+                        raise
+                    message = await self._bot.send_message(
+                        chat_id,
+                        text,
+                        reply_markup=_keyboard(keyboard),
+                    )
         except (
             TelegramForbiddenError,
             TelegramRetryAfter,

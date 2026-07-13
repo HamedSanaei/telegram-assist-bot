@@ -91,9 +91,31 @@ class RunDuePublication:
         self._emit("publication_attempt_started", job)
         try:
             request = await self._build_request(job.post_id, job.destination_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - isolate malformed job payloads.
+            return await self._record_pre_send_failure(job, error)
+        try:
             result = await self._publish(request)
         except asyncio.CancelledError:
             raise
+        except Exception as error:  # noqa: BLE001 - request outcome is ambiguous.
+            failure_type = type(error).__name__
+            changed = await self._repository.fail(
+                job.job_id,
+                owner=self._owner,
+                category="ambiguous",
+                failure_type=failure_type,
+            )
+            status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
+            self._emit(
+                "publication_failed",
+                job,
+                failure_category="ambiguous",
+                failure_type=failure_type,
+            )
+            await self._notify(job, status)
+            return status
         if result.status in {PublishStatus.SUCCEEDED, PublishStatus.ALREADY_PUBLISHED}:
             changed = await self._repository.complete(
                 job.job_id, owner=self._owner, at=self._now()
@@ -108,15 +130,22 @@ class RunDuePublication:
             result.status in {PublishStatus.RETRY_PENDING, PublishStatus.BUSY}
             and job.attempt_count < self._max_attempts
         ):
+            failure_category, failure_type = self._failure_details(result)
             changed = await self._repository.defer(
                 job.job_id,
                 owner=self._owner,
                 next_attempt_at=self._now()
                 + timedelta(seconds=self._retry_delay_seconds),
-                category=result.status.value,
+                category=failure_category,
+                failure_type=failure_type,
             )
             status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
-            self._emit("publication_deferred", job)
+            self._emit(
+                "publication_deferred",
+                job,
+                failure_category=failure_category,
+                failure_type=failure_type,
+            )
             await self._notify(job, status)
             return status
         category = (
@@ -124,11 +153,22 @@ class RunDuePublication:
             if result.status is PublishStatus.OUTCOME_UNKNOWN
             else result.status.value
         )
+        failure_category, failure_type = self._failure_details(
+            result, fallback_category=category
+        )
         changed = await self._repository.fail(
-            job.job_id, owner=self._owner, category=category
+            job.job_id,
+            owner=self._owner,
+            category=failure_category,
+            failure_type=failure_type,
         )
         status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
-        self._emit("publication_failed", job)
+        self._emit(
+            "publication_failed",
+            job,
+            failure_category=failure_category,
+            failure_type=failure_type,
+        )
         await self._notify(job, status)
         return status
 
@@ -136,24 +176,98 @@ class RunDuePublication:
         if self._after_result is not None:
             await self._after_result(job, status)
 
+    async def _record_pre_send_failure(
+        self, job: ScheduledPublication, error: Exception
+    ) -> RunDueStatus:
+        failure_type = type(error).__name__
+        failure_category = "preparation_failure"
+        if job.attempt_count < self._max_attempts:
+            changed = await self._repository.defer(
+                job.job_id,
+                owner=self._owner,
+                next_attempt_at=self._now()
+                + timedelta(seconds=self._retry_delay_seconds),
+                category=failure_category,
+                failure_type=failure_type,
+            )
+            status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
+            self._emit(
+                "publication_deferred",
+                job,
+                failure_category=failure_category,
+                failure_type=failure_type,
+            )
+        else:
+            changed = await self._repository.fail(
+                job.job_id,
+                owner=self._owner,
+                category=failure_category,
+                failure_type=failure_type,
+            )
+            status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
+            self._emit(
+                "publication_failed",
+                job,
+                failure_category=failure_category,
+                failure_type=failure_type,
+            )
+        await self._notify(job, status)
+        return status
+
+    @staticmethod
+    def _failure_details(
+        result: PublishResult, *, fallback_category: str | None = None
+    ) -> tuple[str, str]:
+        publication = result.publication
+        category = (
+            fallback_category
+            if fallback_category == "ambiguous"
+            else publication.error_category
+            if publication is not None and publication.error_category
+            else fallback_category or result.status.value
+        )
+        failure_type = (
+            publication.failure_type
+            if publication is not None and publication.failure_type
+            else "PublishResultFailure"
+        )
+        return category, failure_type
+
     def _now(self) -> datetime:
         value = self._clock()
         if value.tzinfo is None:
             raise ValueError("Worker clock must return aware time.")
         return value.astimezone(UTC)
 
-    def _emit(self, event_name: str, job: ScheduledPublication) -> None:
+    def _emit(
+        self,
+        event_name: str,
+        job: ScheduledPublication,
+        *,
+        failure_category: str | None = None,
+        failure_type: str | None = None,
+    ) -> None:
         if self._logger is not None:
+            fields: dict[str, object] = {
+                "approval_post_id": job.post_id,
+                "target_destination_id": job.destination_id,
+                "publication_action": job.action,
+                "scheduled_due_at": job.due_at.isoformat(),
+                "attempt_count": job.attempt_count,
+            }
+            if failure_category is not None:
+                fields["failure_category"] = failure_category
+            if failure_type is not None:
+                fields["failure_type"] = failure_type
+            level = LogLevel.INFO
+            if event_name == "publication_deferred":
+                level = LogLevel.WARNING
+            elif event_name == "publication_failed":
+                level = LogLevel.ERROR
             self._logger.emit(
-                level=LogLevel.INFO,
+                level=level,
                 event_name=event_name,
-                fields={
-                    "approval_post_id": job.post_id,
-                    "target_destination_id": job.destination_id,
-                    "publication_action": job.action,
-                    "scheduled_due_at": job.due_at.isoformat(),
-                    "attempt_count": job.attempt_count,
-                },
+                fields=fields,
             )
 
 

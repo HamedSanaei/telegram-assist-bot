@@ -69,12 +69,25 @@ class ScheduleRepository(Protocol):
         ...
 
     async def defer(
-        self, job_id: str, *, owner: str, next_attempt_at: datetime, category: str
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        next_attempt_at: datetime,
+        category: str,
+        failure_type: str | None = None,
     ) -> bool:
         """Return an owned job to bounded retry waiting."""
         ...
 
-    async def fail(self, job_id: str, *, owner: str, category: str) -> bool:
+    async def fail(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        category: str,
+        failure_type: str | None = None,
+    ) -> bool:
         """Terminally fail an owned job."""
         ...
 

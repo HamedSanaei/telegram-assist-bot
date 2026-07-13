@@ -790,6 +790,8 @@ def _create_gateway(loaded: LoadedConfiguration) -> TextIngestionGateway:
             api_id=int(loaded.secrets.get(user.api_id).get_secret_value()),
             api_hash=loaded.secrets.get(user.api_hash).get_secret_value(),
             timeout_seconds=float(ingestion.operation_timeout_seconds),
+            connection_retries=ingestion.max_reconnect_attempts,
+            retry_delay_seconds=float(ingestion.reconnect_initial_delay_seconds),
         )
     )
 
@@ -1122,18 +1124,17 @@ async def _create_publication_worker(
         after_reconciled=after_native_reconciled,
     )
 
-    async def run_once() -> None:
-        await immediate.execute_once()
+    async def run_native_once() -> None:
         await native.execute_once()
         await native.reconcile_once()
 
-    publication_poll_seconds = min(
-        1.0,
-        float(publishing.worker_poll_seconds),
-        float(publishing.native_schedule_poll_seconds),
-    )
+    publication_poll_seconds = min(1.0, float(publishing.worker_poll_seconds))
+    native_poll_seconds = min(1.0, float(publishing.native_schedule_poll_seconds))
     publication_worker = ScheduledPublicationWorker(
-        run_once, poll_seconds=publication_poll_seconds
+        immediate.execute_once, poll_seconds=publication_poll_seconds
+    )
+    native_worker = ScheduledPublicationWorker(
+        run_native_once, poll_seconds=native_poll_seconds
     )
     ready = asyncio.Event()
 
@@ -1180,8 +1181,19 @@ async def _create_publication_worker(
                 publication_ready.set()
                 await publication_worker.run()
 
+            async def run_native_scheduling() -> None:
+                owned_foundation.logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="native_schedule_worker_started",
+                    fields={"native_schedule_poll_seconds": native_poll_seconds},
+                )
+                await native_worker.run()
+
             publication_task = asyncio.create_task(
                 publish_due(), name="runtime-publication"
+            )
+            native_task = asyncio.create_task(
+                run_native_scheduling(), name="runtime-native-scheduling"
             )
             heartbeat_task = asyncio.create_task(pulse(), name="runtime-heartbeat")
 
@@ -1202,7 +1214,7 @@ async def _create_publication_worker(
                     mark_ready(), name="runtime-readiness-marker"
                 )
                 done, _pending = await asyncio.wait(
-                    (publication_task, heartbeat_task),
+                    (publication_task, native_task, heartbeat_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 completed = next(iter(done))
@@ -1215,7 +1227,12 @@ async def _create_publication_worker(
                 failure = OperationalRuntimeError(cause=original)
                 raise failure from original
             finally:
-                tasks = [readiness_task, publication_task, heartbeat_task]
+                tasks = [
+                    readiness_task,
+                    publication_task,
+                    native_task,
+                    heartbeat_task,
+                ]
                 if readiness_marker is not None:
                     tasks.append(readiness_marker)
                 for task in tasks:

@@ -303,6 +303,55 @@ def test_aiogram_gateway_recovers_legacy_image_preview_without_hash_filename(
     asyncio.run(scenario())
 
 
+def test_video_control_card_falls_back_when_reply_association_is_rejected(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "video.mp4").write_bytes(b"synthetic-video")
+
+    class ReplyRejectingBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.header_calls: list[dict[str, object]] = []
+
+        async def send_message(self, *_args: object, **kwargs: object) -> Result:
+            self.header_calls.append(dict(kwargs))
+            if kwargs.get("reply_to_message_id") is not None:
+                raise TelegramBadRequest(cast("Any", object()), "reply rejected")
+            return Result()
+
+    async def scenario() -> None:
+        fake = ReplyRejectingBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        content_ids = await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "کپشن ویدئو",
+                media=(
+                    ApprovalMedia(
+                        "video", "video.mp4", "video/mp4", "source-video.mp4"
+                    ),
+                ),
+            ),
+        )
+        keyboard = InlineKeyboard(())
+        control_id = await gateway.send_header(
+            7,
+            "کارت کنترل",
+            keyboard,
+            reply_to_message_id=content_ids[0],
+        )
+        assert control_id == 7
+        assert len(fake.header_calls) == 2
+        assert fake.header_calls[0]["reply_to_message_id"] == 7
+        assert "reply_to_message_id" not in fake.header_calls[1]
+        assert fake.header_calls[1]["reply_markup"] is not None
+
+    asyncio.run(scenario())
+
+
 def test_aiogram_gateway_has_a_separate_media_upload_timeout(tmp_path: Path) -> None:
     (tmp_path / "slow.jpg").write_bytes(b"slow")
 

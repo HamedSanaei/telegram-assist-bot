@@ -356,6 +356,8 @@
   `runtime` و `approval-bot` نیاز دارد و `schedule-worker` نباید هم‌زمان با runtime
   روی همان Session اجرا شود. عمر process با await کردن signal قطع همان client و
   stop event صریح نگه داشته می‌شود؛ پایان crawl یا registration دلیل shutdown نیست.
+  polling فوری از native scheduling/reconciliation مستقل است و هر دو از serializer
+  رسانهٔ مشترک روی همان client استفاده می‌کنند.
 
 ## ADR-026 — زمان‌بندی بومی Telegram با Outbox مستقل
 

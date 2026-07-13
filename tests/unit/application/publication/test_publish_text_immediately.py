@@ -92,6 +92,7 @@ class Repository:
         now: datetime,
         next_attempt_at: datetime | None,
         outcome_unknown: bool,
+        failure_type: str | None = None,
     ) -> Publication:
         del owner, now
         assert self.value
@@ -104,7 +105,12 @@ class Repository:
                 else PublicationState.PERMANENT_FAILED
             )
         )
-        self.value = replace(self.value, state=state, error_category=category.value)
+        self.value = replace(
+            self.value,
+            state=state,
+            error_category=category.value,
+            failure_type=failure_type,
+        )
         return self.value
 
 
