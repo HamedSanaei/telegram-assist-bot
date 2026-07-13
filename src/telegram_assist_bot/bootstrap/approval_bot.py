@@ -68,6 +68,10 @@ class ApprovalBotStartupError(RuntimeError):
     """Report safe polling startup failure."""
 
 
+class ApprovalBackgroundTaskStoppedError(RuntimeError):
+    """Report a supervised approval worker that stopped without an exception."""
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -289,17 +293,23 @@ class ApprovalBotApplication:
         for task in done:
             if task is polling:
                 continue
-            error = task.exception()
-            if error is not None:
-                self._foundation.logger.emit(
-                    level=LogLevel.ERROR,
-                    event_name="approval_background_task_failed",
-                    fields={
-                        "task_name": task.get_name(),
-                        "error_category": "transient",
-                    },
-                )
-                raise ApprovalBotStartupError from error
+            if task.cancelled():
+                error: BaseException = asyncio.CancelledError()
+            else:
+                error = task.exception() or ApprovalBackgroundTaskStoppedError()
+            self._foundation.logger.emit(
+                level=LogLevel.ERROR,
+                event_name="approval_background_task_failed",
+                fields={
+                    "task_name": task.get_name(),
+                    "failure_category": "transient",
+                    "failure_type": type(error).__name__,
+                },
+            )
+            if not polling.done():
+                polling.cancel()
+                await asyncio.gather(polling, return_exceptions=True)
+            raise ApprovalBotStartupError from error
         await polling
 
     async def shutdown(self) -> None:
@@ -356,6 +366,7 @@ async def run_approval_bot_application(
 
 
 __all__ = (
+    "ApprovalBackgroundTaskStoppedError",
     "ApprovalBotApplication",
     "ApprovalBotStartupError",
     "create_approval_bot_application",

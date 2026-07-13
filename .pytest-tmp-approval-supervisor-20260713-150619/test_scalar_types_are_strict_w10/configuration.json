@@ -1,0 +1,167 @@
+{
+  "configuration_schema_version": 1,
+  "mongodb": {
+    "uri": {
+      "environment_variable": "TAB_MONGODB_URI"
+    },
+    "database_name": "telegram_assist_bot",
+    "connect_timeout_seconds": 10
+  },
+  "telegram": {
+    "user": {
+      "api_id": {
+        "environment_variable": "TAB_TELEGRAM_API_ID"
+      },
+      "api_hash": {
+        "environment_variable": "TAB_TELEGRAM_API_HASH"
+      },
+      "phone_number": {
+        "environment_variable": "TAB_TELEGRAM_PHONE_NUMBER"
+      },
+      "session_path": "var/sessions/source_account.session"
+    },
+    "bot": {
+      "token": {
+        "environment_variable": "TAB_TELEGRAM_BOT_TOKEN"
+      },
+      "approval_chat_id": -1000000000001,
+      "operation_timeout_seconds": 10,
+      "polling_timeout_seconds": 30,
+      "approval_delivery_poll_seconds": 5,
+      "approval_delivery_max_per_startup": 10,
+      "approval_claim_lease_seconds": 60,
+      "approval_retry_max_attempts": 3,
+      "shutdown_timeout_seconds": 10
+    },
+    "ingestion": {
+      "operation_timeout_seconds": 10,
+      "history_page_size": 100,
+      "history_max_pages": 100,
+      "live_buffer_size": 100,
+      "max_reconnect_attempts": 3,
+      "reconnect_initial_delay_seconds": 1,
+      "reconnect_max_delay_seconds": 30,
+      "maximum_flood_wait_seconds": 60
+    }
+  },
+  "admins": [
+    {
+      "name": "مدیر‌نمونه\nشیفت شب 😀",
+      "telegram_user_id": 100000001,
+      "active": true,
+      "role": "admin",
+      "permissions": [
+        "approval.view",
+        "approval.toggle"
+      ],
+      "allowed_destination_names": [
+        "destination-fa"
+      ],
+      "allowed_destination_ids": [
+        -1000000000201
+      ]
+    }
+  ],
+  "source_channels": [
+    {
+      "name": "منبع فارسی 📣",
+      "username": "source_example",
+      "enabled": true,
+      "default_category_id": "general",
+      "allowed_destination_names": [
+        "destination-fa"
+      ]
+    }
+  ],
+  "destination_channels": [
+    {
+      "name": "destination-fa",
+      "telegram_channel_id": -1000000000201,
+      "username": "destination_example",
+      "enabled": true
+    }
+  ],
+  "features": {
+    "advertisement_detection_enabled": false,
+    "duplicate_detection_enabled": false,
+    "ai_scoring_enabled": false
+  },
+  "publishing": {
+    "scheduled_publication_interval_seconds": 300,
+    "operation_timeout_seconds": 30,
+    "publication_lease_seconds": 60,
+    "publication_max_attempts": 3,
+    "retry_initial_delay_seconds": 1,
+    "retry_maximum_delay_seconds": 30,
+    "worker_poll_seconds": 5,
+    "shutdown_timeout_seconds": 10,
+    "cancellation_policy": "preserve"
+  },
+  "timezone": "Asia/Tehran",
+  "logging": {
+    "level": "INFO"
+  },
+  "media": {
+    "root": "var/media",
+    "preview_enabled": false,
+    "maximum_bytes": 104857600,
+    "download_timeout_seconds": 300,
+    "download_max_attempts": 3,
+    "cleanup_batch_size": 100,
+    "orphan_grace_seconds": 3600,
+    "album_quiet_seconds": 3,
+    "album_maximum_wait_seconds": 30
+  },
+  "categorization": {
+    "categories": [
+      {
+        "category_id": "general",
+        "display_name": "عمومی"
+      }
+    ],
+    "keyword_rules": [
+      {
+        "rule_id": "technology-example",
+        "category_id": "general",
+        "keyword": "فناوری",
+        "priority": 100
+      }
+    ]
+  },
+  "ai": {
+    "providers": [
+      {
+        "name": "synthetic-provider",
+        "enabled": true,
+        "api_key": {
+          "environment_variable": "TAB_AI_PROVIDER_KEY"
+        },
+        "base_url": "https://provider.example.invalid/v1"
+      }
+    ],
+    "routes": [
+      {
+        "task": "advertisement_detection",
+        "candidates": [
+          {
+            "provider_name": "synthetic-provider",
+            "model_name": "synthetic-model",
+            "priority": 0,
+            "timeout_seconds": 15,
+            "max_attempts": 2.0
+          }
+        ]
+      }
+    ]
+  },
+  "advertisements": {
+    "routes": [
+      {
+        "name": "آگهی‌نمونه ✨",
+        "destination_names": [
+          "destination-fa"
+        ]
+      }
+    ]
+  }
+}

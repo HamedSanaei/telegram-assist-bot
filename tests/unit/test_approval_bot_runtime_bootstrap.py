@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -16,6 +17,12 @@ from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
 )
 from telegram_assist_bot.domain import Administrator, AdminPermission
+from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.observability import (
+    Redactor,
+    StructuredEvent,
+    StructuredLogger,
+)
 from tests.unit.application.approvals.test_admin_approval import MemoryRepository
 
 if TYPE_CHECKING:
@@ -339,5 +346,87 @@ def test_approval_bot_rejects_wait_before_start_and_cleans_start_failures() -> N
                 cast("Any", "config"),
                 environ={},
             )
+
+    asyncio.run(scenario())
+
+
+def test_approval_background_supervisor_uses_safe_structured_logging() -> None:
+    class BlockingPoller(Poller):
+        async def start_polling(self, bot: object, **kwargs: object) -> None:
+            del bot, kwargs
+            self.started += 1
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        events: list[dict[str, object]] = []
+
+        def capture(event: StructuredEvent) -> None:
+            events.append(dict(event))
+
+        logger = StructuredLogger(
+            sink=capture,
+            clock=lambda: datetime(2026, 7, 13, tzinfo=UTC),
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.DEBUG,
+        )
+
+        async def run_worker(
+            worker: asyncio.Task[None],
+        ) -> tuple[BaseException | None, dict[str, object]]:
+            async def block() -> None:
+                await asyncio.Event().wait()
+
+            foundation = Foundation()
+            foundation.logger = cast("Any", logger)
+            application = module.ApprovalBotApplication(cast("Any", foundation))
+            application._started = True
+            application._dispatcher = cast("Any", BlockingPoller())
+            application._gateway = cast("Any", Gateway())
+            application._delivery_task = worker
+            sync_task = asyncio.create_task(block(), name="approval-sync")
+            application._sync_task = sync_task
+            try:
+                with pytest.raises(module.ApprovalBotStartupError) as captured:
+                    await application.wait()
+            finally:
+                sync_task.cancel()
+                await asyncio.gather(sync_task, return_exceptions=True)
+            return captured.value.__cause__, events[-1]
+
+        original = RuntimeError("private worker detail must not be logged")
+
+        async def fail() -> None:
+            raise original
+
+        cause, event = await run_worker(
+            asyncio.create_task(fail(), name="approval-delivery")
+        )
+        assert cause is original
+        assert event["event_name"] == "approval_background_task_failed"
+        assert event["task_name"] == "approval-delivery"
+        assert event["failure_category"] == "transient"
+        assert event["failure_type"] == "RuntimeError"
+        assert "error_category" not in event
+        assert "error_message" not in event
+        assert "private worker detail" not in str(event)
+
+        async def finish() -> None:
+            return None
+
+        cause, event = await run_worker(
+            asyncio.create_task(finish(), name="approval-sync")
+        )
+        assert isinstance(cause, module.ApprovalBackgroundTaskStoppedError)
+        assert event["task_name"] == "approval-sync"
+        assert event["failure_type"] == "ApprovalBackgroundTaskStoppedError"
+
+        async def block() -> None:
+            await asyncio.Event().wait()
+
+        cancelled = asyncio.create_task(block(), name="approval-delivery")
+        cancelled.cancel()
+        cause, event = await run_worker(cancelled)
+        assert isinstance(cause, asyncio.CancelledError)
+        assert event["failure_type"] == "CancelledError"
 
     asyncio.run(scenario())
