@@ -11,6 +11,7 @@ from telethon import events  # type: ignore[import-untyped]
 from telegram_assist_bot.application.ports import (
     TelegramGatewayError,
     TelegramLiveSubscription,
+    TelegramMessageMappingError,
     TelegramTextMessage,
 )
 from telegram_assist_bot.infrastructure.telegram.user.message_mapper import (
@@ -37,7 +38,9 @@ class TelethonEventClient(Protocol):
 
 
 _CLOSED: Final[object] = object()
-type QueueItem = TelegramTextMessage | TelegramGatewayError | object
+type QueueItem = (
+    TelegramTextMessage | TelegramMessageMappingError | TelegramGatewayError | object
+)
 
 
 @dataclass(slots=True)
@@ -61,6 +64,8 @@ class TelethonLiveSubscriptionImpl(TelegramLiveSubscription):
         if item is _CLOSED:
             raise StopAsyncIteration
         if isinstance(item, TelegramGatewayError):
+            raise item
+        if isinstance(item, TelegramMessageMappingError):
             raise item
         if type(item) is not TelegramTextMessage:
             raise TelegramGatewayError
@@ -110,7 +115,7 @@ class TelethonLiveAdapter:
             try:
                 raw_message = getattr(event, "message", None)
                 if raw_message is None:
-                    await queue.put(TelegramGatewayError())
+                    await queue.put(TelegramMessageMappingError(None))
                     return
                 try:
                     message = map_telethon_message(
@@ -119,8 +124,15 @@ class TelethonLiveAdapter:
                         source_channel_username=self.source_channel_username,
                         source_channel_display_name=self.source_channel_display_name,
                     )
-                except InvalidTelegramMessageError as error:
-                    await queue.put(TelegramGatewayError(cause=error))
+                except asyncio.CancelledError:
+                    raise
+                except (InvalidTelegramMessageError, TypeError, ValueError) as error:
+                    await queue.put(
+                        TelegramMessageMappingError(
+                            getattr(raw_message, "id", None),
+                            cause=error,
+                        )
+                    )
                     return
                 await queue.put(message)
             finally:

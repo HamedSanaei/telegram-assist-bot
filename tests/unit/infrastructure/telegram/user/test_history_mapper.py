@@ -43,6 +43,15 @@ class DocumentAttributeFilename:
         self.file_name = file_name
 
 
+class MessageMediaDocument: ...
+
+
+class MessageMediaPhoto: ...
+
+
+class MessageMediaWebPage: ...
+
+
 def test_maps_persian_text_zwnj_emoji_and_utf16_entities_exactly() -> None:
     source = "سلام‌دنیا\n😀"
     raw = SimpleNamespace(
@@ -74,7 +83,10 @@ def test_media_text_maps_to_caption_without_normalization() -> None:
         date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
         message="کپشن‌اصلی\n✨",
         entities=[],
-        media=object(),
+        media=MessageMediaPhoto(),
+        document=None,
+        photo=SimpleNamespace(sizes=[]),
+        grouped_id=None,
         action=None,
     )
 
@@ -88,7 +100,7 @@ def test_media_text_maps_to_caption_without_normalization() -> None:
     assert mapped.text is None
     assert mapped.caption == "کپشن‌اصلی\n✨"
     assert mapped.has_media is True
-    assert mapped.media == ()
+    assert mapped.media[0].media_type.value == "Photo"
 
 
 @pytest.mark.parametrize(
@@ -119,7 +131,7 @@ def test_maps_document_media_metadata(
         date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
         message="کپشن",
         entities=[],
-        media=object(),
+        media=MessageMediaDocument(),
         document=document,
         photo=None,
         grouped_id=987,
@@ -143,7 +155,7 @@ def test_maps_photo_size_and_reference() -> None:
         date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
         message=None,
         entities=[],
-        media=object(),
+        media=MessageMediaPhoto(),
         document=None,
         photo=SimpleNamespace(
             sizes=[SimpleNamespace(size=10), SimpleNamespace(size=20)]
@@ -160,6 +172,38 @@ def test_maps_photo_size_and_reference() -> None:
     assert mapped.media[0].media_type.value == "Photo"
     assert mapped.media[0].size_bytes == 20
     assert mapped.media[0].opaque_reference == "-1001:12:0"
+
+
+def test_webpage_preview_with_nested_document_maps_as_normal_text() -> None:
+    source = "خبر همراه لینک https://example.test/post"
+    raw = SimpleNamespace(
+        id=13,
+        date=datetime(2026, 7, 14, 9, 0, tzinfo=UTC),
+        message=source,
+        entities=[MessageEntityBold(0, 3)],
+        media=MessageMediaWebPage(),
+        document=SimpleNamespace(
+            mime_type="image/jpeg",
+            size=42,
+            attributes=[],
+        ),
+        photo=None,
+        grouped_id=None,
+        action=None,
+    )
+
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username="source_fixture",
+        source_channel_display_name="منبع فارسی",
+    )
+
+    assert mapped.text == source
+    assert mapped.caption is None
+    assert mapped.has_media is False
+    assert mapped.media == ()
+    assert mapped.text_entities[0].entity_type == "bold"
 
 
 def test_rejects_naive_source_timestamp() -> None:

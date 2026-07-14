@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING, Protocol
 
 from telegram_assist_bot.application import LiveMessageOutcome
 from telegram_assist_bot.application.ports import (
+    MediaOperationError,
     TelegramLiveGateway,
+    TelegramMessageMappingError,
     TelegramRateLimitError,
 )
+from telegram_assist_bot.domain.posts import PostDomainError
 from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.errors import classify_error
 
@@ -92,12 +95,42 @@ class LiveTextListener:
                         source_channel_id,
                         buffer_size=self.buffer_size,
                     )
-                async for message in subscription:
-                    outcome = await self.handler.execute(
-                        message,
-                        source_channel_id=source_channel_id,
-                        correlation_id=correlation_id,
-                    )
+                while True:
+                    try:
+                        message = await anext(subscription)
+                    except StopAsyncIteration:
+                        break
+                    except TelegramMessageMappingError as error:
+                        skipped += 1
+                        self._log_message_failure(
+                            source_channel_id=source_channel_id,
+                            source_message_id=error.source_message_id,
+                            error=error,
+                            deferred=False,
+                        )
+                        continue
+                    try:
+                        outcome = await self.handler.execute(
+                            message,
+                            source_channel_id=source_channel_id,
+                            correlation_id=correlation_id,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except (
+                        MediaOperationError,
+                        PostDomainError,
+                        TypeError,
+                        ValueError,
+                    ) as error:
+                        skipped += 1
+                        self._log_message_failure(
+                            source_channel_id=source_channel_id,
+                            source_message_id=message.source_message_id,
+                            error=error,
+                            deferred=classify_error(error).retryable,
+                        )
+                        continue
                     if outcome is LiveMessageOutcome.CREATED:
                         created += 1
                     elif outcome is LiveMessageOutcome.ALREADY_EXISTS:
@@ -127,8 +160,9 @@ class LiveTextListener:
                         fields={
                             "source_channel_id": source_channel_id,
                             "attempt": attempt,
+                            "failure_category": classification.category.value,
+                            "failure_type": type(error).__name__,
                         },
-                        error=error,
                     )
                     raise
                 delay = self._retry_delay(error, attempt)
@@ -140,8 +174,9 @@ class LiveTextListener:
                         "attempt": attempt,
                         "next_attempt": attempt + 1,
                         "delay_seconds": delay,
+                        "failure_category": classification.category.value,
+                        "failure_type": type(error).__name__,
                     },
-                    error=error,
                 )
                 await self.sleeper(delay)
                 attempt += 1
@@ -154,6 +189,31 @@ class LiveTextListener:
                 skipped=skipped,
                 reconnects=attempt - 1,
             )
+
+    def _log_message_failure(
+        self,
+        *,
+        source_channel_id: int,
+        source_message_id: int | None,
+        error: BaseException,
+        deferred: bool,
+    ) -> None:
+        """Log safe per-message failure metadata without provider details."""
+        cause = error.__cause__
+        self.logger.emit(
+            level=LogLevel.WARNING,
+            event_name=(
+                "telegram_live_message_deferred"
+                if deferred
+                else "telegram_live_message_skipped"
+            ),
+            fields={
+                "source_channel_id": source_channel_id,
+                "source_message_id": source_message_id,
+                "failure_category": classify_error(error).category.value,
+                "failure_type": type(cause if cause is not None else error).__name__,
+            },
+        )
 
     def _retry_delay(self, error: Exception, attempt: int) -> float:
         if isinstance(error, TelegramRateLimitError):
