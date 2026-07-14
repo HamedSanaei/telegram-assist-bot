@@ -213,7 +213,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
 | `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji و ارسال متن/Media/Album با serializer مشترک Telethon |
 | `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` با serializer مشترک همان client Runtime |
-| `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API و upload نوع‌صحیح Media زیر root محصور |
+| `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API، upload نوع‌صحیح Media زیر root محصور و نگاشت امن network/rate-limit/server failures به retry Application |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |
 | `workers/crawl_once.py` | محرک نازک Use Case crawl تک‌اجرا |
