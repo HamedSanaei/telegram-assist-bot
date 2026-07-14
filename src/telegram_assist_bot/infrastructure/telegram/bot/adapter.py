@@ -11,6 +11,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramNetworkError,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 from aiogram.types import (
     FSInputFile,
@@ -122,6 +123,7 @@ class AiogramAdminMessagingGateway:
             TelegramForbiddenError,
             TelegramRetryAfter,
             TelegramNetworkError,
+            TelegramServerError,
             TelegramBadRequest,
         ) as error:
             raise self._delivery_error(error) from None
@@ -198,6 +200,7 @@ class AiogramAdminMessagingGateway:
             TelegramForbiddenError,
             TelegramRetryAfter,
             TelegramNetworkError,
+            TelegramServerError,
             TelegramBadRequest,
         ) as error:
             raise self._delivery_error(
@@ -286,6 +289,7 @@ class AiogramAdminMessagingGateway:
             TelegramForbiddenError
             | TelegramRetryAfter
             | TelegramNetworkError
+            | TelegramServerError
             | TelegramBadRequest
         ),
         *,
@@ -301,7 +305,7 @@ class AiogramAdminMessagingGateway:
             return ApprovalDeliveryUnavailableError("Approval delivery is unavailable.")
         if isinstance(error, TelegramRetryAfter):
             return ApprovalDeliveryRateLimitError(error.retry_after)
-        if isinstance(error, TelegramNetworkError):
+        if isinstance(error, (TelegramNetworkError, TelegramServerError)):
             if media:
                 return ApprovalMediaNetworkError(
                     "Approval media upload temporarily failed."
@@ -332,7 +336,11 @@ class AiogramAdminMessagingGateway:
             if "message to edit not found" in safe or "message can't be edited" in safe:
                 return BotEditOutcome.DELETED
             raise RuntimeError("Bot rejected the approval edit.") from error
-        except (TelegramNetworkError, TelegramRetryAfter) as error:
+        except (
+            TelegramNetworkError,
+            TelegramRetryAfter,
+            TelegramServerError,
+        ) as error:
             raise TimeoutError("Temporary Bot operation failure.") from error
         return BotEditOutcome.UPDATED
 

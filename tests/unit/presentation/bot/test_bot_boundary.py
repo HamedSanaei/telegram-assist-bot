@@ -10,6 +10,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramNetworkError,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
@@ -422,6 +423,10 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
             ApprovalDeliveryTransientError,
         )
         assert isinstance(
+            gateway._delivery_error(TelegramServerError(method, "server")),
+            ApprovalDeliveryTransientError,
+        )
+        assert isinstance(
             gateway._delivery_error(TelegramBadRequest(method, "bad")),
             ApprovalDeliveryRejectedError,
         )
@@ -446,6 +451,9 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
         fake.send_error = TelegramBadRequest(method, "bad")
         with pytest.raises(ApprovalDeliveryRejectedError):
             await gateway.send_content(1, text)
+        fake.send_error = TelegramServerError(method, "server")
+        with pytest.raises(ApprovalDeliveryTransientError):
+            await gateway.send_header(1, "header")
         fake.send_error = None
 
         fake.edit_error = TelegramBadRequest(method, "message is not modified")
@@ -462,6 +470,9 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
         with pytest.raises(RuntimeError, match="rejected"):
             await gateway.edit_header(1, 7, "header", InlineKeyboard(()))
         fake.edit_error = TelegramNetworkError(method, "network")
+        with pytest.raises(TimeoutError, match="Temporary"):
+            await gateway.edit_header(1, 7, "header", InlineKeyboard(()))
+        fake.edit_error = TelegramServerError(method, "server")
         with pytest.raises(TimeoutError, match="Temporary"):
             await gateway.edit_header(1, 7, "header", InlineKeyboard(()))
 

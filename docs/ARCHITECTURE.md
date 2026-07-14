@@ -124,6 +124,11 @@ active و heartbeat stale/stopped را offline تفسیر می‌کند؛ این
 اگر Bot API فقط reply association کارت کنترل با پیام رسانه‌ای را رد کند، کارت یک
 بار بدون reply و بلافاصله پس از محتوا ارسال می‌شود؛ رد خود keyboard یا ارسال دوم
 همچنان failure واقعی است و reference فعال جعلی ساخته نمی‌شود.
+خطاهای موقت شبکه، rate limit و پاسخ‌های 5xx سرور Telegram در Aiogram adapter به
+نتیجهٔ transient امن تبدیل می‌شوند و exception خام SDK از مرز Infrastructure
+عبور نمی‌کند. در مسیر ویرایش کارت، این نتیجه درخواست sync پایدار را برای retry
+نگه می‌دارد؛ بنابراین اختلال موقت Bot API، task حیاتی `approval-sync` یا polling
+Approval Bot را متوقف نمی‌کند.
 
 فرمان `publication-queue` projection محدود و read-only روی صف دارد و payload یا
 مسیر Media را بار نمی‌کند. `publication-cancel` فقط job ID صریح را از مسیر
