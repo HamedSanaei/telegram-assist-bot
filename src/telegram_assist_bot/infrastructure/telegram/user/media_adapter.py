@@ -67,10 +67,29 @@ class TelethonMediaSource:
             raise MediaTransientError(
                 "Telegram media could not be resolved."
             ) from error
-        media = getattr(message, "media", None)
+        raw_media = getattr(message, "media", None)
+        raw_media_type = type(raw_media).__name__
+        if raw_media_type == "MessageMediaPhoto":
+            media = getattr(message, "photo", None)
+        elif raw_media_type == "MessageMediaDocument":
+            media = getattr(message, "document", None)
+        else:
+            media = None
         if media is None:
             raise MediaPermanentError("Telegram media no longer exists.")
-        provider_stream = self._client.iter_download(media, chunk_size=self._chunk_size)
+        try:
+            provider_stream = self._client.iter_download(
+                media,
+                chunk_size=self._chunk_size,
+            )
+        except FloodWaitError as error:
+            raise MediaRateLimitError(max(0, int(error.seconds))) from error
+        except TypeError as error:
+            raise MediaPermanentError("Telegram media is invalid.") from error
+        except Exception as error:
+            raise MediaTransientError(
+                "Telegram media stream could not start."
+            ) from error
 
         async def stream() -> AsyncIterator[bytes]:
             try:

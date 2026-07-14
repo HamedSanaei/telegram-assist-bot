@@ -204,11 +204,11 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
-| `infrastructure/telegram/user/media_adapter.py` | تبدیل reference داخلی به stream محدود Telethon بدون نشت SDK به Application |
+| `infrastructure/telegram/user/media_adapter.py` | resolve reference و stream فقط Photo/Document concrete تلگرام، با رد امن WebPage/Media نامعتبر |
 | `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium، channel access، auto-reconnect محدود و await کردن disconnect نهایی همان client مالک |
-| `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16 |
+| `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16 و نگه‌داشتن WebPage preview به‌صورت متن عادی |
 | `infrastructure/telegram/user/history_adapter.py` | pagination و query bounded History بدون token SDK در Application |
-| `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، reconnect/FloodWait و unsubscribe cancellation-safe |
+| `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، خطای mapping امن per-message و unsubscribe cancellation-safe |
 | `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
 | `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji و ارسال متن/Media/Album با serializer مشترک Telethon |
@@ -217,7 +217,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |
 | `workers/crawl_once.py` | محرک نازک Use Case crawl تک‌اجرا |
-| `workers/live_text_listener.py` | consumer محدود subscription با retry طبقه‌بندی‌شده و shutdown امن |
+| `workers/live_text_listener.py` | consumer محدود با isolation خطای هر پیام، reconnect فقط برای stream/connection و shutdown امن |
 | `workers/scheduled_publication_worker.py` | loop polling محدود بدون نگهداری صف در حافظه |
 | `shared/config/models.py` | Schema نسخهٔ ۱ و مدل‌های Pydantic frozen برای همهٔ بخش‌های Config |
 | `shared/config/loader.py` | خواندن UTF-8/JSON، تجمیع validation، resolve امن Environment/Local Secret و API واحد Composition Root |

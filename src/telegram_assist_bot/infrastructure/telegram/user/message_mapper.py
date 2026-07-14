@@ -14,6 +14,9 @@ from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import TelegramEntity
 
 _CAMEL_BOUNDARY: Final[re.Pattern[str]] = re.compile(r"(?<!^)(?=[A-Z])")
+_DOWNLOADABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
+    {"MessageMediaDocument", "MessageMediaPhoto"}
+)
 
 
 class InvalidTelegramMessageError(ValueError):
@@ -80,19 +83,20 @@ def map_telethon_message(
         raise InvalidTelegramMessageError
     entities = tuple(_map_entity(entity) for entity in raw_entities)
     raw_media = getattr(raw_message, "media", None)
-    has_media = raw_media is not None
+    raw_media_type = type(raw_media).__name__
+    has_media = raw_media_type in _DOWNLOADABLE_MEDIA_TYPES
     media: tuple[TelegramMediaReference, ...] = ()
     if has_media:
         document = getattr(raw_message, "document", None)
         photo = getattr(raw_message, "photo", None)
-        if document is not None:
+        if raw_media_type == "MessageMediaDocument" and document is not None:
             mime_type = getattr(document, "mime_type", None)
             media_type = _document_media_type(
                 mime_type, getattr(document, "attributes", ())
             )
             size = getattr(document, "size", None)
             filename = _document_filename(getattr(document, "attributes", ()))
-        elif photo is not None:
+        elif raw_media_type == "MessageMediaPhoto" and photo is not None:
             media_type, mime_type, filename = MediaType.PHOTO, "image/jpeg", None
             sizes = getattr(photo, "sizes", ())
             size = max((getattr(item, "size", 0) for item in sizes), default=None)

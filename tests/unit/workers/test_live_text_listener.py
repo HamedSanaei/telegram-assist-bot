@@ -10,7 +10,9 @@ import pytest
 
 from telegram_assist_bot.application import LiveMessageOutcome
 from telegram_assist_bot.application.ports import (
+    MediaPermanentError,
     TelegramGatewayError,
+    TelegramMessageMappingError,
     TelegramRateLimitError,
     TelegramTextMessage,
     TelegramTransientError,
@@ -90,7 +92,7 @@ class Gateway:
 
 @dataclass
 class Handler:
-    outcomes: list[LiveMessageOutcome]
+    outcomes: list[LiveMessageOutcome | Exception]
     identities: list[int] = field(default_factory=list)
 
     async def execute(
@@ -103,12 +105,16 @@ class Handler:
         assert item.source_channel_id == source_channel_id
         assert correlation_id == "listener-1"
         self.identities.append(item.source_message_id)
-        return self.outcomes.pop(0)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 @dataclass
 class Logger:
     events: list[tuple[str, Mapping[str, object] | None]] = field(default_factory=list)
+    errors: list[BaseException | None] = field(default_factory=list)
 
     def emit(
         self,
@@ -118,8 +124,9 @@ class Logger:
         fields: Mapping[str, object] | None = None,
         error: BaseException | None = None,
     ) -> None:
-        del level, error
+        del level
         self.events.append((event_name, fields))
+        self.errors.append(error)
 
 
 @dataclass
@@ -190,6 +197,72 @@ def test_transient_disconnect_reconnects_with_bounded_backoff() -> None:
     assert first.closed == 1
     assert second.closed == 1
     assert logger.events[0][0] == "telegram_listener_reconnect_scheduled"
+    assert logger.errors == [None]
+
+
+def test_mapping_failure_is_skipped_and_later_message_is_processed() -> None:
+    mapping_cause = ValueError("raw payload must not be logged")
+    subscription = Subscription(
+        [
+            TelegramMessageMappingError(7, cause=mapping_cause),
+            message(8),
+        ]
+    )
+    logger = Logger()
+    handler = Handler([LiveMessageOutcome.CREATED])
+
+    result = run(
+        worker(Gateway([subscription]), handler, logger=logger).run(
+            -1001,
+            correlation_id="listener-1",
+        )
+    )
+
+    assert (result.created, result.skipped, result.reconnects) == (1, 1, 0)
+    assert handler.identities == [8]
+    assert logger.events == [
+        (
+            "telegram_live_message_skipped",
+            {
+                "source_channel_id": -1001,
+                "source_message_id": 7,
+                "failure_category": "permanent",
+                "failure_type": "ValueError",
+            },
+        )
+    ]
+    assert logger.errors == [None]
+    assert "raw payload" not in repr(logger.events)
+
+
+def test_media_failure_is_isolated_from_later_message() -> None:
+    subscription = Subscription([message(1), message(2)])
+    logger = Logger()
+    handler = Handler(
+        [
+            MediaPermanentError("provider detail must not be logged"),
+            LiveMessageOutcome.CREATED,
+        ]
+    )
+
+    result = run(
+        worker(Gateway([subscription]), handler, logger=logger).run(
+            -1001,
+            correlation_id="listener-1",
+        )
+    )
+
+    assert (result.created, result.skipped, result.reconnects) == (1, 1, 0)
+    assert handler.identities == [1, 2]
+    assert logger.events[0][0] == "telegram_live_message_skipped"
+    assert logger.events[0][1] == {
+        "source_channel_id": -1001,
+        "source_message_id": 1,
+        "failure_category": "permanent",
+        "failure_type": "MediaPermanentError",
+    }
+    assert logger.errors == [None]
+    assert "provider detail" not in repr(logger.events)
 
 
 def test_permanent_failure_does_not_reconnect() -> None:
@@ -305,7 +378,7 @@ def test_telethon_adapter_queue_applies_backpressure_and_unsubscribes() -> None:
     run(scenario())
 
 
-def test_telethon_adapter_surfaces_mapping_failure_and_closed_iterator() -> None:
+def test_telethon_adapter_surfaces_per_message_mapping_failure() -> None:
     @dataclass
     class Client:
         callback: object | None = None
@@ -329,8 +402,32 @@ def test_telethon_adapter_surfaces_mapping_failure_and_closed_iterator() -> None
         callback = client.callback
         assert callable(callback)
         await callback(SimpleNamespace(message=None))
-        with pytest.raises(TelegramGatewayError):
+        with pytest.raises(TelegramMessageMappingError) as missing:
             await anext(subscription)
+        assert missing.value.source_message_id is None
+        malformed = SimpleNamespace(
+            id=0,
+            date=datetime(2099, 3, 20, 8, 0, tzinfo=UTC),
+            message="پیام خراب",
+            entities=[],
+            media=None,
+            action=None,
+        )
+        await callback(SimpleNamespace(message=malformed))
+        with pytest.raises(TelegramMessageMappingError) as invalid:
+            await anext(subscription)
+        assert invalid.value.source_message_id is None
+        assert invalid.value.__cause__ is not None
+        raw = SimpleNamespace(
+            id=2,
+            date=datetime(2099, 3, 20, 8, 0, tzinfo=UTC),
+            message="پیام بعدی",
+            entities=[],
+            media=None,
+            action=None,
+        )
+        await callback(SimpleNamespace(message=raw))
+        assert (await anext(subscription)).source_message_id == 2
         await subscription.close()
         with pytest.raises(StopAsyncIteration):
             await anext(subscription)

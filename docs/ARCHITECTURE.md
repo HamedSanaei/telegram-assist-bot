@@ -172,6 +172,15 @@ Validation اولیه و `open` همان Session نیز با همین `RetryPoli
 permission بدون retry شکست می‌خورند. هر تلاش validation snapshot کامل کانال‌ها را
 دوباره می‌سازد و هیچ client هم‌زمان یا Session owner دومی نگه نمی‌دارد.
 
+مرز mapping زنده فقط `MessageMediaPhoto` و `MessageMediaDocument` را Media
+قابل‌دانلود می‌داند؛ `MessageMediaWebPage` متن عادی همراه Entityهای اصلی باقی
+می‌ماند و هرگز به downloader نمی‌رسد. Media source پس از resolve مجدد فقط شیء
+concrete `message.photo` یا `message.document` را stream می‌کند. خطاهای امن mapping،
+Domain و Media در مرز هر پیام skip/defer می‌شوند و مصرف همان subscription برای
+پیام بعدی ادامه می‌یابد؛ فقط failure واقعی subscription یا اتصال وارد reconnect و
+supervision Runtime می‌شود. لاگ این مسیر فقط شناسه، category و type امن دارد و
+exception message یا payload را ثبت نمی‌کند.
+
 زمان‌بندی جدید collectionهای مستقل `native_schedule_commands` و
 `native_schedule_destination_leases` دارد. Callback فقط command نسخه‌دار
 `post + destination + selection version` می‌سازد. Runtime برای هر مقصد lease

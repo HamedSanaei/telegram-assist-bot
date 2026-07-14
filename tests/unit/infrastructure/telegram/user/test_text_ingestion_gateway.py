@@ -28,6 +28,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine
 
 
+class MessageMediaPhoto: ...
+
+
 def run[T](coroutine: Coroutine[object, object, T]) -> T:
     return asyncio.run(coroutine)
 
@@ -86,7 +89,11 @@ class Client:
 
     async def get_messages(self, entity: int, *, ids: int) -> object:
         assert (entity, ids) == (-1001, 7)
-        return SimpleNamespace(media=object())
+        return SimpleNamespace(
+            media=MessageMediaPhoto(),
+            photo=object(),
+            document=None,
+        )
 
     def iter_download(self, file: object, *, chunk_size: int) -> AsyncIterator[bytes]:
         assert file is not None

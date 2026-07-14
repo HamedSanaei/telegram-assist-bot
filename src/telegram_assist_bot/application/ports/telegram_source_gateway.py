@@ -27,6 +27,28 @@ class TelegramGatewayError(Exception):
             self.__cause__ = cause
 
 
+class TelegramMessageMappingError(Exception):
+    """Report one malformed live message without failing its subscription."""
+
+    error_category: ClassVar[str] = "permanent"
+
+    def __init__(
+        self,
+        source_message_id: int | None,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Retain only a validated safe source identity and optional cause."""
+        self.source_message_id = (
+            source_message_id
+            if type(source_message_id) is int and source_message_id > 0
+            else None
+        )
+        super().__init__("Telegram message mapping failed.")
+        if cause is not None:
+            self.__cause__ = cause
+
+
 class TelegramSessionInvalidError(TelegramGatewayError):
     """Report a revoked or otherwise unusable existing session."""
 
@@ -370,6 +392,7 @@ __all__ = (
     "TelegramLiveGateway",
     "TelegramLiveSubscription",
     "TelegramLoginStep",
+    "TelegramMessageMappingError",
     "TelegramOperationTimeoutError",
     "TelegramRateLimitError",
     "TelegramSessionInvalidError",

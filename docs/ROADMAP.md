@@ -141,6 +141,7 @@
 | [T070](tasks/T070-telethon-transient-reconnection.md) | Telethon transient reconnection | T007–T012، T060–T069 | `5.1`–`5.3`، `13`، `16` | Completed |
 | [T071](tasks/T071-telegram-startup-retry.md) | Telegram startup retry | T005–T012، T060–T070 | `5.1`–`5.3`، `13`، `16` | Completed |
 | [T072](tasks/T072-approval-sync-server-retry.md) | Approval sync Telegram server retry | T020–T026، T061–T071 | `5.12`–`5.16`، `13`، `16` | Completed |
+| [T073](tasks/T073-link-preview-ingestion-isolation.md) | Link-preview ingestion isolation | T007–T012، T060–T072 | `5.2`، `5.3`، `13`، `14`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 
