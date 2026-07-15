@@ -2,7 +2,7 @@
 
 ## Status
 
-Active
+Completed
 
 ## Goal
 
@@ -87,3 +87,14 @@ git diff --check
 
 Focused and complete non-live verification pass, recovery is bounded and safe,
 T074 is Completed and T034 is restored as the only Active task.
+
+## Verification results
+
+- Focused unit and MongoDB tests: `97 passed`.
+- Complete non-live suite: `952 passed`, `0 skipped`.
+- Branch coverage: `90.10%`.
+- Ruff on project sources, formatting, mypy, lock check, scoped diff check,
+  text-integrity check, CLI help and tracked-file secret scan passed.
+- The root-wide Ruff invocation also inspected the unrelated
+  `npvt-link-extractor/` tool directory and reported its lint findings;
+  that directory was not modified because it is outside T074.

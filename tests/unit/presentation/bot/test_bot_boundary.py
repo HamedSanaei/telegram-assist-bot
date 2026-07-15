@@ -22,6 +22,7 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryTransientError,
     ApprovalDeliveryUnavailableError,
     ApprovalMedia,
+    ApprovalMediaNetworkError,
     ApprovalMediaPathError,
     ApprovalMediaRejectedError,
     ApprovalMediaRejectionReason,
@@ -326,6 +327,42 @@ def test_document_entity_bad_request_retries_once_without_entities(
     asyncio.run(scenario())
 
 
+def test_document_entity_fallback_preserves_safe_second_rejection(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "document.npvt").write_bytes(b"synthetic-npvt")
+
+    class TwiceRejectingBot(FakeBot):
+        async def send_document(self, *_args: object, **kwargs: object) -> Result:
+            self.media_calls.append(("document", _args, kwargs))
+            detail = (
+                "can't parse entities"
+                if len(self.media_calls) == 1
+                else "caption is too long"
+            )
+            raise TelegramBadRequest(cast("Any", object()), detail)
+
+    async def scenario() -> None:
+        fake = TwiceRejectingBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        with pytest.raises(ApprovalMediaRejectedError) as rejected:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "سلام",
+                    caption_entities=(TelegramEntity(0, 4, "bold"),),
+                    media=(ApprovalMedia("document", "document.npvt"),),
+                ),
+            )
+        assert rejected.value.reason is ApprovalMediaRejectionReason.CAPTION_TOO_LONG
+        assert len(fake.media_calls) == 2
+
+    asyncio.run(scenario())
+
+
 def test_document_ambiguous_bad_request_is_not_retried(tmp_path: Path) -> None:
     (tmp_path / "document.npvt").write_bytes(b"synthetic-npvt")
 
@@ -353,6 +390,65 @@ def test_document_ambiguous_bad_request_is_not_retried(tmp_path: Path) -> None:
             ApprovalMediaRejectionReason.GENERIC_BAD_REQUEST
         )
         assert len(fake.media_calls) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        (
+            "custom emoji is not allowed",
+            ApprovalMediaRejectionReason.CUSTOM_EMOJI_REJECTED,
+        ),
+        ("caption is too long", ApprovalMediaRejectionReason.CAPTION_TOO_LONG),
+        ("file is too big", ApprovalMediaRejectionReason.FILE_TOO_LARGE),
+        ("can't parse entities", ApprovalMediaRejectionReason.ENTITY_PARSE_FAILED),
+        ("unclassified bad request", ApprovalMediaRejectionReason.GENERIC_BAD_REQUEST),
+    ],
+)
+def test_document_bad_request_classification_is_safe_and_stable(
+    detail: str, expected: ApprovalMediaRejectionReason
+) -> None:
+    error = TelegramBadRequest(cast("Any", object()), detail)
+    assert AiogramAdminMessagingGateway._bad_request_reason(error) is expected
+
+
+def test_document_caption_and_upload_size_are_checked_before_bot_api(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "valid.npvt").write_bytes(b"synthetic")
+    large = tmp_path / "large.npvt"
+    with large.open("wb") as media_file:
+        media_file.truncate(50 * 1024 * 1024 + 1)
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        with pytest.raises(ApprovalMediaRejectedError) as caption:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "الف" * 1025,
+                    media=(ApprovalMedia("document", "valid.npvt"),),
+                ),
+            )
+        assert caption.value.reason is ApprovalMediaRejectionReason.CAPTION_TOO_LONG
+
+        with pytest.raises(ApprovalMediaRejectedError) as upload:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "",
+                    media=(ApprovalMedia("document", "large.npvt"),),
+                ),
+            )
+        assert upload.value.reason is ApprovalMediaRejectionReason.FILE_TOO_LARGE
+        assert not fake.media_calls
 
     asyncio.run(scenario())
 
@@ -601,6 +697,12 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
         assert isinstance(
             gateway._delivery_error(TelegramNetworkError(method, "network")),
             ApprovalDeliveryTransientError,
+        )
+        assert isinstance(
+            gateway._delivery_error(
+                TelegramNetworkError(method, "network"), media=True
+            ),
+            ApprovalMediaNetworkError,
         )
         assert isinstance(
             gateway._delivery_error(TelegramServerError(method, "server")),

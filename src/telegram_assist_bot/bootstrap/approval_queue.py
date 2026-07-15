@@ -186,9 +186,7 @@ async def _recover_rejected_documents_in_database(
             "$anyElementTrue": {
                 "$map": {
                     "input": {
-                        "$objectToArray": {
-                            "$ifNull": ["$administrator_deliveries", {}]
-                        }
+                        "$objectToArray": {"$ifNull": ["$administrator_deliveries", {}]}
                     },
                     "as": "delivery",
                     "in": {
@@ -218,8 +216,10 @@ async def _recover_rejected_documents_in_database(
 
     matching: list[str] = []
     requeued: list[str] = []
-    cursor = database["approval_deliveries"].find(query).sort(
-        [("created_at", 1), ("_id", 1)]
+    cursor = (
+        database["approval_deliveries"]
+        .find(query)
+        .sort([("created_at", 1), ("_id", 1)])
     )
     async for delivery in cursor:
         post_id = str(delivery["_id"])

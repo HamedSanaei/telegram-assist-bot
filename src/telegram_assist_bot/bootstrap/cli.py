@@ -368,12 +368,8 @@ def main(
             "approval_document_recovery_mode="
             f"{'dry-run' if arguments.dry_run else 'execute'}\n"
         )
-        sys.stdout.write(
-            f"matching_count={len(recovery_result.matching_post_ids)}\n"
-        )
-        sys.stdout.write(
-            f"requeued_count={len(recovery_result.requeued_post_ids)}\n"
-        )
+        sys.stdout.write(f"matching_count={len(recovery_result.matching_post_ids)}\n")
+        sys.stdout.write(f"requeued_count={len(recovery_result.requeued_post_ids)}\n")
         for post_id in recovery_result.matching_post_ids:
             sys.stdout.write(f"approval_post_id={post_id[:12]}\n")
         exit_code = FoundationExitCode.SUCCESS

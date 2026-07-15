@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
 import asyncio
 import importlib
@@ -1081,6 +1082,14 @@ def test_cli_document_recovery_requires_bounded_selector_and_supports_dry_run(
     assert "approval_document_recovery_mode=dry-run" in output
     assert "approval_post_id=proposal-ide" in output
     assert "proposal-identity-long" not in output
+
+
+def test_cli_recovery_time_parser_requires_an_aware_iso_value() -> None:
+    assert cli_module._aware_datetime("2026-07-16T12:30:00Z").tzinfo is not None
+    with pytest.raises(argparse.ArgumentTypeError, match="aware ISO-8601"):
+        cli_module._aware_datetime("not-a-time")
+    with pytest.raises(argparse.ArgumentTypeError, match="aware ISO-8601"):
+        cli_module._aware_datetime("2026-07-16T12:30:00")
 
 
 def test_import_and_reload_do_not_execute_startup_or_open_resources(

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
+import pytest
+
 import telegram_assist_bot.bootstrap.approval_queue as module
 
 if TYPE_CHECKING:
-    import pytest
+    from collections.abc import Mapping
 
 NOW = datetime(2026, 7, 13, 12, tzinfo=UTC)
 
@@ -189,6 +191,82 @@ def test_explicit_retry_is_idempotently_delegated_and_closes_foundation(
     assert not result
     assert calls[0][0] == "exact-proposal"
     assert calls[0][1].tzinfo is UTC
+    assert foundation.started == foundation.stopped == 1
+
+
+def test_document_recovery_validates_scope_before_opening_resources() -> None:
+    common: dict[str, Any] = {
+        "configuration_path": Path("configuration.json"),
+        "environ": {},
+        "sink": cast("Any", object()),
+        "approval_post_id": None,
+        "started_at": None,
+        "ended_at": None,
+        "dry_run": True,
+        "limit": 1,
+    }
+
+    async def invoke(**changes: object) -> None:
+        values = {**common, **changes}
+        await cast("Any", module.recover_rejected_document_deliveries)(**values)
+
+    with pytest.raises(ValueError, match="limit"):
+        asyncio.run(invoke(limit=0))
+    with pytest.raises(ValueError, match="exact Post ID"):
+        asyncio.run(invoke())
+    with pytest.raises(ValueError, match="exact Post ID"):
+        asyncio.run(
+            invoke(
+                approval_post_id="post",
+                started_at=NOW,
+                ended_at=NOW + timedelta(hours=1),
+            )
+        )
+    with pytest.raises(ValueError, match="aware time range"):
+        asyncio.run(
+            invoke(
+                started_at=NOW.replace(tzinfo=None),
+                ended_at=(NOW + timedelta(hours=1)).replace(tzinfo=None),
+            )
+        )
+    with pytest.raises(ValueError, match="aware time range"):
+        asyncio.run(
+            invoke(
+                started_at=NOW + timedelta(hours=1),
+                ended_at=NOW,
+            )
+        )
+
+
+def test_document_recovery_delegates_and_closes_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundation = Foundation({"approval_deliveries": object()})
+    captured: list[Mapping[str, object]] = []
+
+    async def recover(_database: object, **values: object) -> object:
+        captured.append(values)
+        return module.ApprovalDocumentRecoveryResult(("post",), ())
+
+    monkeypatch.setattr(
+        module, "create_foundation_application", lambda **_kwargs: foundation
+    )
+    monkeypatch.setattr(module, "_recover_rejected_documents_in_database", recover)
+    result = asyncio.run(
+        module.recover_rejected_document_deliveries(
+            Path("configuration.json"),
+            environ={},
+            sink=cast("Any", object()),
+            approval_post_id="post",
+            started_at=None,
+            ended_at=None,
+            dry_run=True,
+            limit=3,
+        )
+    )
+    assert result.matching_post_ids == ("post",)
+    assert captured[0]["approval_post_id"] == "post"
+    assert captured[0]["dry_run"] is True
     assert foundation.started == foundation.stopped == 1
 
 

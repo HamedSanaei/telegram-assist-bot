@@ -194,8 +194,18 @@ receipt را ابتدا ذخیره و سپس همان IDها را حذف می‌
 پیش‌نمایش Approval رسانه را از DTO شامل نوع واقعی، مسیر نسبی، MIME و نام اصلی
 می‌گیرد. Infrastructure مسیر را زیر root canonical و بدون symlink/traversal
 اعتبارسنجی می‌کند و Aiogram method متناظر نوع را با timeout آپلود مستقل فراخوانی
-می‌کند. Caption و Entityهای UTF-16 بدون normalization عبور می‌کنند و Album تنها
-برای preview به اولین Photo محدود است؛ Publication payload کامل تغییر نمی‌کند.
+می‌کند. فایل Document پیش از ساخت `FSInputFile` از نظر وجود، regular-file، حجم و
+خالی/خوانا نبودن اعتبارسنجی می‌شود و نام اصلی، از جمله پسوند `.npvt`، فقط به‌عنوان
+نام upload استفاده می‌شود. Entityهای UTF-16 معتبر حفظ می‌شوند؛ metadata ناقص
+`text_url`/`text_mention` و Custom Emoji فقط در preview ادمین حذف می‌شود و متن
+قابل‌مشاهده و payload canonical انتشار تغییر نمی‌کند. خطای ۴۰۰ قطعی entity برای
+Document دقیقاً یک بار بدون entity و با upload تازه retry می‌شود؛ خطای مبهم یا
+timeout هرگز این fallback را اجرا نمی‌کند. reason امن در delivery هر مدیر ذخیره
+می‌شود و raw Bot error، caption، مسیر و نام کامل فایل وارد log نمی‌شوند. Album
+تنها برای preview به اولین Photo محدود است؛ Publication payload کامل تغییر
+نمی‌کند. فرمان `approval-recover-documents` فقط Documentهای terminal با
+`media_rejected` را با شناسهٔ دقیق یا بازهٔ زمانی محدود، dry-run و سقف ۱۰۰ مورد
+آزاد می‌کند و delivery موفق مدیران را دست‌نخورده می‌گذارد.
 
 ## 4. مدل Domain
 
