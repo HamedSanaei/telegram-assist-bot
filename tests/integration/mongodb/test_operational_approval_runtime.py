@@ -11,6 +11,9 @@ from pymongo import AsyncMongoClient
 
 from telegram_assist_bot.application.publication import PublishResult, PublishStatus
 from telegram_assist_bot.application.scheduling import RunDuePublication, RunDueStatus
+from telegram_assist_bot.bootstrap.approval_queue import (
+    _recover_rejected_documents_in_database,
+)
 from telegram_assist_bot.domain import ScheduleStatus, publication_identity
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
@@ -256,6 +259,132 @@ def test_delivery_claim_order_backoff_permanent_failure_and_explicit_retry(
             )
             assert explicit is not None
             assert explicit.post_id == "failing"
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_document_media_recovery_is_bounded_dry_run_and_idempotent(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            now = datetime(2026, 7, 16, 10, tzinfo=UTC)
+            await database["posts"].insert_many(
+                [
+                    {
+                        "_id": "document-rejected",
+                        "source_channel_id": -1001,
+                        "source_message_id": 11,
+                    },
+                    {
+                        "_id": "photo-rejected",
+                        "source_channel_id": -1001,
+                        "source_message_id": 12,
+                    },
+                ]
+            )
+            await database["media_items"].insert_many(
+                [
+                    {
+                        "_id": "media-document",
+                        "source_channel_id": -1001,
+                        "source_message_id": 11,
+                        "media_type": "Document",
+                    },
+                    {
+                        "_id": "media-photo",
+                        "source_channel_id": -1001,
+                        "source_message_id": 12,
+                        "media_type": "Photo",
+                    },
+                ]
+            )
+            failed_state = {
+                "status": "permanent_failed",
+                "attempt_count": 3,
+                "next_attempt_at": None,
+                "delivery_phase": "content_message_send",
+                "failure_category": "media_rejected",
+                "failure_type": "ApprovalMediaRejectedError",
+            }
+            await database["approval_deliveries"].insert_many(
+                [
+                    {
+                        "_id": "document-rejected",
+                        "status": "permanent_failed",
+                        "created_at": now,
+                        "administrator_deliveries": {
+                            "7": failed_state,
+                            "8": {"status": "completed", "attempt_count": 0},
+                        },
+                    },
+                    {
+                        "_id": "photo-rejected",
+                        "status": "permanent_failed",
+                        "created_at": now,
+                        "administrator_deliveries": {"7": failed_state},
+                    },
+                ]
+            )
+
+            dry_run = await _recover_rejected_documents_in_database(
+                database,
+                approval_post_id="document-rejected",
+                started_at=None,
+                ended_at=None,
+                dry_run=True,
+                limit=1,
+                now=now + timedelta(minutes=1),
+            )
+            assert dry_run.matching_post_ids == ("document-rejected",)
+            assert dry_run.requeued_post_ids == ()
+            unchanged = await database["approval_deliveries"].find_one(
+                {"_id": "document-rejected"}
+            )
+            assert unchanged is not None
+            assert unchanged["status"] == "permanent_failed"
+
+            recovered = await _recover_rejected_documents_in_database(
+                database,
+                approval_post_id=None,
+                started_at=now - timedelta(minutes=1),
+                ended_at=now + timedelta(minutes=1),
+                dry_run=False,
+                limit=1,
+                now=now + timedelta(minutes=1),
+            )
+            assert recovered.matching_post_ids == ("document-rejected",)
+            assert recovered.requeued_post_ids == ("document-rejected",)
+            stored = await database["approval_deliveries"].find_one(
+                {"_id": "document-rejected"}
+            )
+            assert stored is not None
+            assert stored["status"] == "retry"
+            assert stored["administrator_deliveries"]["7"]["status"] == "retry"
+            assert stored["administrator_deliveries"]["7"]["attempt_count"] == 0
+            assert stored["administrator_deliveries"]["8"]["status"] == "completed"
+            photo = await database["approval_deliveries"].find_one(
+                {"_id": "photo-rejected"}
+            )
+            assert photo is not None
+            assert photo["status"] == "permanent_failed"
+
+            repeated = await _recover_rejected_documents_in_database(
+                database,
+                approval_post_id="document-rejected",
+                started_at=None,
+                ended_at=None,
+                dry_run=False,
+                limit=1,
+                now=now + timedelta(minutes=2),
+            )
+            assert repeated == type(repeated)((), ())
         finally:
             await client.close()
 

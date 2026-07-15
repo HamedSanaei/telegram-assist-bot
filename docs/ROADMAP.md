@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T034 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T074 فعال است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -83,7 +83,7 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Active |
+| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Planned |
 | [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Planned |
 | [T036](tasks/T036-first-ai-provider-adapter.md) | Adapter اولین Provider منتخب | T005، T034 | `11.2–11.5` | Planned |
 | [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Planned |
@@ -142,6 +142,7 @@
 | [T071](tasks/T071-telegram-startup-retry.md) | Telegram startup retry | T005–T012، T060–T070 | `5.1`–`5.3`، `13`، `16` | Completed |
 | [T072](tasks/T072-approval-sync-server-retry.md) | Approval sync Telegram server retry | T020–T026، T061–T071 | `5.12`–`5.16`، `13`، `16` | Completed |
 | [T073](tasks/T073-link-preview-ingestion-isolation.md) | Link-preview ingestion isolation | T007–T012، T060–T072 | `5.2`، `5.3`، `13`، `14`، `16` | Completed |
+| [T074](tasks/T074-approval-document-delivery-recovery.md) | Approval document delivery recovery | T020–T026، T061–T073 | `5.12`–`5.16`، `13`، `14`، `16` | Active |
 
 ## بازبینی وابستگی‌ها
 

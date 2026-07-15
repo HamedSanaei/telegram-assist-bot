@@ -193,6 +193,7 @@ class MongoOperationalApprovalRepository:
                 value.get("next_attempt_at"),
                 value.get("delivery_phase", "pending"),
                 value.get("failure_type"),
+                value.get("failure_reason"),
             )
             for identifier, value in document.get(
                 "administrator_deliveries", {}
@@ -263,6 +264,7 @@ class MongoOperationalApprovalRepository:
         next_attempt_at: datetime | None = None,
         failure_category: str | None = None,
         failure_type: str | None = None,
+        failure_reason: str | None = None,
     ) -> bool:
         """Persist one administrator result without resetting other progress."""
         key = f"administrator_deliveries.{administrator_id}"
@@ -277,6 +279,7 @@ class MongoOperationalApprovalRepository:
                         "delivery_phase": delivery_phase,
                         "failure_category": failure_category,
                         "failure_type": failure_type,
+                        "failure_reason": failure_reason,
                     }
                 }
             },

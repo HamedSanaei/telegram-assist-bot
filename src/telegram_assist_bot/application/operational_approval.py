@@ -335,6 +335,7 @@ class ApprovalDeliveryWorker:
                     next_attempt = now + timedelta(seconds=retry_delay)
                     pending_retry_times.append(next_attempt)
                 failure_type = type(error).__name__
+                failure_reason = getattr(error, "reason_code", None)
                 await self._record_administrator(
                     post.post_id,
                     admin.telegram_user_id,
@@ -344,6 +345,7 @@ class ApprovalDeliveryWorker:
                     next_attempt_at=next_attempt,
                     failure_category=category,
                     failure_type=failure_type,
+                    failure_reason=failure_reason,
                 )
                 event_name = (
                     "approval_delivery_permanent_failed"
@@ -359,6 +361,7 @@ class ApprovalDeliveryWorker:
                     attempt_count=attempts,
                     failure_category=category,
                     failure_type=failure_type,
+                    failure_reason=failure_reason,
                     next_attempt_at=next_attempt,
                     terminal=terminal,
                 )
@@ -415,6 +418,7 @@ class ApprovalDeliveryWorker:
         next_attempt_at: datetime | None = None,
         failure_category: str | None = None,
         failure_type: str | None = None,
+        failure_reason: str | None = None,
     ) -> None:
         """Persist isolated administrator progress when the repository supports it."""
         recorder = getattr(self._operational, "record_administrator_delivery", None)
@@ -429,6 +433,7 @@ class ApprovalDeliveryWorker:
                 next_attempt_at=next_attempt_at,
                 failure_category=failure_category,
                 failure_type=failure_type,
+                failure_reason=failure_reason,
             )
 
     def _retry_delay(self, attempt_count: int) -> float:

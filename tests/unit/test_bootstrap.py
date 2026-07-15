@@ -8,6 +8,7 @@ import importlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 import pytest
@@ -1033,6 +1034,53 @@ def test_cli_inspects_and_explicitly_retries_approval_queue(
     output = capsys.readouterr().out
     assert "approval_post_id=short" in output
     assert "approval_retry_queued=true" in output
+
+
+def test_cli_document_recovery_requires_bounded_selector_and_supports_dry_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def recover(_path: Path, **kwargs: object) -> object:
+        calls.append(kwargs)
+        return SimpleNamespace(
+            matching_post_ids=("proposal-identity-long",),
+            requeued_post_ids=(),
+        )
+
+    monkeypatch.setattr(cli_module, "recover_rejected_document_deliveries", recover)
+    assert (
+        cli_module.main(
+            ["approval-recover-documents", "--config", "queue.json"],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.CONFIGURATION_ERROR
+    )
+    assert (
+        cli_module.main(
+            [
+                "approval-recover-documents",
+                "--config",
+                "queue.json",
+                "--approval-post-id",
+                "proposal-identity-long",
+                "--dry-run",
+                "--limit",
+                "5",
+            ],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.SUCCESS
+    )
+    assert calls[0]["approval_post_id"] == "proposal-identity-long"
+    assert calls[0]["dry_run"] is True
+    assert calls[0]["limit"] == 5
+    output = capsys.readouterr().out
+    assert "approval_document_recovery_mode=dry-run" in output
+    assert "approval_post_id=proposal-ide" in output
+    assert "proposal-identity-long" not in output
 
 
 def test_import_and_reload_do_not_execute_startup_or_open_resources(

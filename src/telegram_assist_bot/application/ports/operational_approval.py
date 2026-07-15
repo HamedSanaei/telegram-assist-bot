@@ -33,6 +33,7 @@ class ApprovalAdministratorDeliveryState:
     next_attempt_at: datetime | None = None
     delivery_phase: str = "pending"
     failure_type: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +118,7 @@ class OperationalApprovalRepository(Protocol):
         next_attempt_at: datetime | None = None,
         failure_category: str | None = None,
         failure_type: str | None = None,
+        failure_reason: str | None = None,
     ) -> bool:
         """Persist isolated safe progress for one administrator."""
         ...

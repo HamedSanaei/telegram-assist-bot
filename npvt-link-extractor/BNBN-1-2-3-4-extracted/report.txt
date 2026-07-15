@@ -1,0 +1,9 @@
+NPVT Link Extractor Report
+==============================
+Source: C:\Users\Hamed\Documents\TelegramAssistBot\npvt-link-extractor\BNBN-1-2-3-4.npvt
+Unique profiles found: 4
+Links generated: 4
+Conversion errors: 0
+
+Protocol counts:
+- trojan: 4

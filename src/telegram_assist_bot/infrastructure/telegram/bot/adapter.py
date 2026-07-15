@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from aiogram.exceptions import (
     TelegramBadRequest,
@@ -30,6 +30,7 @@ from telegram_assist_bot.application.ports import (
     ApprovalMediaNetworkError,
     ApprovalMediaPathError,
     ApprovalMediaRejectedError,
+    ApprovalMediaRejectionReason,
     ApprovalMediaUploadTimeoutError,
     BotEditOutcome,
     InlineKeyboard,
@@ -37,6 +38,7 @@ from telegram_assist_bot.application.ports import (
 
 if TYPE_CHECKING:
     from aiogram import Bot
+    from aiogram.types import Message
 
     from telegram_assist_bot.domain.posts import TelegramEntity
 
@@ -57,17 +59,63 @@ def _keyboard(value: InlineKeyboard | None) -> InlineKeyboardMarkup | None:
     )
 
 
-def _entities(values: tuple[TelegramEntity, ...]) -> list[MessageEntity]:
-    """Map entities without changing their canonical UTF-16 coordinates."""
-    return [
-        MessageEntity(
-            type=value.entity_type,
-            offset=value.offset_utf16,
-            length=value.length_utf16,
-            custom_emoji_id=value.custom_emoji_id,
+_MAXIMUM_CAPTION_UTF16_UNITS: Final = 1024
+_MAXIMUM_BOT_UPLOAD_BYTES: Final = 50 * 1024 * 1024
+_ENTITY_TYPE_MAP: Final = {
+    "bold": "bold",
+    "italic": "italic",
+    "underline": "underline",
+    "strike": "strikethrough",
+    "strikethrough": "strikethrough",
+    "spoiler": "spoiler",
+    "code": "code",
+    "pre": "pre",
+    "blockquote": "blockquote",
+    "expandable_blockquote": "expandable_blockquote",
+    "mention": "mention",
+    "hashtag": "hashtag",
+    "cashtag": "cashtag",
+    "bot_command": "bot_command",
+    "url": "url",
+    "email": "email",
+    "phone": "phone_number",
+    "phone_number": "phone_number",
+}
+
+
+def _utf16_length(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _entities(
+    text: str, values: tuple[TelegramEntity, ...]
+) -> list[MessageEntity]:
+    """Build safe preview entities while retaining valid UTF-16 coordinates."""
+    text_length = _utf16_length(text)
+    result: list[MessageEntity] = []
+    for value in values:
+        if (
+            value.offset_utf16 < 0
+            or value.length_utf16 <= 0
+            or value.offset_utf16 + value.length_utf16 > text_length
+        ):
+            raise ApprovalMediaRejectedError(
+                ApprovalMediaRejectionReason.ENTITY_BOUNDS_INVALID
+            )
+        mapped_type = _ENTITY_TYPE_MAP.get(value.entity_type)
+        if mapped_type is None:
+            # The stored contract has no URL/user metadata for TextUrl/TextMention;
+            # Custom Emoji is also unavailable to a non-premium Bot preview. Keep
+            # the visible text and omit only the unsupported preview formatting.
+            continue
+        result.append(
+            MessageEntity(
+                type=mapped_type,
+                offset=value.offset_utf16,
+                length=value.length_utf16,
+            )
         )
-        for value in values
-    ]
+    return result
 
 
 class AiogramAdminMessagingGateway:
@@ -139,47 +187,57 @@ class AiogramAdminMessagingGateway:
                 async with asyncio.timeout(self._upload_timeout):
                     preview = self._preview_member(media)
                     path = self._resolve_media(preview.storage_path)
-                    caption_entities = _entities(content.caption_entities)
+                    caption = content.caption or ""
+                    if _utf16_length(caption) > _MAXIMUM_CAPTION_UTF16_UNITS:
+                        raise ApprovalMediaRejectedError(
+                            ApprovalMediaRejectionReason.CAPTION_TOO_LONG
+                        )
+                    caption_entities = _entities(caption, content.caption_entities)
                     kind, extension = self._preview_kind(preview, path)
                     filename = preview.original_filename or (
                         f"approval-{kind}.{extension}"
                     )
-                    upload = FSInputFile(path, filename=filename)
-                    if kind == "photo":
-                        message = await self._bot.send_photo(
+                    try:
+                        message = await self._send_preview_media(
                             chat_id,
-                            photo=upload,
+                            path=path,
+                            filename=filename,
+                            kind=kind,
                             caption=content.caption,
                             caption_entities=caption_entities,
                         )
-                    elif kind == "video":
-                        message = await self._bot.send_video(
-                            chat_id,
-                            video=upload,
-                            supports_streaming=True,
-                            caption=content.caption,
-                            caption_entities=caption_entities,
-                        )
-                    elif kind == "animation":
-                        message = await self._bot.send_animation(
-                            chat_id,
-                            animation=upload,
-                            caption=content.caption,
-                            caption_entities=caption_entities,
-                        )
-                    else:
-                        message = await self._bot.send_document(
-                            chat_id,
-                            document=upload,
-                            caption=content.caption,
-                            caption_entities=caption_entities,
-                        )
+                    except TelegramBadRequest as error:
+                        reason = self._bad_request_reason(error)
+                        if (
+                            kind == "document"
+                            and caption_entities
+                            and reason
+                            in {
+                                ApprovalMediaRejectionReason.ENTITY_PARSE_FAILED,
+                                ApprovalMediaRejectionReason.CUSTOM_EMOJI_REJECTED,
+                            }
+                        ):
+                            try:
+                                message = await self._send_preview_media(
+                                    chat_id,
+                                    path=path,
+                                    filename=filename,
+                                    kind=kind,
+                                    caption=content.caption,
+                                    caption_entities=[],
+                                )
+                            except TelegramBadRequest as fallback_error:
+                                raise ApprovalMediaRejectedError(
+                                    self._bad_request_reason(fallback_error)
+                                ) from None
+                        else:
+                            raise ApprovalMediaRejectedError(reason) from None
                     return (message.message_id,)
             async with asyncio.timeout(self._timeout):
                 message = await self._bot.send_message(
                     chat_id,
                     content.text or content.caption or "",
-                    entities=_entities(content.text_entities),
+                    entities=_entities(content.text or "", content.text_entities),
                 )
                 return (message.message_id,)
         except TimeoutError as error:
@@ -191,7 +249,7 @@ class AiogramAdminMessagingGateway:
         except OSError:
             if content.media or content.media_paths:
                 raise ApprovalMediaPathError(
-                    "Approval media path is unavailable."
+                    ApprovalMediaRejectionReason.FILE_UNREADABLE
                 ) from None
             raise ApprovalDeliveryTransientError(
                 "Approval delivery temporarily failed."
@@ -206,6 +264,47 @@ class AiogramAdminMessagingGateway:
             raise self._delivery_error(
                 error, media=bool(content.media or content.media_paths)
             ) from None
+
+    async def _send_preview_media(
+        self,
+        chat_id: int,
+        *,
+        path: Path,
+        filename: str,
+        kind: str,
+        caption: str | None,
+        caption_entities: list[MessageEntity],
+    ) -> Message:
+        """Send one preview with a fresh upload object for each bounded attempt."""
+        upload = FSInputFile(path, filename=filename)
+        if kind == "photo":
+            return await self._bot.send_photo(
+                chat_id,
+                photo=upload,
+                caption=caption,
+                caption_entities=caption_entities,
+            )
+        if kind == "video":
+            return await self._bot.send_video(
+                chat_id,
+                video=upload,
+                supports_streaming=True,
+                caption=caption,
+                caption_entities=caption_entities,
+            )
+        if kind == "animation":
+            return await self._bot.send_animation(
+                chat_id,
+                animation=upload,
+                caption=caption,
+                caption_entities=caption_entities,
+            )
+        return await self._bot.send_document(
+            chat_id,
+            document=upload,
+            caption=caption,
+            caption_entities=caption_entities,
+        )
 
     @staticmethod
     def _approval_media(content: ApprovalContent) -> tuple[ApprovalMedia, ...]:
@@ -268,20 +367,73 @@ class AiogramAdminMessagingGateway:
     def _resolve_media(self, storage_path: str) -> Path:
         candidate = Path(storage_path)
         if candidate.is_absolute() or ".." in candidate.parts:
-            raise ApprovalMediaPathError("Approval media path is invalid.")
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_UNREADABLE
+            )
         current = self._media_root
         for part in candidate.parts:
             current /= part
             if current.is_symlink():
-                raise ApprovalMediaPathError("Approval media path is invalid.")
+                raise ApprovalMediaPathError(
+                    ApprovalMediaRejectionReason.FILE_UNREADABLE
+                )
         try:
             resolved = (self._media_root / candidate).resolve(strict=True)
             resolved.relative_to(self._media_root)
+        except FileNotFoundError:
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_MISSING
+            ) from None
         except (OSError, ValueError):
-            raise ApprovalMediaPathError("Approval media path is invalid.") from None
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_UNREADABLE
+            ) from None
         if not resolved.is_file() or resolved.is_symlink():
-            raise ApprovalMediaPathError("Approval media path is invalid.")
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_UNREADABLE
+            )
+        try:
+            size = resolved.stat().st_size
+        except OSError:
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_UNREADABLE
+            ) from None
+        if size == 0:
+            raise ApprovalMediaPathError(
+                ApprovalMediaRejectionReason.FILE_EMPTY
+            )
+        if size > _MAXIMUM_BOT_UPLOAD_BYTES:
+            raise ApprovalMediaRejectedError(
+                ApprovalMediaRejectionReason.FILE_TOO_LARGE
+            )
         return resolved
+
+    @staticmethod
+    def _bad_request_reason(
+        error: TelegramBadRequest,
+    ) -> ApprovalMediaRejectionReason:
+        """Classify an allowlisted provider reason without retaining raw details."""
+        detail = str(error).casefold()
+        if "custom emoji" in detail or "custom_emoji" in detail:
+            return ApprovalMediaRejectionReason.CUSTOM_EMOJI_REJECTED
+        if "caption is too long" in detail or "caption too long" in detail:
+            return ApprovalMediaRejectionReason.CAPTION_TOO_LONG
+        if "file is too big" in detail or "request entity too large" in detail:
+            return ApprovalMediaRejectionReason.FILE_TOO_LARGE
+        if any(
+            marker in detail
+            for marker in (
+                "can't parse entities",
+                "cannot parse entities",
+                "entity offset",
+                "entity length",
+                "text_url",
+                "text url",
+                "url is invalid",
+            )
+        ):
+            return ApprovalMediaRejectionReason.ENTITY_PARSE_FAILED
+        return ApprovalMediaRejectionReason.GENERIC_BAD_REQUEST
 
     @staticmethod
     def _delivery_error(
@@ -314,7 +466,10 @@ class AiogramAdminMessagingGateway:
                 "Approval delivery temporarily failed."
             )
         if media:
-            return ApprovalMediaRejectedError("Approval media was rejected.")
+            reason = ApprovalMediaRejectionReason.GENERIC_BAD_REQUEST
+            if isinstance(error, TelegramBadRequest):
+                reason = AiogramAdminMessagingGateway._bad_request_reason(error)
+            return ApprovalMediaRejectedError(reason)
         return ApprovalDeliveryRejectedError("Approval delivery request was rejected.")
 
     async def edit_header(

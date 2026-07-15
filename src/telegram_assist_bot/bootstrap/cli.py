@@ -18,6 +18,7 @@ from telegram_assist_bot.bootstrap.approval_bot import (
 )
 from telegram_assist_bot.bootstrap.approval_queue import (
     inspect_approval_queue,
+    recover_rejected_document_deliveries,
     retry_approval_delivery,
 )
 from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
@@ -72,6 +73,19 @@ class _SafeArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
         del message
         raise CliUsageError
+
+
+def _aware_datetime(value: str) -> datetime:
+    """Parse one operator-supplied aware ISO-8601 timestamp safely."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "An aware ISO-8601 time is required."
+        ) from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise argparse.ArgumentTypeError("An aware ISO-8601 time is required.")
+    return parsed
 
 
 def resolve_configuration_path(
@@ -136,6 +150,7 @@ def _parser() -> _SafeArgumentParser:
             "publication-cancel",
             "approval-queue",
             "approval-retry",
+            "approval-recover-documents",
         ),
         default="check",
         help=(
@@ -163,6 +178,10 @@ def _parser() -> _SafeArgumentParser:
     )
     parser.add_argument("--job-id", metavar="ID")
     parser.add_argument("--approval-post-id", metavar="ID")
+    parser.add_argument("--from-time", type=_aware_datetime, metavar="ISO_TIME")
+    parser.add_argument("--to-time", type=_aware_datetime, metavar="ISO_TIME")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--limit", type=int, default=25)
     return parser
 
 
@@ -325,6 +344,38 @@ def main(
             )
         )
         sys.stdout.write(f"approval_retry_queued={str(retried).lower()}\n")
+        exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "approval-recover-documents":
+        exact = bool(arguments.approval_post_id)
+        bounded_range = (
+            arguments.from_time is not None and arguments.to_time is not None
+        )
+        if exact == bounded_range or not 1 <= arguments.limit <= 100:
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        recovery_result = asyncio.run(
+            recover_rejected_document_deliveries(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                approval_post_id=arguments.approval_post_id,
+                started_at=arguments.from_time,
+                ended_at=arguments.to_time,
+                dry_run=arguments.dry_run,
+                limit=arguments.limit,
+            )
+        )
+        sys.stdout.write(
+            "approval_document_recovery_mode="
+            f"{'dry-run' if arguments.dry_run else 'execute'}\n"
+        )
+        sys.stdout.write(
+            f"matching_count={len(recovery_result.matching_post_ids)}\n"
+        )
+        sys.stdout.write(
+            f"requeued_count={len(recovery_result.requeued_post_ids)}\n"
+        )
+        for post_id in recovery_result.matching_post_ids:
+            sys.stdout.write(f"approval_post_id={post_id[:12]}\n")
         exit_code = FoundationExitCode.SUCCESS
     else:
         foundation_application = create_foundation_application(sink=sink)
