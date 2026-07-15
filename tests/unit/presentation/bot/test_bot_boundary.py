@@ -23,6 +23,8 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryUnavailableError,
     ApprovalMedia,
     ApprovalMediaPathError,
+    ApprovalMediaRejectedError,
+    ApprovalMediaRejectionReason,
     ApprovalMediaUploadTimeoutError,
     BotEditOutcome,
     InlineKeyboard,
@@ -222,6 +224,184 @@ def test_aiogram_gateway_uses_real_media_types_and_album_photo_preview(
                     media=(ApprovalMedia("photo", "../outside.jpg"),),
                 ),
             )
+
+    asyncio.run(scenario())
+
+
+def test_document_npvt_preserves_filename_caption_and_supported_entities(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "stored-hash").write_bytes(b"synthetic-npvt")
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                None,
+                media=(
+                    ApprovalMedia(
+                        "document",
+                        "stored-hash",
+                        "application/octet-stream",
+                        "config.npvt",
+                    ),
+                ),
+            ),
+        )
+        kind, _args, kwargs = fake.media_calls[-1]
+        assert kind == "document"
+        assert cast("Any", kwargs["document"]).filename == "config.npvt"
+        assert kwargs["caption"] is None
+        assert kwargs["caption_entities"] == []
+
+        caption = "سلام ایران"
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                caption,
+                caption_entities=(
+                    TelegramEntity(0, 4, "bold"),
+                    TelegramEntity(5, 5, "text_url"),
+                    TelegramEntity(5, 2, "custom_emoji", "123"),
+                ),
+                media=(
+                    ApprovalMedia(
+                        "document",
+                        "stored-hash",
+                        "application/octet-stream",
+                        "کانفیگ ویژه.npvt",
+                    ),
+                ),
+            ),
+        )
+        _kind, _args, kwargs = fake.media_calls[-1]
+        assert cast("Any", kwargs["document"]).filename == "کانفیگ ویژه.npvt"
+        assert kwargs["caption"] == caption
+        mapped = cast("list[Any]", kwargs["caption_entities"])
+        assert [(item.type, item.offset, item.length) for item in mapped] == [
+            ("bold", 0, 4)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_document_entity_bad_request_retries_once_without_entities(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "document.npvt").write_bytes(b"synthetic-npvt")
+
+    class EntityRejectingBot(FakeBot):
+        async def send_document(self, *_args: object, **kwargs: object) -> Result:
+            self.media_calls.append(("document", _args, kwargs))
+            if len(self.media_calls) == 1:
+                raise TelegramBadRequest(
+                    cast("Any", object()), "can't parse entities: invalid entity"
+                )
+            return Result()
+
+    async def scenario() -> None:
+        fake = EntityRejectingBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        assert await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                "سلام",
+                caption_entities=(TelegramEntity(0, 4, "bold"),),
+                media=(ApprovalMedia("document", "document.npvt"),),
+            ),
+        ) == (7,)
+        assert len(fake.media_calls) == 2
+        assert cast("list[Any]", fake.media_calls[0][2]["caption_entities"])
+        assert fake.media_calls[1][2]["caption_entities"] == []
+
+    asyncio.run(scenario())
+
+
+def test_document_ambiguous_bad_request_is_not_retried(tmp_path: Path) -> None:
+    (tmp_path / "document.npvt").write_bytes(b"synthetic-npvt")
+
+    class AmbiguousRejectingBot(FakeBot):
+        async def send_document(self, *_args: object, **kwargs: object) -> Result:
+            self.media_calls.append(("document", _args, kwargs))
+            raise TelegramBadRequest(cast("Any", object()), "bad document request")
+
+    async def scenario() -> None:
+        fake = AmbiguousRejectingBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        with pytest.raises(ApprovalMediaRejectedError) as rejected:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "سلام",
+                    caption_entities=(TelegramEntity(0, 4, "bold"),),
+                    media=(ApprovalMedia("document", "document.npvt"),),
+                ),
+            )
+        assert rejected.value.reason is (
+            ApprovalMediaRejectionReason.GENERIC_BAD_REQUEST
+        )
+        assert len(fake.media_calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_document_invalid_entity_and_files_have_safe_explicit_reasons(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "valid.npvt").write_bytes(b"synthetic")
+    (tmp_path / "empty.npvt").write_bytes(b"")
+
+    async def scenario() -> None:
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", FakeBot()), timeout_seconds=1, media_root=tmp_path
+        )
+        with pytest.raises(ApprovalMediaRejectedError) as invalid_entity:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "سلام",
+                    caption_entities=(TelegramEntity(3, 4, "bold"),),
+                    media=(ApprovalMedia("document", "valid.npvt"),),
+                ),
+            )
+        assert invalid_entity.value.reason is (
+            ApprovalMediaRejectionReason.ENTITY_BOUNDS_INVALID
+        )
+
+        with pytest.raises(ApprovalMediaPathError) as empty:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "",
+                    media=(ApprovalMedia("document", "empty.npvt"),),
+                ),
+            )
+        assert empty.value.reason is ApprovalMediaRejectionReason.FILE_EMPTY
+
+        with pytest.raises(ApprovalMediaPathError) as missing:
+            await gateway.send_content(
+                7,
+                ApprovalContent(
+                    None,
+                    "",
+                    media=(ApprovalMedia("document", "missing.npvt"),),
+                ),
+            )
+        assert missing.value.reason is ApprovalMediaRejectionReason.FILE_MISSING
 
     asyncio.run(scenario())
 
@@ -434,7 +614,7 @@ def test_aiogram_gateway_maps_delivery_media_and_edit_boundaries(
         single_media = ApprovalContent(
             None,
             "کپشن",
-            caption_entities=(TelegramEntity(0, 5, "bold"),),
+            caption_entities=(TelegramEntity(0, 4, "bold"),),
             media_paths=("single.bin",),
         )
         assert await gateway.send_content(1, single_media) == (7,)

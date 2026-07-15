@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,6 +18,14 @@ if TYPE_CHECKING:
     from pymongo.asynchronous.database import AsyncDatabase
 
     from telegram_assist_bot.shared.observability import EventSink
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalDocumentRecoveryResult:
+    """Summarize one bounded operator recovery without exposing content."""
+
+    matching_post_ids: tuple[str, ...]
+    requeued_post_ids: tuple[str, ...]
 
 
 async def inspect_approval_queue(
@@ -115,6 +124,161 @@ async def retry_approval_delivery(
         await application.shutdown()
 
 
+async def recover_rejected_document_deliveries(
+    configuration_path: Path,
+    *,
+    environ: Mapping[str, str],
+    sink: EventSink,
+    approval_post_id: str | None,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+    dry_run: bool,
+    limit: int,
+) -> ApprovalDocumentRecoveryResult:
+    """Requeue only bounded document-preview media rejections."""
+    if not 1 <= limit <= 100:
+        raise ValueError("Recovery limit must be between 1 and 100.")
+    exact = approval_post_id is not None
+    bounded_range = started_at is not None and ended_at is not None
+    if exact == bounded_range:
+        raise ValueError("Use an exact Post ID or one bounded time range.")
+    if bounded_range:
+        if started_at is None or ended_at is None:
+            raise ValueError("Both recovery timestamps are required.")
+        if (
+            started_at.tzinfo is None
+            or ended_at.tzinfo is None
+            or started_at >= ended_at
+        ):
+            raise ValueError("Recovery timestamps must form an aware time range.")
+
+    application = create_foundation_application(sink=sink)
+    try:
+        await application.start(configuration_path, environ=environ)
+        settings = application.configuration.settings
+        database = application.mongodb_client[settings.mongodb.database_name]
+        return await _recover_rejected_documents_in_database(
+            database,
+            approval_post_id=approval_post_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            dry_run=dry_run,
+            limit=limit,
+            now=datetime.now(UTC),
+        )
+    finally:
+        await application.shutdown()
+
+
+async def _recover_rejected_documents_in_database(
+    database: AsyncDatabase[dict[str, Any]],
+    *,
+    approval_post_id: str | None,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+    dry_run: bool,
+    limit: int,
+    now: datetime,
+) -> ApprovalDocumentRecoveryResult:
+    query: dict[str, Any] = {
+        "status": "permanent_failed",
+        "$expr": {
+            "$anyElementTrue": {
+                "$map": {
+                    "input": {
+                        "$objectToArray": {
+                            "$ifNull": ["$administrator_deliveries", {}]
+                        }
+                    },
+                    "as": "delivery",
+                    "in": {
+                        "$and": [
+                            {"$eq": ["$$delivery.v.status", "permanent_failed"]},
+                            {
+                                "$eq": [
+                                    "$$delivery.v.failure_category",
+                                    "media_rejected",
+                                ]
+                            },
+                        ]
+                    },
+                }
+            }
+        },
+    }
+    if approval_post_id is not None:
+        query["_id"] = approval_post_id
+    else:
+        if started_at is None or ended_at is None:
+            raise ValueError("Both recovery timestamps are required.")
+        query["created_at"] = {
+            "$gte": started_at.astimezone(UTC),
+            "$lt": ended_at.astimezone(UTC),
+        }
+
+    matching: list[str] = []
+    requeued: list[str] = []
+    cursor = database["approval_deliveries"].find(query).sort(
+        [("created_at", 1), ("_id", 1)]
+    )
+    async for delivery in cursor:
+        post_id = str(delivery["_id"])
+        post = await database["posts"].find_one(
+            {"_id": post_id},
+            projection={"source_channel_id": 1, "source_message_id": 1},
+        )
+        if await _content_kind(database, post) != "document":
+            continue
+        matching.append(post_id)
+        if not dry_run and await _requeue_document_delivery(
+            database, delivery, now=now
+        ):
+            requeued.append(post_id)
+        if len(matching) >= limit:
+            break
+    return ApprovalDocumentRecoveryResult(tuple(matching), tuple(requeued))
+
+
+async def _requeue_document_delivery(
+    database: AsyncDatabase[dict[str, Any]],
+    delivery: dict[str, Any],
+    *,
+    now: datetime,
+) -> bool:
+    states = cast(
+        "dict[str, dict[str, Any]]", delivery.get("administrator_deliveries", {})
+    )
+    failed_identifiers = tuple(
+        identifier
+        for identifier, state in states.items()
+        if state.get("status") == "permanent_failed"
+        and state.get("failure_category") == "media_rejected"
+    )
+    if not failed_identifiers:
+        return False
+    required: dict[str, object] = {
+        "_id": delivery["_id"],
+        "status": "permanent_failed",
+    }
+    updates: dict[str, object] = {
+        "status": "retry",
+        "next_attempt_at": now,
+        "claim_due_at": now,
+        "operator_requeued_at": now,
+    }
+    for identifier in failed_identifiers:
+        prefix = f"administrator_deliveries.{identifier}"
+        required[f"{prefix}.status"] = "permanent_failed"
+        required[f"{prefix}.failure_category"] = "media_rejected"
+        updates[f"{prefix}.status"] = "retry"
+        updates[f"{prefix}.attempt_count"] = 0
+        updates[f"{prefix}.next_attempt_at"] = now
+    result = await database["approval_deliveries"].update_one(
+        required, {"$set": updates}
+    )
+    return result.modified_count == 1
+
+
 def _administrator_status(
     delivery: dict[str, Any],
     reference: dict[str, Any] | None,
@@ -157,4 +321,9 @@ def _safe_time(value: object) -> str:
     return "none"
 
 
-__all__ = ("inspect_approval_queue", "retry_approval_delivery")
+__all__ = (
+    "ApprovalDocumentRecoveryResult",
+    "inspect_approval_queue",
+    "recover_rejected_document_deliveries",
+    "retry_approval_delivery",
+)

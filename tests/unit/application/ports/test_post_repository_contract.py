@@ -265,6 +265,7 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "ApprovalMedia",
         "ApprovalMediaNetworkError",
         "ApprovalMediaPathError",
+        "ApprovalMediaRejectionReason",
         "ApprovalMediaRejectedError",
         "ApprovalMediaUploadTimeoutError",
         "ApprovalDeliveryClaim",

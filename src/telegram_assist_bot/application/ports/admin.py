@@ -123,8 +123,34 @@ class ApprovalDeliveryRejectedError(ApprovalDeliveryError):
     error_category = "bad_request"
 
 
-class ApprovalMediaPathError(ApprovalDeliveryRejectedError):
-    """Report a missing or unsafe private approval media path."""
+class ApprovalMediaRejectionReason(StrEnum):
+    """Expose only safe, stable reasons for rejected approval preview media."""
+
+    ENTITY_BOUNDS_INVALID = "entity_bounds_invalid"
+    ENTITY_PARSE_FAILED = "entity_parse_failed"
+    CUSTOM_EMOJI_REJECTED = "custom_emoji_rejected"
+    CAPTION_TOO_LONG = "caption_too_long"
+    FILE_MISSING = "file_missing"
+    FILE_EMPTY = "file_empty"
+    FILE_UNREADABLE = "file_unreadable"
+    FILE_TOO_LARGE = "file_too_large"
+    GENERIC_BAD_REQUEST = "generic_bad_request"
+
+
+class ApprovalMediaRejectedError(ApprovalDeliveryRejectedError):
+    """Report a permanent Bot API rejection with one safe reason code."""
+
+    error_category = "media_rejected"
+
+    def __init__(self, reason: ApprovalMediaRejectionReason) -> None:
+        """Retain no provider message, caption, filename, or path."""
+        self.reason = reason
+        self.reason_code = reason.value
+        super().__init__("Approval media was rejected.")
+
+
+class ApprovalMediaPathError(ApprovalMediaRejectedError):
+    """Report a missing, unreadable, or unsafe private approval media path."""
 
     error_category = "invalid_media_path"
 
@@ -139,12 +165,6 @@ class ApprovalMediaNetworkError(ApprovalDeliveryTransientError):
     """Report a retryable network failure specific to media upload."""
 
     error_category = "media_network"
-
-
-class ApprovalMediaRejectedError(ApprovalDeliveryRejectedError):
-    """Report a permanent Bot API rejection of prepared approval media."""
-
-    error_category = "media_rejected"
 
 
 class AdminMessagingGateway(Protocol):
@@ -270,6 +290,7 @@ __all__ = (
     "ApprovalMediaNetworkError",
     "ApprovalMediaPathError",
     "ApprovalMediaRejectedError",
+    "ApprovalMediaRejectionReason",
     "ApprovalMediaUploadTimeoutError",
     "ApprovalRepository",
     "BotEditOutcome",

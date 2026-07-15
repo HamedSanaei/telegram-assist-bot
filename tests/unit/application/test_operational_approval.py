@@ -33,6 +33,8 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryClaim,
     ApprovalDeliveryRateLimitError,
     ApprovalDeliveryUnavailableError,
+    ApprovalMediaRejectedError,
+    ApprovalMediaRejectionReason,
     ApprovalPost,
     ApprovalSyncClaim,
     BotEditOutcome,
@@ -665,6 +667,15 @@ def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -
             del chat_id, content
             raise TimeoutError
 
+    class RejectedDocumentGateway(Gateway):
+        async def send_content(
+            self, chat_id: int, content: ApprovalContent
+        ) -> tuple[int, ...]:
+            del chat_id, content
+            raise ApprovalMediaRejectedError(
+                ApprovalMediaRejectionReason.ENTITY_PARSE_FAILED
+            )
+
     async def scenario() -> None:
         events: list[dict[str, object]] = []
 
@@ -708,6 +719,10 @@ def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -
         assert await worker(retrying, FailingGateway()).execute_once()
         assert retrying.released == 1
 
+        rejected = DeliveryOperational()
+        assert await worker(rejected, RejectedDocumentGateway()).execute_once()
+        assert rejected.released == 1
+
         names = [event["event_name"] for event in events]
         assert "approval_delivery_claimed" in names
         assert "approval_message_delivered" in names
@@ -719,6 +734,15 @@ def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -
             if event["event_name"] == "approval_delivery_failed"
         )
         assert failure["level"] == LogLevel.WARNING.value
+        rejected_event = next(
+            event
+            for event in events
+            if event["event_name"] == "approval_delivery_permanent_failed"
+        )
+        assert rejected_event["level"] == LogLevel.ERROR.value
+        assert rejected_event["failure_category"] == "media_rejected"
+        assert rejected_event["failure_reason"] == "entity_parse_failed"
+        assert "error_message" not in rejected_event
         reserved = {
             "timestamp",
             "level",
