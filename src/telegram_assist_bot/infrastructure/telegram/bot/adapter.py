@@ -87,9 +87,7 @@ def _utf16_length(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
 
-def _entities(
-    text: str, values: tuple[TelegramEntity, ...]
-) -> list[MessageEntity]:
+def _entities(text: str, values: tuple[TelegramEntity, ...]) -> list[MessageEntity]:
     """Build safe preview entities while retaining valid UTF-16 coordinates."""
     text_length = _utf16_length(text)
     result: list[MessageEntity] = []
@@ -367,9 +365,7 @@ class AiogramAdminMessagingGateway:
     def _resolve_media(self, storage_path: str) -> Path:
         candidate = Path(storage_path)
         if candidate.is_absolute() or ".." in candidate.parts:
-            raise ApprovalMediaPathError(
-                ApprovalMediaRejectionReason.FILE_UNREADABLE
-            )
+            raise ApprovalMediaPathError(ApprovalMediaRejectionReason.FILE_UNREADABLE)
         current = self._media_root
         for part in candidate.parts:
             current /= part
@@ -389,9 +385,7 @@ class AiogramAdminMessagingGateway:
                 ApprovalMediaRejectionReason.FILE_UNREADABLE
             ) from None
         if not resolved.is_file() or resolved.is_symlink():
-            raise ApprovalMediaPathError(
-                ApprovalMediaRejectionReason.FILE_UNREADABLE
-            )
+            raise ApprovalMediaPathError(ApprovalMediaRejectionReason.FILE_UNREADABLE)
         try:
             size = resolved.stat().st_size
         except OSError:
@@ -399,9 +393,7 @@ class AiogramAdminMessagingGateway:
                 ApprovalMediaRejectionReason.FILE_UNREADABLE
             ) from None
         if size == 0:
-            raise ApprovalMediaPathError(
-                ApprovalMediaRejectionReason.FILE_EMPTY
-            )
+            raise ApprovalMediaPathError(ApprovalMediaRejectionReason.FILE_EMPTY)
         if size > _MAXIMUM_BOT_UPLOAD_BYTES:
             raise ApprovalMediaRejectedError(
                 ApprovalMediaRejectionReason.FILE_TOO_LARGE

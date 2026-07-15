@@ -156,7 +156,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/text_ingestion.py` | orchestration یک Session؛ retry محدود validation/open، stop event، supervision taskهای حیاتی، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
 | `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
-| `bootstrap/approval_queue.py` | projection امن و read-only صف تحویل approval و retry صریح/idempotent یک proposal بدون reset مدیران موفق |
+| `bootstrap/approval_queue.py` | projection امن صف approval، retry صریح و recovery محدود/dry-run فقط برای Documentهای `media_rejected` بدون reset مدیران موفق |
 | `application/operational_approval.py` | delivery content-first با live-first watermark، batchهای تاریخی چرخشی، backoff و recovery هر مدیر؛ callback-to-native-command و sync بدون Telegram SDK |
 | `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
 | `application/ports/native_scheduling.py` | DTO، state و Portهای command/receipt/lease و gateway زمان‌بندی بومی |

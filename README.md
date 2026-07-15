@@ -339,6 +339,22 @@ uv run --python 3.12 python -m telegram_assist_bot approval-retry `
   --config config/configuration.local.json --approval-post-id <exact-id>
 ```
 
+Documentهای قدیمی که مشخصاً با `media_rejected` terminal شده‌اند با فرمان محدود
+زیر قابل بررسی‌اند. ابتدا حتماً `--dry-run` اجرا شود؛ خروجی فقط شناسهٔ کوتاه دارد
+و متن، نام کامل فایل یا مسیر Media را نشان نمی‌دهد:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot approval-recover-documents `
+  --config config/configuration.local.json `
+  --approval-post-id <exact-id> --dry-run --limit 1
+```
+
+پس از بررسی، حذف `--dry-run` فقط همان deliveryهای `content_kind=document` با
+`failure_category=media_rejected` را requeue می‌کند و تحویل‌های موفق مدیران را
+reset نمی‌کند. به‌جای شناسهٔ دقیق می‌توان بازهٔ bounded و aware با
+`--from-time <ISO_TIME> --to-time <ISO_TIME>` داد؛ `--limit` بین ۱ و ۱۰۰ اجباری
+است.
+
 فرمان‌های `ingest` و `ingest-text` سازگار مانده‌اند، اما نباید هم‌زمان با `runtime`
 روی همان `session_path` اجرا شوند. `schedule-worker` دیگر Session باز نمی‌کند و
 fail-closed است. `approval-bot` هیچ Session کاربری را باز نمی‌کند.
