@@ -59,6 +59,7 @@ class Publication:
     error_category: str | None = None
     correlation_id: str | None = None
     failure_type: str | None = None
+    failure_reason_code: str | None = None
 
     def __post_init__(self) -> None:
         """Reject naive persistence timestamps."""

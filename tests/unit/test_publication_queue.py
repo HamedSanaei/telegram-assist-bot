@@ -197,3 +197,36 @@ def test_cancellation_is_explicit_idempotent_and_closes_foundation(
     if requests:
         assert requests[0].job_id == "job-1"
         assert requests[0].authorized
+
+
+def test_failed_immediate_recovery_wrapper_closes_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundation = Foundation({})
+    captured: dict[str, object] = {}
+
+    async def recover(database: object, **values: object) -> object:
+        captured["database"] = database
+        captured.update(values)
+        return module.PreSendRecoveryResult.DRY_RUN_ELIGIBLE
+
+    monkeypatch.setattr(
+        module, "create_foundation_application", lambda **_kwargs: foundation
+    )
+    monkeypatch.setattr(module, "_recover_failed_immediate_in_database", recover)
+    result = asyncio.run(
+        module.recover_failed_immediate_selection(
+            Path("configuration.json"),
+            environ={},
+            sink=cast("Any", object()),
+            approval_post_id="post-1",
+            dry_run=True,
+            requeue=False,
+        )
+    )
+    assert result is module.PreSendRecoveryResult.DRY_RUN_ELIGIBLE
+    assert foundation.started == 1
+    assert foundation.stopped == 1
+    assert captured["approval_post_id"] == "post-1"
+    assert captured["dry_run"] is True
+    assert captured["requeue"] is False

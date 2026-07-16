@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from bson.int64 import Int64
 from telethon import types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublicationPayload, PublisherError
@@ -47,6 +48,22 @@ class Client:
 
     async def upload_file(self, file: object, **kwargs: object) -> object:
         raise AssertionError("Text publication must not upload media.")
+
+
+def test_accepts_mongodb_int64_destination_without_duplicate_send(
+    tmp_path: Path,
+) -> None:
+    client = Client()
+    gateway = TelethonPublisherGateway(client, media_root=tmp_path)
+    result = asyncio.run(
+        gateway.publish(
+            PublicationPayload(cast("int", Int64(-1009)), "safe", ()),
+            timeout_seconds=2,
+        )
+    )
+    assert result.message_ids == (44,)
+    assert client.call is not None
+    assert client.call[0] == -1009
 
 
 def test_maps_persian_zwnj_and_custom_emoji_without_bot_metadata(

@@ -34,6 +34,9 @@ from telegram_assist_bot.application.scheduling import (
 from telegram_assist_bot.domain import (
     CallbackAction,
     CancellationResult,
+    DestinationSelection,
+    ScheduleStatus,
+    SelectionAudit,
     SelectionMode,
     publication_identity,
     schedule_identity,
@@ -63,7 +66,6 @@ if TYPE_CHECKING:
     from telegram_assist_bot.domain import (
         Administrator,
         ApprovalReference,
-        DestinationSelection,
     )
     from telegram_assist_bot.shared.observability import StructuredLogger
 
@@ -587,6 +589,7 @@ class ApprovalCallbackExecutor:
             correlation_id=uuid4().hex,
         )
         if result.status is not ToggleStatus.UPDATED or result.selection is None:
+            await self._sync_canonical(claims.post_id, now)
             await self._answer(update, TEMPORARY_FAILURE_TEXT, alert=True)
             return False
         updated = result.selection
@@ -595,9 +598,14 @@ class ApprovalCallbackExecutor:
                 current.mode, updated.mode, updated, update.actor_id, now
             )
         except (PermissionError, RuntimeError, ValueError):
+            await self._compensate_and_sync(current, updated, update.actor_id, now)
             await self._answer(update, TEMPORARY_FAILURE_TEXT, alert=True)
             return False
-        await self._sync(claims.post_id, updated.version, now)
+        try:
+            await self._sync(claims.post_id, updated.version, now)
+        except (PermissionError, RuntimeError, ValueError):
+            await self._answer(update, TEMPORARY_FAILURE_TEXT, alert=True)
+            return False
         self._emit(
             "approval_selection_changed",
             approval_post_id=claims.post_id,
@@ -642,6 +650,7 @@ class ApprovalCallbackExecutor:
         legacy_cancel_allowed = not (
             previous is SelectionMode.SCHEDULED and self._native_schedules is not None
         )
+        cancelled_previous = False
         if (
             previous is not SelectionMode.NONE
             and previous is not current
@@ -650,6 +659,7 @@ class ApprovalCallbackExecutor:
             await self._cancel_action(
                 post_id, destination_id, previous, actor_id, correlation_id
             )
+            cancelled_previous = True
         if current is SelectionMode.IMMEDIATE:
             reservation = await self._schedules.reserve_immediate(
                 job_id=publication_identity(post_id, destination_id, "immediate"),
@@ -712,7 +722,7 @@ class ApprovalCallbackExecutor:
                 target_destination_id=destination_id,
             )
         else:
-            if legacy_cancel_allowed:
+            if legacy_cancel_allowed and not cancelled_previous:
                 await self._cancel_action(
                     post_id, destination_id, previous, actor_id, correlation_id
                 )
@@ -742,6 +752,8 @@ class ApprovalCallbackExecutor:
         job = await self._schedules.get(job_id)
         if job is None:
             return
+        if job.status is ScheduleStatus.PERMANENT_FAILED:
+            return
         result = await self._cancel.execute(
             CancelRequest(
                 job_id, destination_id, job.version, actor_id, correlation_id, True
@@ -753,6 +765,45 @@ class ApprovalCallbackExecutor:
             CancellationResult.ALREADY_COMPLETED,
         }:
             raise RuntimeError("Publication command could not be cancelled.")
+
+    async def _compensate_and_sync(
+        self,
+        previous: DestinationSelection,
+        updated: DestinationSelection,
+        actor_id: int,
+        now: datetime,
+    ) -> None:
+        """Restore a failed post-CAS transition and refresh canonical controls."""
+        canonical = await self._approvals.get_selection(
+            updated.post_id, updated.destination_id
+        )
+        if canonical == updated:
+            restored = DestinationSelection(
+                updated.post_id,
+                updated.destination_id,
+                previous.mode,
+                updated.version + 1,
+                (
+                    *updated.history,
+                    SelectionAudit(
+                        actor_id,
+                        updated.mode,
+                        previous.mode,
+                        now,
+                        uuid4().hex,
+                    ),
+                ),
+            )
+            await self._approvals.compare_and_set_selection(updated, restored)
+        await self._sync_canonical(updated.post_id, now)
+
+    async def _sync_canonical(self, post_id: str, now: datetime) -> None:
+        """Synchronize fresh callback tokens from the highest canonical version."""
+        versions = [
+            (await self._approvals.get_selection(post_id, item.destination_id)).version
+            for item in self._destinations
+        ]
+        await self._sync(post_id, max(versions, default=0), now)
 
     async def _sync(self, post_id: str, version: int, now: datetime) -> None:
         statuses = await self._operational.destination_statuses(post_id)

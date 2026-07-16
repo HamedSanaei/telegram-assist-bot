@@ -167,6 +167,7 @@ def test_worker_persists_safe_pre_send_and_ambiguous_failure_details() -> None:
             "owner": "worker",
             "category": "ambiguous",
             "failure_type": "RuntimeError",
+            "failure_reason_code": "unhandled_publish_exception",
         }
 
         terminal_repository = Repository(job())
@@ -276,5 +277,45 @@ def test_publication_worker_emits_only_safe_operational_events() -> None:
             assert "error_category" not in event
             assert "post_content" not in event
             assert "media_path" not in event
+
+    asyncio.run(scenario())
+
+
+def test_publication_failure_emits_exact_safe_publisher_reason_code() -> None:
+    async def scenario() -> None:
+        events: list[dict[str, object]] = []
+        logger = StructuredLogger(
+            sink=lambda event: events.append(dict(event)),
+            clock=lambda: NOW,
+            redactor=Redactor(secret_values=()),
+            minimum_level=LogLevel.DEBUG,
+        )
+        repository = Repository(job())
+        use_case = runner(repository, PublishStatus.PERMANENT_FAILED)
+
+        async def failed(_request: object) -> PublishResult:
+            return PublishResult(
+                PublishStatus.PERMANENT_FAILED,
+                Publication(
+                    "publication",
+                    "post",
+                    -1,
+                    state=PublicationState.PERMANENT_FAILED,
+                    error_category="permanent",
+                    failure_type="PublisherError",
+                    failure_reason_code="invalid_publication_payload",
+                ),
+            )
+
+        use_case._publish = failed
+        use_case._logger = logger
+        assert await use_case.execute_once() is RunDueStatus.FAILED
+        failure = next(
+            event for event in events if event["event_name"] == "publication_failed"
+        )
+        assert failure["reason_code"] == "invalid_publication_payload"
+        assert repository.failed_values["failure_reason_code"] == (
+            "invalid_publication_payload"
+        )
 
     asyncio.run(scenario())

@@ -126,8 +126,14 @@ class TelethonPublisherGateway:
         try:
             if timeout_seconds <= 0:
                 raise ValueError("Publisher timeout must be positive.")
-            if type(payload.destination_id) is not int or payload.destination_id == 0:
+            destination_value: object = payload.destination_id
+            if (
+                not isinstance(destination_value, int)
+                or isinstance(destination_value, bool)
+                or destination_value == 0
+            ):
                 raise ValueError("Publisher destination is invalid.")
+            destination_id = int(destination_value)
             entities, omitted_text_urls = _prepare_entities(
                 payload.text, payload.entities
             )
@@ -152,7 +158,7 @@ class TelethonPublisherGateway:
             async with asyncio.timeout(timeout_seconds):
                 if not payload.media:
                     result = await self._client.send_message(
-                        payload.destination_id,
+                        destination_id,
                         payload.text or "",
                         formatting_entities=entities,
                         parse_mode=None,
@@ -163,7 +169,7 @@ class TelethonPublisherGateway:
                         serialized[0] if len(serialized) == 1 else list(serialized)
                     )
                     result = await self._client.send_file(
-                        payload.destination_id,
+                        destination_id,
                         file_value,
                         caption=payload.text,
                         formatting_entities=entities,

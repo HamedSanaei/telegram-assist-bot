@@ -106,6 +106,7 @@ class RunDuePublication:
                 owner=self._owner,
                 category="ambiguous",
                 failure_type=failure_type,
+                failure_reason_code="unhandled_publish_exception",
             )
             status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
             self._emit(
@@ -113,6 +114,7 @@ class RunDuePublication:
                 job,
                 failure_category="ambiguous",
                 failure_type=failure_type,
+                reason_code="unhandled_publish_exception",
             )
             await self._notify(job, status)
             return status
@@ -130,7 +132,7 @@ class RunDuePublication:
             result.status in {PublishStatus.RETRY_PENDING, PublishStatus.BUSY}
             and job.attempt_count < self._max_attempts
         ):
-            failure_category, failure_type = self._failure_details(result)
+            failure_category, failure_type, reason_code = self._failure_details(result)
             changed = await self._repository.defer(
                 job.job_id,
                 owner=self._owner,
@@ -138,6 +140,7 @@ class RunDuePublication:
                 + timedelta(seconds=self._retry_delay_seconds),
                 category=failure_category,
                 failure_type=failure_type,
+                failure_reason_code=reason_code,
             )
             status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
             self._emit(
@@ -145,6 +148,7 @@ class RunDuePublication:
                 job,
                 failure_category=failure_category,
                 failure_type=failure_type,
+                reason_code=reason_code,
             )
             await self._notify(job, status)
             return status
@@ -153,7 +157,7 @@ class RunDuePublication:
             if result.status is PublishStatus.OUTCOME_UNKNOWN
             else result.status.value
         )
-        failure_category, failure_type = self._failure_details(
+        failure_category, failure_type, reason_code = self._failure_details(
             result, fallback_category=category
         )
         changed = await self._repository.fail(
@@ -161,6 +165,7 @@ class RunDuePublication:
             owner=self._owner,
             category=failure_category,
             failure_type=failure_type,
+            failure_reason_code=reason_code,
         )
         status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
         self._emit(
@@ -168,6 +173,7 @@ class RunDuePublication:
             job,
             failure_category=failure_category,
             failure_type=failure_type,
+            reason_code=reason_code,
         )
         await self._notify(job, status)
         return status
@@ -189,6 +195,7 @@ class RunDuePublication:
                 + timedelta(seconds=self._retry_delay_seconds),
                 category=failure_category,
                 failure_type=failure_type,
+                failure_reason_code="request_build_failed",
             )
             status = RunDueStatus.DEFERRED if changed else RunDueStatus.LEASE_LOST
             self._emit(
@@ -196,6 +203,7 @@ class RunDuePublication:
                 job,
                 failure_category=failure_category,
                 failure_type=failure_type,
+                reason_code="request_build_failed",
             )
         else:
             changed = await self._repository.fail(
@@ -203,6 +211,7 @@ class RunDuePublication:
                 owner=self._owner,
                 category=failure_category,
                 failure_type=failure_type,
+                failure_reason_code="request_build_failed",
             )
             status = RunDueStatus.FAILED if changed else RunDueStatus.LEASE_LOST
             self._emit(
@@ -210,6 +219,7 @@ class RunDuePublication:
                 job,
                 failure_category=failure_category,
                 failure_type=failure_type,
+                reason_code="request_build_failed",
             )
         await self._notify(job, status)
         return status
@@ -217,7 +227,7 @@ class RunDuePublication:
     @staticmethod
     def _failure_details(
         result: PublishResult, *, fallback_category: str | None = None
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str | None]:
         publication = result.publication
         category = (
             fallback_category
@@ -231,7 +241,10 @@ class RunDuePublication:
             if publication is not None and publication.failure_type
             else "PublishResultFailure"
         )
-        return category, failure_type
+        reason_code = (
+            publication.failure_reason_code if publication is not None else None
+        )
+        return category, failure_type, reason_code
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -246,6 +259,7 @@ class RunDuePublication:
         *,
         failure_category: str | None = None,
         failure_type: str | None = None,
+        reason_code: str | None = None,
     ) -> None:
         if self._logger is not None:
             fields: dict[str, object] = {
@@ -259,6 +273,8 @@ class RunDuePublication:
                 fields["failure_category"] = failure_category
             if failure_type is not None:
                 fields["failure_type"] = failure_type
+            if reason_code is not None:
+                fields["reason_code"] = reason_code
             level = LogLevel.INFO
             if event_name == "publication_deferred":
                 level = LogLevel.WARNING

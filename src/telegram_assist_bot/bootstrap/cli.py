@@ -25,6 +25,7 @@ from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
     inspect_publication_queue,
+    recover_failed_immediate_selection,
     recover_pre_send_publication,
 )
 from telegram_assist_bot.bootstrap.runtime import (
@@ -150,6 +151,7 @@ def _parser() -> _SafeArgumentParser:
             "publication-queue",
             "publication-cancel",
             "publication-recover-presend",
+            "publication-recover-immediate",
             "approval-queue",
             "approval-retry",
             "approval-recover-documents",
@@ -183,6 +185,7 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument("--from-time", type=_aware_datetime, metavar="ISO_TIME")
     parser.add_argument("--to-time", type=_aware_datetime, metavar="ISO_TIME")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--requeue", action="store_true")
     parser.add_argument("--limit", type=int, default=25)
     return parser
 
@@ -331,6 +334,21 @@ def main(
                 environ=environment_snapshot,
                 sink=sink,
                 approval_post_id=arguments.approval_post_id,
+            )
+        )
+        sys.stdout.write(f"recovery_result={recovery_result.value}\n")
+        exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "publication-recover-immediate":
+        if not arguments.approval_post_id:
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        recovery_result = asyncio.run(
+            recover_failed_immediate_selection(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                approval_post_id=arguments.approval_post_id,
+                dry_run=arguments.dry_run,
+                requeue=arguments.requeue,
             )
         )
         sys.stdout.write(f"recovery_result={recovery_result.value}\n")
