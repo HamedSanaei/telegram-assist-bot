@@ -25,6 +25,7 @@ from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
     inspect_publication_queue,
+    recover_pre_send_publication,
 )
 from telegram_assist_bot.bootstrap.runtime import (
     BinaryEventStream,
@@ -148,6 +149,7 @@ def _parser() -> _SafeArgumentParser:
             "runtime",
             "publication-queue",
             "publication-cancel",
+            "publication-recover-presend",
             "approval-queue",
             "approval-retry",
             "approval-recover-documents",
@@ -320,6 +322,19 @@ def main(
         )
         sys.stdout.write(f"cancellation_result={result.value}\n")
         exit_code = FoundationExitCode.SUCCESS
+    elif arguments.command == "publication-recover-presend":
+        if not arguments.approval_post_id:
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        recovery_result = asyncio.run(
+            recover_pre_send_publication(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+                approval_post_id=arguments.approval_post_id,
+            )
+        )
+        sys.stdout.write(f"recovery_result={recovery_result.value}\n")
+        exit_code = FoundationExitCode.SUCCESS
     elif arguments.command == "approval-queue":
         rows = asyncio.run(
             inspect_approval_queue(
@@ -352,7 +367,7 @@ def main(
         )
         if exact == bounded_range or not 1 <= arguments.limit <= 100:
             return int(FoundationExitCode.CONFIGURATION_ERROR)
-        recovery_result = asyncio.run(
+        document_recovery_result = asyncio.run(
             recover_rejected_document_deliveries(
                 configuration_path,
                 environ=environment_snapshot,
@@ -368,9 +383,13 @@ def main(
             "approval_document_recovery_mode="
             f"{'dry-run' if arguments.dry_run else 'execute'}\n"
         )
-        sys.stdout.write(f"matching_count={len(recovery_result.matching_post_ids)}\n")
-        sys.stdout.write(f"requeued_count={len(recovery_result.requeued_post_ids)}\n")
-        for post_id in recovery_result.matching_post_ids:
+        sys.stdout.write(
+            f"matching_count={len(document_recovery_result.matching_post_ids)}\n"
+        )
+        sys.stdout.write(
+            f"requeued_count={len(document_recovery_result.requeued_post_ids)}\n"
+        )
+        for post_id in document_recovery_result.matching_post_ids:
             sys.stdout.write(f"approval_post_id={post_id[:12]}\n")
         exit_code = FoundationExitCode.SUCCESS
     else:

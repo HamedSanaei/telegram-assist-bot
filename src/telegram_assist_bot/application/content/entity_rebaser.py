@@ -72,6 +72,7 @@ def apply_edits(
                 length_utf16=_utf16_length(transformed[new_start:new_end]),
                 entity_type=entity.entity_type,
                 custom_emoji_id=entity.custom_emoji_id,
+                url=entity.url,
             )
         )
     return transformed, tuple(rebased)

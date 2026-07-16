@@ -207,6 +207,17 @@ timeout هرگز این fallback را اجرا نمی‌کند. reason امن د
 `media_rejected` را با شناسهٔ دقیق یا بازهٔ زمانی محدود، dry-run و سقف ۱۰۰ مورد
 آزاد می‌کند و delivery موفق مدیران را دست‌نخورده می‌گذارد.
 
+### Destination `text_url` safety
+
+entity نوع `text_url` در ingestion همراه URL اختیاری خود وارد مدل مستقل از SDK
+می‌شود و همان metadata در Post، artifact مقصد، rebasing و publication payload
+حفظ می‌شود. Publisher پس از کنترل UTF-16 آن را به `MessageEntityTextUrl` تبدیل
+می‌کند. برای artifactهای legacy فاقد URL فقط entity لینک حذف و متن قابل‌مشاهده
+حفظ می‌شود و event امن `publication_entity_omitted` ثبت می‌گردد. validationهای
+پیش از `send_message`/`send_file` خطای typed و قطعی می‌سازند؛ uncertainty واقعی
+شبکه/RPC همچنان ambiguous است. `publication-recover-presend` تنها با Post ID دقیق
+و proof gate روی failure قدیمی `ValueError` پیش از send، job را idempotent برمی‌گرداند.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای

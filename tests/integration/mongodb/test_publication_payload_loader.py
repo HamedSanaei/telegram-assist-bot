@@ -109,6 +109,49 @@ def test_loads_text_single_media_and_ordered_album(
     asyncio.run(scenario())
 
 
+def test_preserves_text_url_metadata_in_prepared_publication_payload(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            repository = MongoContentPreparationRepository(
+                database["media_items"],
+                database["media_groups"],
+                database["content_preparations"],
+            )
+            loader = MongoPublicationPayloadLoader(
+                repository,
+                database["posts"],
+                database["media_items"],
+                database["media_groups"],
+                destination_names={-200: "dest"},
+            )
+            entity = TelegramEntity(
+                8, 4, "text_url", url="https://example.invalid/path"
+            )
+            await database["posts"].insert_one(
+                {"_id": "text-url", "source_channel_id": -100, "source_message_id": 9}
+            )
+            await repository.save_destination_artifact(
+                DestinationArtifact(
+                    PostId("text-url"), "dest", "سلام 👋 لینک", (entity,), 1
+                )
+            )
+
+            payload = await loader.load("text-url", -200)
+
+            assert payload.entities == (entity,)
+            assert payload.entities[0].url == "https://example.invalid/path"
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_rejects_unknown_destination_missing_artifact_and_missing_post(
     mongodb_test_settings: MongoTestSettings,
 ) -> None:

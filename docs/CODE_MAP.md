@@ -155,7 +155,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
 | `bootstrap/text_ingestion.py` | orchestration یک Session؛ retry محدود validation/open، stop event، supervision taskهای حیاتی، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
-| `bootstrap/publication_queue.py` | projection امن و read-only صف و لغو صریح یک job با policy موجود، بدون Telegram Session |
+| `bootstrap/publication_queue.py` | projection امن و read-only صف، لغو صریح، و recovery محدود failure اثبات‌شدهٔ pre-send با Post ID دقیق، بدون Telegram Session |
 | `bootstrap/approval_queue.py` | projection امن صف approval، retry صریح و recovery محدود/dry-run فقط برای Documentهای `media_rejected` بدون reset مدیران موفق |
 | `application/operational_approval.py` | delivery content-first با live-first watermark، batchهای تاریخی چرخشی، backoff و recovery هر مدیر؛ callback-to-native-command و sync بدون Telegram SDK |
 | `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
@@ -178,7 +178,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/post_repository.py` | insert یکتا با canonical ID/Conflict، claim اتمیک مرحلهٔ بعد، read/list و CAS مستقل از driver |
 | `application/ports/telegram_source_gateway.py` | DTO، Port، result و errorهای application-owned برای auth، validation، History و subscription |
 | `application/ports/media.py` | Portهای Stream/Storage/Persistence و DTOهای Media، Album، duplicate، category، artifact و readiness |
-| `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication و صف پایدار |
+| `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
@@ -202,7 +202,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/persistence/mongodb/content_repository.py` | Media و preparation به‌همراه mapper سازگار legacy و claim/lease/retry/permanent state برای Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
-| `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album بدون binary در MongoDB |
+| `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album و metadata اختیاری `text_url` بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
 | `infrastructure/telegram/user/media_adapter.py` | resolve reference و stream فقط Photo/Document concrete تلگرام، با رد امن WebPage/Media نامعتبر |
 | `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium، channel access، auto-reconnect محدود و await کردن disconnect نهایی همان client مالک |

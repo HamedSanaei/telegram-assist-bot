@@ -23,6 +23,7 @@ _SAFE_ENTITY_FIELD_NAMES: Final[frozenset[str]] = frozenset(
         "entity_type",
         "length_utf16",
         "offset_utf16",
+        "url",
     }
 )
 _SAFE_ENTITY_RULES: Final[frozenset[str]] = frozenset(
@@ -32,6 +33,8 @@ _SAFE_ENTITY_RULES: Final[frozenset[str]] = frozenset(
         "must_be_non_negative_strict_integer",
         "must_be_positive_strict_integer",
         "required_non_blank_string_at_most_256_characters",
+        "allowed_only_for_text_url",
+        "must_be_non_blank_string_at_most_4096_characters",
     }
 )
 

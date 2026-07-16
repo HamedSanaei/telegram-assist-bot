@@ -992,6 +992,46 @@ def test_cli_cancellation_requires_job_id_and_is_explicitly_dispatched(
     assert "AlreadyCancelled" in capsys.readouterr().out
 
 
+def test_cli_presend_recovery_requires_exact_post_id_and_dispatches(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from telegram_assist_bot.bootstrap.publication_queue import PreSendRecoveryResult
+
+    calls: list[tuple[Path, str]] = []
+
+    async def recover(
+        path: Path, *, approval_post_id: str, **_kwargs: object
+    ) -> PreSendRecoveryResult:
+        calls.append((path, approval_post_id))
+        return PreSendRecoveryResult.REQUEUED
+
+    monkeypatch.setattr(cli_module, "recover_pre_send_publication", recover)
+    assert (
+        cli_module.main(
+            ["publication-recover-presend", "--config", "queue.json"],
+            environ={},
+            output=_BinaryBuffer(),
+        )
+        == FoundationExitCode.CONFIGURATION_ERROR
+    )
+
+    result = cli_module.main(
+        [
+            "publication-recover-presend",
+            "--config",
+            "queue.json",
+            "--approval-post-id",
+            "post-1",
+        ],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [(Path("queue.json"), "post-1")]
+    assert "recovery_result=requeued" in capsys.readouterr().out
+
+
 def test_cli_inspects_and_explicitly_retries_approval_queue(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

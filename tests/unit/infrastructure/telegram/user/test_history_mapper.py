@@ -24,6 +24,13 @@ class MessageEntityCustomEmoji:
         self.document_id = document_id
 
 
+class MessageEntityTextUrl:
+    def __init__(self, offset: int, length: int, url: str | None) -> None:
+        self.offset = offset
+        self.length = length
+        self.url = url
+
+
 class DocumentAttributeSticker: ...
 
 
@@ -75,6 +82,28 @@ def test_maps_persian_text_zwnj_emoji_and_utf16_entities_exactly() -> None:
     assert mapped.text_entities[0].offset_utf16 == 0
     assert mapped.text_entities[1].entity_type == "custom_emoji"
     assert mapped.text_entities[1].custom_emoji_id == "987654"
+
+
+def test_maps_optional_text_url_metadata_without_changing_utf16_bounds() -> None:
+    raw = SimpleNamespace(
+        id=71,
+        date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
+        message="سلام 👋 لینک",
+        entities=[MessageEntityTextUrl(8, 4, "https://example.invalid/path")],
+        media=None,
+        action=None,
+    )
+
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username="source_fixture",
+        source_channel_display_name="منبع فارسی",
+    )
+
+    assert mapped.text_entities[0].offset_utf16 == 8
+    assert mapped.text_entities[0].length_utf16 == 4
+    assert mapped.text_entities[0].url == "https://example.invalid/path"
 
 
 def test_media_text_maps_to_caption_without_normalization() -> None:

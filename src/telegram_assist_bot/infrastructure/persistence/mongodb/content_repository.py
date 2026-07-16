@@ -111,6 +111,7 @@ def _entity_document(entity: TelegramEntity) -> Document:
         "length": entity.length_utf16,
         "entity_type": entity.entity_type,
         "custom_emoji_id": entity.custom_emoji_id,
+        "url": entity.url,
     }
 
 
@@ -120,6 +121,7 @@ def _entity_from(document: Document) -> TelegramEntity:
         document["length"],
         document["entity_type"],
         document.get("custom_emoji_id"),
+        document.get("url"),
     )
 
 

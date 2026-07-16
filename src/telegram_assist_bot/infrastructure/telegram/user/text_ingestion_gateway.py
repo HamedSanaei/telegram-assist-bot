@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from telegram_assist_bot.shared.observability import StructuredLogger
+
 
 class TelethonTextClient(
     TelethonClientProtocol,
@@ -134,7 +136,9 @@ class TelethonTextIngestionGateway:
         """Build a provider-neutral streamer over the already-owned client."""
         return TelethonMediaSource(self._require_client())
 
-    def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
+    def publisher(
+        self, *, media_root: Path, logger: StructuredLogger | None = None
+    ) -> TelegramPublisherGateway:
         """Build publication over the same already-open session owner."""
         from telegram_assist_bot.infrastructure.telegram.user_publisher import (
             TelethonPublisherClient,
@@ -142,7 +146,7 @@ class TelethonTextIngestionGateway:
         )
 
         client = cast("TelethonPublisherClient", self._require_client())
-        return TelethonPublisherGateway(client, media_root=media_root)
+        return TelethonPublisherGateway(client, media_root=media_root, logger=logger)
 
     def native_scheduler(self, *, media_root: Path) -> object:
         """Build native scheduling over the same already-open User API client."""

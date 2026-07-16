@@ -142,14 +142,37 @@ def test_mapper_preserves_entity_order_text_line_breaks_emoji_and_zwnj() -> None
             "length_utf16": 4,
             "entity_type": "bold",
             "custom_emoji_id": None,
+            "url": None,
         },
         {
             "offset_utf16": 33,
             "length_utf16": 2,
             "entity_type": "custom_emoji",
             "custom_emoji_id": "5368324170671202286",
+            "url": None,
         },
     ]
+
+
+def test_text_url_round_trip_and_legacy_document_compatibility() -> None:
+    post = _make_post()
+    document = post_to_document(post)
+    content = cast("dict[str, object]", document["original_content"])
+    content["text_entities"] = [
+        {
+            "offset_utf16": 8,
+            "length_utf16": 4,
+            "entity_type": "text_url",
+            "custom_emoji_id": None,
+            "url": "https://example.invalid/path",
+        }
+    ]
+
+    restored = post_from_document(document)
+
+    assert restored.original_text_entities[0].url == "https://example.invalid/path"
+    del cast("list[dict[str, object]]", content["text_entities"])[0]["url"]
+    assert post_from_document(document).original_text_entities[0].url is None
 
 
 def test_timestamp_encoding_preserves_microseconds_and_ceilings_expiry() -> None:

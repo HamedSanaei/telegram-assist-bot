@@ -90,6 +90,7 @@ def _entities(values: list[Document]) -> tuple[TelegramEntity, ...]:
             int(item.get("length_utf16", item.get("length", 0)) or 0),
             item["entity_type"],
             item.get("custom_emoji_id"),
+            item.get("url"),
         )
         for item in values
     )
