@@ -206,7 +206,9 @@ class FullTextIngestionGateway(TextIngestionGateway, Protocol):
         """Return a streamer over the already-open owned Telegram client."""
         ...
 
-    def publisher(self, *, media_root: Path) -> TelegramPublisherGateway:
+    def publisher(
+        self, *, media_root: Path, logger: StructuredLogger | None = None
+    ) -> TelegramPublisherGateway:
         """Return a publisher over the same already-open User API client."""
         ...
 
@@ -987,7 +989,10 @@ async def _create_publication_worker(
         groups,
         destination_names=destination_names,
     )
-    publisher = owned_gateway.publisher(media_root=settings.media.root)
+    publisher = owned_gateway.publisher(
+        media_root=settings.media.root,
+        logger=owned_foundation.logger,
+    )
     publication_repository = MongoPublicationRepository(publications)
     schedule_repository = MongoScheduleRepository(schedules, queues)
     native_repository = MongoNativeScheduleRepository(native_commands, native_leases)

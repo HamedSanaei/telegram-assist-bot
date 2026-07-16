@@ -50,8 +50,9 @@ _CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
     {"text", "caption", "text_entities", "caption_entities"}
 )
 _ENTITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"offset_utf16", "length_utf16", "entity_type", "custom_emoji_id"}
+    {"offset_utf16", "length_utf16", "entity_type", "custom_emoji_id", "url"}
 )
+_LEGACY_ENTITY_FIELDS: Final[frozenset[str]] = _ENTITY_FIELDS - {"url"}
 _TRANSITION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "previous_status",
@@ -178,13 +179,15 @@ def _entity_to_document(entity: TelegramEntity) -> dict[str, object]:
         "length_utf16": entity.length_utf16,
         "entity_type": entity.entity_type,
         "custom_emoji_id": entity.custom_emoji_id,
+        "url": entity.url,
     }
 
 
 def _entity_from_document(value: object) -> TelegramEntity:
     """Deserialize and domain-validate one Telegram entity document."""
     document = _require_mapping(value, rule="invalid_document")
-    _require_exact_fields(document, _ENTITY_FIELDS)
+    if frozenset(document) not in {_ENTITY_FIELDS, _LEGACY_ENTITY_FIELDS}:
+        raise InvalidPostDocumentError("invalid_document")
     try:
         return TelegramEntity(
             offset_utf16=_require_integer(document["offset_utf16"]),
@@ -194,6 +197,7 @@ def _entity_from_document(value: object) -> TelegramEntity:
                 document["custom_emoji_id"],
                 optional=True,
             ),
+            url=_require_string(document.get("url"), optional=True),
         )
     except PostDomainError:
         raise InvalidPostDocumentError from None

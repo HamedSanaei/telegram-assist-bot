@@ -143,6 +143,7 @@
 | [T072](tasks/T072-approval-sync-server-retry.md) | Approval sync Telegram server retry | T020–T026، T061–T071 | `5.12`–`5.16`، `13`، `16` | Completed |
 | [T073](tasks/T073-link-preview-ingestion-isolation.md) | Link-preview ingestion isolation | T007–T012، T060–T072 | `5.2`، `5.3`، `13`، `14`، `16` | Completed |
 | [T074](tasks/T074-approval-document-delivery-recovery.md) | Approval document delivery recovery | T020–T026، T061–T073 | `5.12`–`5.16`، `13`، `14`، `16` | Completed |
+| [T075](tasks/T075-destination-text-url-publication.md) | Destination text URL publication recovery | T027–T033، T060–T074 | `5.17`–`5.19`، `13`، `14`، `16` | Completed |
 
 ## بازبینی وابستگی‌ها
 

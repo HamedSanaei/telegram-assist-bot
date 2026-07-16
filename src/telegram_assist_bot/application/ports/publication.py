@@ -58,12 +58,14 @@ class PublisherError(Exception):
         *,
         request_may_have_reached_telegram: bool = False,
         retry_after_seconds: float | None = None,
+        reason_code: str | None = None,
     ) -> None:
         """Store a safe category and send-boundary certainty."""
         super().__init__("Destination publication failed.")
         self.category = category
         self.request_may_have_reached_telegram = request_may_have_reached_telegram
         self.retry_after_seconds = retry_after_seconds
+        self.reason_code = reason_code
 
 
 class PublicationClaimOutcome(StrEnum):

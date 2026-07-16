@@ -34,6 +34,23 @@ def test_intersecting_entity_removed_unknown_unaffected_preserved() -> None:
     assert result.entities[0].offset_utf16 == 5
 
 
+def test_rebasing_preserves_text_url_metadata() -> None:
+    text = "@other_name سلام لینک"
+    link = TelegramEntity(17, 4, "text_url", url="https://example.invalid")
+
+    result = prepare_destination_content(
+        text=text,
+        entities=(link,),
+        source_username="source_name",
+        destination_username="dest_name",
+    )
+
+    assert result.text == " سلام لینک"
+    assert result.entities == (
+        TelegramEntity(6, 4, "text_url", url="https://example.invalid"),
+    )
+
+
 def test_multiple_links_long_input_and_immutability() -> None:
     original = (
         "متن‌\n@one_name https://telegram.me/two_name?q=1 😀 "

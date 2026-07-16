@@ -380,6 +380,18 @@ URL، punctuation و Emoji را تبدیل نمی‌کند. destination-content 
 با offsetهای UTF-16 کار می‌کند. precedence دسته‌بندی پایه نیز manual override،
 سپس keyword rule، سپس default منبع است؛ هیچ AI در این مسیر اجرا نمی‌شود.
 
+برای recovery فقط یک failure قدیمی که به‌طور قطعی پیش از درخواست Telegram و بر
+اثر `text_url` فاقد URL رخ داده است، ابتدا Runtime را متوقف و Post ID دقیق را بدهید:
+
+```powershell
+uv run --python 3.12 python -m telegram_assist_bot publication-recover-presend `
+  --config config/configuration.local.json `
+  --approval-post-id <exact-post-id>
+```
+
+فرمان در صورت هرگونه outcome اثبات‌نشده fail closed است و job عمومی یا published
+را requeue نمی‌کند.
+
 ## ساختار اولیه
 
 کد Package زیر `src/telegram_assist_bot/` قرار دارد. زیرPackageهای `domain`،

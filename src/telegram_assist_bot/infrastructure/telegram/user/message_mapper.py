@@ -40,17 +40,24 @@ def _map_entity(raw_entity: object) -> TelegramEntity:
         raise InvalidTelegramMessageError
     entity_type = _entity_type(raw_entity)
     custom_emoji_id: str | None = None
+    url: str | None = None
     if entity_type == "custom_emoji":
         document_id = getattr(raw_entity, "document_id", None)
         if type(document_id) is not int or document_id <= 0:
             raise InvalidTelegramMessageError
         custom_emoji_id = str(document_id)
+    elif entity_type == "text_url":
+        raw_url = getattr(raw_entity, "url", None)
+        if raw_url is not None and type(raw_url) is not str:
+            raise InvalidTelegramMessageError
+        url = raw_url
     try:
         return TelegramEntity(
             offset_utf16=offset,
             length_utf16=length,
             entity_type=entity_type,
             custom_emoji_id=custom_emoji_id,
+            url=url,
         )
     except Exception as error:
         raise InvalidTelegramMessageError from error

@@ -14,6 +14,7 @@ from telegram_assist_bot.infrastructure.telegram.media_serializer import (
     TelethonMediaSerializationError,
     TelethonMediaSerializer,
 )
+from telegram_assist_bot.shared.config import LogLevel
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
     from telegram_assist_bot.application.ports import PublicationPayload
     from telegram_assist_bot.domain.posts import TelegramEntity
+    from telegram_assist_bot.shared.observability import StructuredLogger
 
 
 class TelethonPublisherClient(Protocol):
@@ -72,25 +74,80 @@ def _map_entity(entity: TelegramEntity) -> object:
     if entity.entity_type == "pre":
         return entity_type(entity.offset_utf16, entity.length_utf16, "")
     if entity.entity_type == "text_url":
-        raise ValueError("Text URL publication requires its safe URL metadata.")
+        if entity.url is None:
+            raise ValueError("Text URL publication metadata is missing.")
+        return entity_type(entity.offset_utf16, entity.length_utf16, entity.url)
     return entity_type(entity.offset_utf16, entity.length_utf16)
+
+
+def _utf16_length(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _prepare_entities(
+    text: str | None,
+    entities: tuple[TelegramEntity, ...],
+) -> tuple[list[object], int]:
+    """Validate source bounds and omit only legacy text URLs missing metadata."""
+    if entities and text is None:
+        raise ValueError("Publication entities require visible text.")
+    text_length = _utf16_length(text or "")
+    mapped: list[object] = []
+    omitted = 0
+    for entity in entities:
+        if entity.entity_type == "text_url" and entity.url is None:
+            omitted += 1
+            continue
+        if entity.offset_utf16 + entity.length_utf16 > text_length:
+            raise ValueError("Publication entity bounds are outside visible text.")
+        mapped.append(_map_entity(entity))
+    return mapped, omitted
 
 
 class TelethonPublisherGateway:
     """Publish through the authenticated Premium User API session only."""
 
-    def __init__(self, client: TelethonPublisherClient, *, media_root: Path) -> None:
+    def __init__(
+        self,
+        client: TelethonPublisherClient,
+        *,
+        media_root: Path,
+        logger: StructuredLogger | None = None,
+    ) -> None:
         """Store the client and canonical private media root."""
         self._client = client
         self._media = TelethonMediaSerializer(client, media_root=media_root)
+        self._logger = logger
 
     async def publish(
         self, payload: PublicationPayload, *, timeout_seconds: float
     ) -> PublishedMessage:
         """Send destination-ready content with a bounded SDK operation."""
-        if timeout_seconds <= 0:
-            raise ValueError("Publisher timeout must be positive.")
-        entities = [_map_entity(value) for value in payload.entities]
+        try:
+            if timeout_seconds <= 0:
+                raise ValueError("Publisher timeout must be positive.")
+            if type(payload.destination_id) is not int or payload.destination_id == 0:
+                raise ValueError("Publisher destination is invalid.")
+            entities, omitted_text_urls = _prepare_entities(
+                payload.text, payload.entities
+            )
+        except (AttributeError, OverflowError, TypeError, ValueError) as error:
+            raise PublisherError(
+                PublicationFailureCategory.PERMANENT,
+                request_may_have_reached_telegram=False,
+                reason_code="invalid_publication_payload",
+            ) from error
+        if omitted_text_urls and self._logger is not None:
+            self._logger.emit(
+                level=LogLevel.WARNING,
+                event_name="publication_entity_omitted",
+                fields={
+                    "target_destination_id": payload.destination_id,
+                    "entity_kind": "text_url",
+                    "omission_reason": "missing_url_metadata",
+                    "omitted_count": omitted_text_urls,
+                },
+            )
         try:
             async with asyncio.timeout(timeout_seconds):
                 if not payload.media:
@@ -115,7 +172,11 @@ class TelethonPublisherGateway:
         except asyncio.CancelledError:
             raise
         except TelethonMediaSerializationError as error:
-            raise PublisherError(PublicationFailureCategory.PERMANENT) from error
+            raise PublisherError(
+                PublicationFailureCategory.PERMANENT,
+                request_may_have_reached_telegram=False,
+                reason_code="media_serialization_failed",
+            ) from error
         except TimeoutError as error:
             raise PublisherError(
                 PublicationFailureCategory.TIMEOUT,

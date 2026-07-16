@@ -92,6 +92,30 @@ def test_non_custom_entity_rejects_custom_emoji_metadata() -> None:
     assert error.value.rule == "allowed_only_for_custom_emoji"
 
 
+def test_text_url_accepts_optional_metadata_for_legacy_compatibility() -> None:
+    current = TelegramEntity(8, 4, "text_url", url="https://example.invalid")
+    legacy = TelegramEntity(8, 4, "text_url")
+
+    assert current.url == "https://example.invalid"
+    assert legacy.url is None
+
+
+@pytest.mark.parametrize("url", ["", " ", "x" * 4097, 1])
+def test_text_url_rejects_invalid_present_metadata(url: object) -> None:
+    with pytest.raises(InvalidTelegramEntityError) as error:
+        TelegramEntity(0, 1, "text_url", url=cast("str", url))
+
+    assert error.value.field_name == "url"
+
+
+def test_non_text_url_rejects_url_metadata() -> None:
+    with pytest.raises(InvalidTelegramEntityError) as error:
+        TelegramEntity(0, 1, "bold", url="https://example.invalid")
+
+    assert error.value.field_name == "url"
+    assert error.value.rule == "allowed_only_for_text_url"
+
+
 @pytest.mark.parametrize(
     ("entity_type", "custom_emoji_id"),
     [
