@@ -78,7 +78,7 @@ def _publication(document: Document) -> Publication:
     return Publication(
         publication_id=document["_id"],
         post_id=document["post_id"],
-        destination_id=document["destination_id"],
+        destination_id=int(document["destination_id"]),
         state=PublicationState(document["state"]),
         version=document.get("version", 0),
         claim_owner=document.get("claim_owner"),
@@ -91,6 +91,7 @@ def _publication(document: Document) -> Publication:
         error_category=document.get("error_category"),
         correlation_id=document.get("correlation_id"),
         failure_type=document.get("failure_type"),
+        failure_reason_code=document.get("failure_reason_code"),
     )
 
 
@@ -109,7 +110,7 @@ def _schedule(document: Document) -> ScheduledPublication:
     return ScheduledPublication(
         job_id=document["_id"],
         post_id=document["post_id"],
-        destination_id=document["destination_id"],
+        destination_id=int(document["destination_id"]),
         due_at=document["due_at"],
         status=ScheduleStatus(document["status"]),
         version=document.get("version", 0),
@@ -123,6 +124,7 @@ def _schedule(document: Document) -> ScheduledPublication:
         due_time_history=history,
         action=document.get("action", "scheduled"),
         last_failure_type=document.get("last_failure_type"),
+        last_failure_reason_code=document.get("last_failure_reason_code"),
     )
 
 
@@ -246,6 +248,7 @@ class MongoPublicationRepository:
         next_attempt_at: datetime | None,
         outcome_unknown: bool,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> Publication:
         """Persist only a safe category and never raw exception details."""
         state = (
@@ -266,6 +269,7 @@ class MongoPublicationRepository:
                     "state": state.value,
                     "error_category": category.value,
                     "failure_type": failure_type,
+                    "failure_reason_code": failure_reason_code,
                     "next_attempt_at": next_attempt_at,
                     "claim_owner": None,
                     "lease_until": None,
@@ -511,6 +515,7 @@ class MongoScheduleRepository:
         next_attempt_at: datetime,
         category: str,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> bool:
         """Release an owned claim into retry waiting."""
         result = await self._schedules.update_one(
@@ -525,6 +530,7 @@ class MongoScheduleRepository:
                     "next_attempt_at": next_attempt_at,
                     "last_error_category": category,
                     "last_failure_type": failure_type,
+                    "last_failure_reason_code": failure_reason_code,
                     "claim_owner": None,
                     "lease_until": None,
                 },
@@ -540,6 +546,7 @@ class MongoScheduleRepository:
         owner: str,
         category: str,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> bool:
         """Persist a terminal safe failure category."""
         state = (
@@ -558,6 +565,7 @@ class MongoScheduleRepository:
                     "status": state.value,
                     "last_error_category": category,
                     "last_failure_type": failure_type,
+                    "last_failure_reason_code": failure_reason_code,
                     "claim_owner": None,
                     "lease_until": None,
                 },

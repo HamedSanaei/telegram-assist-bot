@@ -155,9 +155,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
 | `bootstrap/text_ingestion.py` | orchestration یک Session؛ retry محدود validation/open، stop event، supervision taskهای حیاتی، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
 | `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
-| `bootstrap/publication_queue.py` | projection امن و read-only صف، لغو صریح، و recovery محدود failure اثبات‌شدهٔ pre-send با Post ID دقیق، بدون Telegram Session |
+| `bootstrap/publication_queue.py` | projection امن و read-only صف، لغو صریح، و recovery دقیق dry-run/clear/requeue برای failure اثبات‌شدهٔ pre-send همراه با درخواست sync صفحه‌کلید، بدون Telegram Session |
 | `bootstrap/approval_queue.py` | projection امن صف approval، retry صریح و recovery محدود/dry-run فقط برای Documentهای `media_rejected` بدون reset مدیران موفق |
-| `application/operational_approval.py` | delivery content-first با live-first watermark، batchهای تاریخی چرخشی، backoff و recovery هر مدیر؛ callback-to-native-command و sync بدون Telegram SDK |
+| `application/operational_approval.py` | delivery content-first و recovery هر مدیر؛ callback-to-command با لغو idempotent terminal failure، جبران CAS ناموفق و sync canonical بدون Telegram SDK |
 | `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
 | `application/ports/native_scheduling.py` | DTO، state و Portهای command/receipt/lease و gateway زمان‌بندی بومی |
 | `application/native_scheduling.py` | claim، Slot پنج‌دقیقه‌ای، cancellation و reconciliation بومی restart-safe |
@@ -211,7 +211,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، خطای mapping امن per-message و unsubscribe cancellation-safe |
 | `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
-| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji و ارسال متن/Media/Album با serializer مشترک Telethon |
+| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
 | `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` با serializer مشترک همان client Runtime |
 | `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API، upload نوع‌صحیح Media زیر root محصور و نگاشت امن network/rate-limit/server failures به retry Application |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |

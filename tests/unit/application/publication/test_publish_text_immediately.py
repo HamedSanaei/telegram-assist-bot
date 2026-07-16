@@ -93,6 +93,7 @@ class Repository:
         next_attempt_at: datetime | None,
         outcome_unknown: bool,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> Publication:
         del owner, now
         assert self.value
@@ -110,6 +111,7 @@ class Repository:
             state=state,
             error_category=category.value,
             failure_type=failure_type,
+            failure_reason_code=failure_reason_code,
         )
         return self.value
 

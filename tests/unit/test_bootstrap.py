@@ -1032,6 +1032,43 @@ def test_cli_presend_recovery_requires_exact_post_id_and_dispatches(
     assert "recovery_result=requeued" in capsys.readouterr().out
 
 
+def test_cli_failed_immediate_recovery_forwards_dry_run_and_requeue(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from telegram_assist_bot.bootstrap.publication_queue import PreSendRecoveryResult
+
+    calls: list[tuple[Path, str, bool, bool]] = []
+
+    async def recover(
+        path: Path,
+        *,
+        approval_post_id: str,
+        dry_run: bool,
+        requeue: bool,
+        **_kwargs: object,
+    ) -> PreSendRecoveryResult:
+        calls.append((path, approval_post_id, dry_run, requeue))
+        return PreSendRecoveryResult.DRY_RUN_ELIGIBLE
+
+    monkeypatch.setattr(cli_module, "recover_failed_immediate_selection", recover)
+    result = cli_module.main(
+        [
+            "publication-recover-immediate",
+            "--config",
+            "queue.json",
+            "--approval-post-id",
+            "post-1",
+            "--dry-run",
+            "--requeue",
+        ],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [(Path("queue.json"), "post-1", True, True)]
+    assert "recovery_result=dry_run_eligible" in capsys.readouterr().out
+
+
 def test_cli_inspects_and_explicitly_retries_approval_queue(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

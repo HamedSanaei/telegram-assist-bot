@@ -456,6 +456,73 @@ def test_consumption_conflict_and_persistence_failures_return_safe_answers() -> 
             now=NOW,
         )
         assert not await executor.execute(BotUpdate(7, 7, "private", token, "failed"))
+        selection = await cast("MemoryRepository", executor._approvals).get_selection(
+            "post-1", DESTINATION
+        )
+        assert selection.mode is SelectionMode.NONE
+        assert cast("Gateway", executor._gateway).edits
+
+    asyncio.run(scenario())
+
+
+def test_permanent_immediate_failure_can_be_cleared_or_rescheduled() -> None:
+    async def choose_immediate(
+        executor: ApprovalCallbackExecutor, tokens: CallbackTokenService
+    ) -> None:
+        token = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", token, "initial"))
+
+    async def scenario() -> None:
+        executor, tokens, schedules, operational = build_executor()
+        await choose_immediate(executor, tokens)
+        identity = publication_identity("post-1", DESTINATION, "immediate")
+        schedules.jobs[identity] = replace(
+            schedules.jobs[identity], status=ScheduleStatus.PERMANENT_FAILED
+        )
+        operational.statuses[DESTINATION] = "permanent_failed"
+        clear = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", clear, "clear"))
+        assert (
+            await cast("MemoryRepository", executor._approvals).get_selection(
+                "post-1", DESTINATION
+            )
+        ).mode is SelectionMode.NONE
+
+        executor, tokens, schedules, operational = build_executor()
+        await choose_immediate(executor, tokens)
+        identity = publication_identity("post-1", DESTINATION, "immediate")
+        schedules.jobs[identity] = replace(
+            schedules.jobs[identity], status=ScheduleStatus.PERMANENT_FAILED
+        )
+        operational.statuses[DESTINATION] = "permanent_failed"
+        scheduled = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_SCHEDULED,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(
+            BotUpdate(7, 7, "private", scheduled, "scheduled")
+        )
+        assert schedule_identity("post-1", DESTINATION) in schedules.jobs
+        assert (
+            await cast("MemoryRepository", executor._approvals).get_selection(
+                "post-1", DESTINATION
+            )
+        ).mode is SelectionMode.SCHEDULED
 
     asyncio.run(scenario())
 

@@ -87,6 +87,7 @@ class ScheduledPublication:
     due_time_history: tuple[DueTimeAudit, ...] = ()
     action: str = "scheduled"
     last_failure_type: str | None = None
+    last_failure_reason_code: str | None = None
 
     def __post_init__(self) -> None:
         """Require and canonicalize an aware UTC due time."""

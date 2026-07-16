@@ -76,6 +76,7 @@ class ScheduleRepository(Protocol):
         next_attempt_at: datetime,
         category: str,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> bool:
         """Return an owned job to bounded retry waiting."""
         ...
@@ -87,6 +88,7 @@ class ScheduleRepository(Protocol):
         owner: str,
         category: str,
         failure_type: str | None = None,
+        failure_reason_code: str | None = None,
     ) -> bool:
         """Terminally fail an owned job."""
         ...

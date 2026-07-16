@@ -206,6 +206,7 @@ class PublishImmediately:
                     next_attempt_at=next_at,
                     outcome_unknown=unknown,
                     failure_type=type(error).__name__,
+                    failure_reason_code=error.reason_code,
                 )
                 if next_at is None:
                     return PublishResult(self._terminal_status(failed.state), failed)
