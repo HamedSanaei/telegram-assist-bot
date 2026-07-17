@@ -50,6 +50,11 @@ class AIJob:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     version: int = 0
+    attempts_history: list[dict[str, Any]] | None = None
+    attempted_candidates_count: int | None = None
+    retry_count: int | None = None
+    fallback_count: int | None = None
+    safe_last_failure_code: str | None = None
 
     @classmethod
     def create(

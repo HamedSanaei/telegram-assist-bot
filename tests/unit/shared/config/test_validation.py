@@ -369,6 +369,14 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
     task: AiTask,
 ) -> None:
     """Every supported task parses and satisfies its matching enabled feature."""
+    from telegram_assist_bot.application.ai.contracts import AITaskType
+
+    canonical_map = {
+        AiTask.ADVERTISEMENT_DETECTION: AITaskType.ADVERTISEMENT_DETECTION,
+        AiTask.DUPLICATE_DETECTION: AITaskType.SEMANTIC_DUPLICATE,
+        AiTask.CONTENT_SCORING: AITaskType.SCORING,
+    }
+
     features = _as_object(valid_payload["features"])
     for feature_name in _FEATURE_BY_AI_TASK.values():
         features[feature_name] = False
@@ -380,7 +388,7 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
         environ=synthetic_environ,
     )
 
-    assert loaded.settings.ai.routes[0].task is task
+    assert loaded.settings.ai.routes[0].task is canonical_map[task]
 
 
 @pytest.mark.parametrize(

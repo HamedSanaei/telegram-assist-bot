@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, ClassVar, Final, Literal, Self
+from typing import Annotated, Any, ClassVar, Final, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -120,6 +120,9 @@ class LogLevel(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+from telegram_assist_bot.application.ai.contracts import AITaskType
+
+
 class AiTask(StrEnum):
     """AI task names that can be assigned an ordered route."""
 
@@ -128,11 +131,24 @@ class AiTask(StrEnum):
     CONTENT_SCORING = "content_scoring"
 
 
+def _map_ai_task_alias(v: Any) -> Any:
+    if isinstance(v, str):
+        if v == "duplicate_detection":
+            return "semantic_duplicate"
+        if v == "content_scoring":
+            return "scoring"
+    return v
+
+
 StrictLogLevel = Annotated[LogLevel, BeforeValidator(_require_string_input)]
 """A logging enum parsed only from an exact string scalar."""
 
-StrictAiTask = Annotated[AiTask, BeforeValidator(_require_string_input)]
-"""An AI task enum parsed only from an exact string scalar."""
+StrictAiTask = Annotated[
+    AITaskType,
+    BeforeValidator(_map_ai_task_alias),
+    BeforeValidator(_require_string_input),
+]
+"""An AI task enum parsed only from an exact string scalar, mapping legacy aliases to canonical AITaskType."""
 
 
 class _FrozenConfigModel(BaseModel):
@@ -463,6 +479,22 @@ class AiQueueConfig(_FrozenConfigModel):
     )
 
 
+class AiTaskFailureAction(StrEnum):
+    """Actions to take on final all-providers failure."""
+
+    CONTINUE = "continue"
+    STOP = "stop"
+    MANUAL_REVIEW = "manual_review"
+    DEFAULT_CATEGORY = "default_category"
+
+
+class AiTaskFailurePolicyConfig(_FrozenConfigModel):
+    """Define failure policy for a task."""
+
+    task: StrictAiTask = Field(description="AI task this failure policy applies to.")
+    action: AiTaskFailureAction = Field(description="Action to take when all providers fail.")
+
+
 class AiConfig(_FrozenConfigModel):
     """Hold provider declarations and task-routing skeletons."""
 
@@ -475,6 +507,10 @@ class AiConfig(_FrozenConfigModel):
     )
     routes: tuple[AiTaskRouteConfig, ...] = Field(
         description="Configured AI task routes."
+    )
+    failure_policies: tuple[AiTaskFailurePolicyConfig, ...] = Field(
+        default=(),
+        description="Configured AI task failure policies."
     )
 
 

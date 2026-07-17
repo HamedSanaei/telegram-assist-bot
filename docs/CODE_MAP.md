@@ -57,7 +57,12 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   │   ├── response_normalizer.py
 │   │   │   ├── response_parser.py
 │   │   │   ├── response_validator.py
+│   │   │   ├── retry.py
+│   │   │   ├── routing.py
 │   │   │   ├── schemas.py
+│   │   │   ├── use_cases/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── execute_ai_with_fallback.py
 │   │   │   └── prompts/
 │   │   │       ├── advertisement_detection.txt
 │   │   │       ├── categorization.txt
@@ -231,6 +236,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/response_normalizer.py` | یکسان‌ساز نتایج ارائه‌دهنده‌های متفاوت تلقیح شده در AIResult استاندارد |
 | `application/ai/enqueue_ai_job.py` | Use Case برای درج idempotent کارها با کلید یکتا و سطح اولویت |
 | `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
+| `application/ai/routing.py` | انتخاب و رتبه‌بندی قطعی کاندیداهای کارهای AI بر اساس نوع وظیفه و اولویت |
+| `application/ai/retry.py` | اجرای نامتقارن و بازآزمایی خطاهای گذرا با Backoff و Jitter روی مدل‌های هوش مصنوعی |
+| `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور اجرای وظایف AI با انتخاب کاندیدا، بازآزمایی و Fallback نهایی |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
 | `infrastructure/ai/z_ai.py` | آداپتور تک-Attempt ارائه‌دهنده z-ai با مدل glm-4.7-flash، رد هدایت مجدد و Base URL غیراستاندارد، و طبقه‌بندی و پاک‌سازی خطاها |
 | `infrastructure/ai/deepseek.py` | آداپتور تک-Attempt DeepSeek برای Modelهای allowlisted v4، با capability ثابت، host/redirect allowlist، سقف پاسخ و خطاهای redacted؛ بدون Retry/Fallback و بدون اتصال Runtime |

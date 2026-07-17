@@ -415,17 +415,28 @@ def _raw_ai_issues(
                     )
                 )
 
+    def _canonicalize_task_name(task_name: str) -> str:
+        if task_name == "duplicate_detection":
+            return "semantic_duplicate"
+        if task_name == "content_scoring":
+            return "scoring"
+        return task_name
+
     routes = _indexed_objects(ai_value.get("routes", _MISSING))
     issues.extend(
         _raw_duplicate_field_issues(
             routes,
             path_prefix=("ai", "routes"),
             field_name="task",
-            value=lambda route: _raw_non_blank_string(route, "task"),
+            value=lambda route: (
+                _canonicalize_task_name(task_str)
+                if isinstance((task_str := _raw_non_blank_string(route, "task")), str)
+                else task_str
+            ),
         )
     )
     configured_tasks = {
-        task
+        _canonicalize_task_name(task)
         for _, route in routes
         if isinstance((task := _raw_non_blank_string(route, "task")), str)
     }
@@ -484,7 +495,11 @@ def _raw_ai_issues(
             ("ai_scoring_enabled", AiTask.CONTENT_SCORING.value),
         )
         for field_name, task in required_routes:
-            if features_value.get(field_name) is True and task not in configured_tasks:
+            canonical_task = _canonicalize_task_name(task)
+            if (
+                features_value.get(field_name) is True
+                and canonical_task not in configured_tasks
+            ):
                 issues.append(
                     ConfigurationIssue(
                         path=("features", field_name),

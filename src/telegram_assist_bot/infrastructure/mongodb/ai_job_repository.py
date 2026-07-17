@@ -81,6 +81,11 @@ def ai_job_to_document(job: AIJob) -> dict[str, Any]:
         "updated_at": updated_floor,
         "updated_at_rem": updated_rem,
         "version": job.version,
+        "attempts_history": job.attempts_history,
+        "attempted_candidates_count": job.attempted_candidates_count,
+        "retry_count": job.retry_count,
+        "fallback_count": job.fallback_count,
+        "safe_last_failure_code": job.safe_last_failure_code,
     }
 
 
@@ -121,6 +126,11 @@ def ai_job_from_document(doc: dict[str, Any]) -> AIJob:
         created_at=created_at,
         updated_at=updated_at,
         version=doc["version"],
+        attempts_history=doc.get("attempts_history"),
+        attempted_candidates_count=doc.get("attempted_candidates_count"),
+        retry_count=doc.get("retry_count"),
+        fallback_count=doc.get("fallback_count"),
+        safe_last_failure_code=doc.get("safe_last_failure_code"),
     )
 
 

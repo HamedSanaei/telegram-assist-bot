@@ -69,6 +69,7 @@ markers = [
     "contract: validates adapter contracts against synthetic fixtures",
     "e2e: exercises controlled end-to-end workflows with fakes",
     "live: requires explicitly configured external services and credentials",
+    "asyncio: automatic marker from pytest-asyncio plugin",
 ]
 
 [tool.coverage.run]

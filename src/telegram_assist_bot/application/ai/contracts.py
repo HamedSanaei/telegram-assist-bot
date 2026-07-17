@@ -77,3 +77,8 @@ class AIResult(BaseModel):
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), description="Timestamp in UTC"
     )
+
+    @property
+    def payload(self) -> dict[str, Any] | None:
+        """Alias for result, kept for backward compatibility."""
+        return self.result

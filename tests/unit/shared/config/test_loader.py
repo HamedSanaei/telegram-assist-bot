@@ -21,7 +21,6 @@ from telegram_assist_bot.shared.config import (
     AiConfig,
     AiProviderConfig,
     AiRouteCandidateConfig,
-    AiTask,
     AiTaskRouteConfig,
     ApplicationConfig,
     ConfigurationEncodingError,
@@ -107,7 +106,8 @@ def test_loads_example_into_all_typed_immutable_sections(
     assert isinstance(settings.ai, AiConfig)
     assert isinstance(settings.ai.providers[0], AiProviderConfig)
     assert isinstance(settings.ai.routes[0], AiTaskRouteConfig)
-    assert settings.ai.routes[0].task is AiTask.ADVERTISEMENT_DETECTION
+    from telegram_assist_bot.application.ai.contracts import AITaskType
+    assert settings.ai.routes[0].task is AITaskType.ADVERTISEMENT_DETECTION
     assert isinstance(settings.ai.routes[0].candidates[0], AiRouteCandidateConfig)
     assert isinstance(settings.advertisements, AdvertisementConfig)
     assert isinstance(settings.advertisements.routes[0], AdvertisementRouteConfig)
