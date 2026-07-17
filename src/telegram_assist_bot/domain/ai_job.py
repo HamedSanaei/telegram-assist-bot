@@ -46,6 +46,7 @@ class AIJob:
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
     result: dict[str, Any] | None = None
+    normalized_result: dict[str, Any] | None = None
     last_error: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -364,6 +364,7 @@ def _raw_channel_identity_issues(
 def _raw_ai_issues(
     ai_value: object,
     features_value: object,
+    source_channels_value: object,
 ) -> list[ConfigurationIssue]:
     """Recover AI identity and reference issues from independently valid fields."""
     if not isinstance(ai_value, dict):
@@ -486,20 +487,53 @@ def _raw_ai_issues(
                         seen_candidates.add(identity)
 
     if isinstance(features_value, dict):
+        sources = _indexed_objects(source_channels_value)
+        advertisement_globally_enabled = (
+            features_value.get("advertisement_detection_enabled") is True
+        )
+        advertisement_effectively_enabled = False
+        if advertisement_globally_enabled:
+            for source_index, source in sources:
+                if source.get("enabled") is not True:
+                    continue
+                per_source = source.get("advertisement_detection_enabled", _MISSING)
+                if per_source is _MISSING:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(
+                                "source_channels",
+                                source_index,
+                                "advertisement_detection_enabled",
+                            ),
+                            code="missing_feature_policy",
+                            message=(
+                                "enabled source requires an explicit advertisement "
+                                "detection flag"
+                            ),
+                        )
+                    )
+                elif per_source is True:
+                    advertisement_effectively_enabled = True
         required_routes = (
             (
                 "advertisement_detection_enabled",
                 AiTask.ADVERTISEMENT_DETECTION.value,
+                advertisement_effectively_enabled,
             ),
-            ("duplicate_detection_enabled", AiTask.DUPLICATE_DETECTION.value),
-            ("ai_scoring_enabled", AiTask.CONTENT_SCORING.value),
+            (
+                "duplicate_detection_enabled",
+                AiTask.DUPLICATE_DETECTION.value,
+                features_value.get("duplicate_detection_enabled") is True,
+            ),
+            (
+                "ai_scoring_enabled",
+                AiTask.CONTENT_SCORING.value,
+                features_value.get("ai_scoring_enabled") is True,
+            ),
         )
-        for field_name, task in required_routes:
+        for field_name, task, enabled in required_routes:
             canonical_task = _canonicalize_task_name(task)
-            if (
-                features_value.get(field_name) is True
-                and canonical_task not in configured_tasks
-            ):
+            if enabled and canonical_task not in configured_tasks:
                 issues.append(
                     ConfigurationIssue(
                         path=("features", field_name),
@@ -507,6 +541,26 @@ def _raw_ai_issues(
                         message="enabled feature requires a matching AI route",
                     )
                 )
+        failure_policies = _indexed_objects(ai_value.get("failure_policies", _MISSING))
+        configured_failure_tasks = {
+            _canonicalize_task_name(task)
+            for _, policy in failure_policies
+            if isinstance((task := _raw_non_blank_string(policy, "task")), str)
+        }
+        if (
+            advertisement_effectively_enabled
+            and AiTask.ADVERTISEMENT_DETECTION.value not in configured_failure_tasks
+        ):
+            issues.append(
+                ConfigurationIssue(
+                    path=("ai", "failure_policies"),
+                    code="missing_failure_policy",
+                    message=(
+                        "enabled advertisement detection requires an explicit "
+                        "failure policy"
+                    ),
+                )
+            )
     return issues
 
 
@@ -593,6 +647,7 @@ def _raw_semantic_issues(
         _raw_ai_issues(
             document.get("ai", _MISSING),
             document.get("features", _MISSING),
+            document.get("source_channels", _MISSING),
         )
     )
     return issues

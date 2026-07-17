@@ -12,6 +12,7 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from telegram_assist_bot.application.ports import (
+    AdvertisementPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -24,12 +25,14 @@ from telegram_assist_bot.application.ports import (
     PostRepositoryUnavailableError,
     PostTransitionRequest,
 )
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
 from telegram_assist_bot.domain.posts import Post, PostId, SourceMessageIdentity
 from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
     InvalidPostDocumentError,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
     POST_DOCUMENT_SCHEMA_VERSION,
+    advertisement_processing_to_document,
     post_from_document,
     post_to_document,
     status_transition_to_document,
@@ -406,6 +409,89 @@ class MongoPostRepository:
             or persisted.version != target.version
             or persisted.status is not target.status
             or persisted.transition_history[-1] != target.transition_history[-1]
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def update_advertisement(
+        self,
+        request: AdvertisementPostUpdateRequest,
+    ) -> Post:
+        """Persist result/failure and processing state with one atomic CAS."""
+        if type(request) is not AdvertisementPostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        state_filter: MongoDocument
+        if (
+            request.expected_processing_state
+            is AdvertisementProcessingState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter = {
+                "$or": [
+                    {"advertisement_processing": {"$exists": False}},
+                    {
+                        "advertisement_processing.state": (
+                            AdvertisementProcessingState.NOT_REQUESTED.value
+                        ),
+                        "advertisement_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "advertisement_processing.state": (
+                    request.expected_processing_state.value
+                ),
+                "advertisement_processing.version": (
+                    request.expected_processing_version
+                ),
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        updated: MongoDocument | None = None
+        current: MongoDocument | None = None
+        unavailable = False
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "advertisement_processing": (
+                                advertisement_processing_to_document(target)
+                            )
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                if updated is None:
+                    current = await self._collection.find_one(
+                        {"_id": target.post_id.value}
+                    )
+        except (PyMongoError, TimeoutError):
+            unavailable = True
+        if unavailable:
+            raise PostRepositoryUnavailableError
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.post_id != target.post_id
+            or persisted.advertisement_state is not target.advertisement_state
+            or persisted.advertisement_processing_version
+            != target.advertisement_processing_version
+            or persisted.advertisement_result != target.advertisement_result
+            or persisted.advertisement_failure != target.advertisement_failure
         ):
             raise PostRepositoryDataError
         return persisted

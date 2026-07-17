@@ -70,6 +70,7 @@
       "name": "منبع فارسی 📣",
       "username": "source_example",
       "enabled": true,
+      "advertisement_detection_enabled": false,
       "default_category_id": "general",
       "allowed_destination_names": [
         "destination-fa"
@@ -182,6 +183,12 @@
             "max_attempts": 2
           }
         ]
+      }
+    ],
+    "failure_policies": [
+      {
+        "task": "advertisement_detection",
+        "action": "manual_review"
       }
     ],
     "cache_policies": [],

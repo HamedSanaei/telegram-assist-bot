@@ -275,6 +275,8 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "EnqueueJobResult",
         "AlbumFinalizationStatus",
         "AdminMessagingGateway",
+        "AdvertisementPostRepository",
+        "AdvertisementPostUpdateRequest",
         "ApprovalContent",
         "ApprovalAdministratorDeliveryState",
         "ApprovalDeliveryError",

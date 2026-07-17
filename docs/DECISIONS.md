@@ -427,3 +427,20 @@
 - **Consequences:** Cache و Audit برای کاهش مصرف سهمیه و مشاهده‌پذیری قابل استفاده‌اند،
   اما برای بازسازی payload خام Provider طراحی نشده‌اند. hash ورودی مجوز ذخیره متن
   اصلی نیست و failureهای persistence نیز فقط با reason code امن گزارش می‌شوند.
+
+## ADR-030 — سیاست صریح شکست تشخیص تبلیغ و handoff بررسی دستی
+
+- **Status:** Accepted
+- **Decision:** تشخیص تبلیغ فقط چهار policy صریح `continue_processing`،
+  `stop_processing`، `retry_later` و `manual_review` را می‌پذیرد و هیچ default ضمنی
+  ندارد. وقتی قابلیت با flag سراسری و per-source مؤثر است، policy معتبر باید در
+  Configuration وجود داشته باشد؛ در حالت غیرفعال configuration قدیمی بدون آن معتبر
+  می‌ماند. `continue_processing` شکست را نگه می‌دارد و مرحلهٔ بعد را مجاز می‌کند؛
+  `stop_processing` پردازش خودکار را متوقف می‌کند؛ `retry_later` فقط زمان‌بندی موجود
+  AIJob را مصرف می‌کند؛ و `manual_review` حالت
+  `AdvertisementManualReviewRequired` با reason ثابت
+  `advertisement_check_failed` را برای handoff Application تأیید ثبت می‌کند.
+- **Consequences:** شکست همه Providerها هرگز به نتیجهٔ «غیرتبلیغاتی» یا AIResult
+  ساختگی تبدیل نمی‌شود. مسیر دستی در T042 فقط state/contract است و Telegram UX یا
+  Runtime wiring ندارد. تغییر این چهار policy یا افزودن threshold confidence به
+  تصمیم مستقل آینده نیاز دارد.

@@ -291,6 +291,13 @@ class SourceChannelConfig(_FrozenConfigModel):
     enabled: StrictBool = Field(
         description="Whether collection from this source channel is enabled."
     )
+    advertisement_detection_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Per-source advertisement check flag; required for enabled sources "
+            "when the global feature is enabled."
+        ),
+    )
     allowed_destination_names: Annotated[
         tuple[NonBlankString, ...], Field(min_length=1)
     ] = Field(description="Destination names permitted for collected posts.")
@@ -529,10 +536,10 @@ class AiQueueConfig(_FrozenConfigModel):
 class AiTaskFailureAction(StrEnum):
     """Actions to take on final all-providers failure."""
 
-    CONTINUE = "continue"
-    STOP = "stop"
+    CONTINUE_PROCESSING = "continue_processing"
+    STOP_PROCESSING = "stop_processing"
+    RETRY_LATER = "retry_later"
     MANUAL_REVIEW = "manual_review"
-    DEFAULT_CATEGORY = "default_category"
 
 
 class AiTaskFailurePolicyConfig(_FrozenConfigModel):
@@ -569,11 +576,14 @@ class AiConfig(_FrozenConfigModel):
     )
 
     @model_validator(mode="after")
-    def validate_unique_cache_tasks(self) -> Self:
-        """Reject ambiguous duplicate cache policies after alias canonicalization."""
+    def validate_unique_task_policies(self) -> Self:
+        """Reject ambiguous duplicate task policies after alias canonicalization."""
         tasks = [policy.task for policy in self.cache_policies]
         if len(tasks) != len(set(tasks)):
             raise ValueError("AI cache policy tasks must be unique")
+        failure_tasks = [policy.task for policy in self.failure_policies]
+        if len(failure_tasks) != len(set(failure_tasks)):
+            raise ValueError("AI failure policy tasks must be unique")
         return self
 
 
@@ -651,6 +661,28 @@ class ApplicationConfig(_FrozenConfigModel):
             raise ValueError(
                 "source default_category_id references an unknown category"
             )
+        enabled_sources = [source for source in self.source_channels if source.enabled]
+        if self.features.advertisement_detection_enabled:
+            if any(
+                source.advertisement_detection_enabled is None
+                for source in enabled_sources
+            ):
+                raise ValueError(
+                    "enabled advertisement detection requires an explicit "
+                    "per-source flag"
+                )
+            advertisement_effectively_enabled = any(
+                source.advertisement_detection_enabled is True
+                for source in enabled_sources
+            )
+            if advertisement_effectively_enabled and not any(
+                policy.task is AITaskType.ADVERTISEMENT_DETECTION
+                for policy in self.ai.failure_policies
+            ):
+                raise ValueError(
+                    "enabled advertisement detection requires an explicit "
+                    "failure policy"
+                )
         destination_ids = {
             item.telegram_channel_id for item in self.destination_channels
         }

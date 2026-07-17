@@ -788,6 +788,12 @@ def test_enabled_ai_feature_requires_its_matching_route(
     for name in _FEATURE_BY_AI_TASK.values():
         features[name] = False
     features[feature_name] = True
+    if route_task is AiTask.ADVERTISEMENT_DETECTION:
+        _set_at(
+            valid_payload,
+            ("source_channels", 0, "advertisement_detection_enabled"),
+            True,
+        )
     ai = _as_object(valid_payload["ai"])
     routes = _as_list(ai["routes"])
     route = _as_object(routes[0])
@@ -803,6 +809,133 @@ def test_enabled_ai_feature_requires_its_matching_route(
         captured.value,
         f"features.{feature_name}",
     )
+
+
+def test_disabled_advertisement_detection_needs_no_explicit_source_or_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configurations remain valid while advertisement AI is disabled."""
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("advertisement_detection_enabled")
+    ai = _as_object(valid_payload["ai"])
+    ai["failure_policies"] = []
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.features.advertisement_detection_enabled is False
+    assert loaded.settings.source_channels[0].advertisement_detection_enabled is None
+
+
+def test_enabled_advertisement_detection_requires_explicit_source_flag(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Global enablement cannot silently opt an enabled source into AI."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("advertisement_detection_enabled")
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_feature_policy" in _matching_issues(
+        captured.value,
+        "source_channels[0].advertisement_detection_enabled",
+    )
+
+
+def test_effective_advertisement_detection_requires_explicit_failure_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Effective advertisement detection has no implicit failure policy."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _as_object(valid_payload["ai"])["failure_policies"] = []
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_failure_policy" in _matching_issues(
+        captured.value,
+        "ai.failure_policies",
+    )
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "continue_processing",
+        "stop_processing",
+        "retry_later",
+        "manual_review",
+    ],
+)
+def test_advertisement_failure_policy_accepts_only_approved_actions(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    action: str,
+) -> None:
+    """Every approved explicit policy value loads without becoming a default."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _set_at(valid_payload, ("ai", "failure_policies", 0, "action"), action)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.ai.failure_policies[0].action.value == action
+
+
+def test_unknown_advertisement_failure_policy_is_rejected(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """An enabled route rejects values outside the approved policy set."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _set_at(
+        valid_payload,
+        ("ai", "failure_policies", 0, "action"),
+        "implicit_default",
+    )
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "ai.failure_policies[0].action" in _paths(captured.value)
 
 
 def test_enabled_provider_requires_an_api_key_reference(

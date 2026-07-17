@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -110,3 +110,14 @@ Diff فارسی و fixtureهای متن/Reason دستی بازبینی شوند.
 - تشخیص تبلیغ idempotent، هم‌زمانی‌امن و بدون نشت Provider/Secret است.
 - تبلیغات زمان‌بندی‌شده یا سایر Featureهای AI وارد Scope نشده‌اند.
 - همه Quality Gateها و بررسی Persian/UTF-8 پاس شده‌اند.
+
+## نتیجهٔ راستی‌آزمایی
+
+- آزمون‌های واحد الزامی: `24 passed`.
+- آزمون یکپارچهٔ workflow با MongoDB محلی: `1 passed`.
+- مجموعهٔ مرتبط شامل Configuration و mapper: `168 passed`.
+- suite کامل non-live روی Python 3.12 و MongoDB محلی: `1161 passed`.
+- `uv lock --check`، Ruff، format، mypy، `git diff --check` و text-integrity برای
+  `29` فایل تغییرکرده و کل `412` فایل پاس شدند.
+- هیچ Worker، Runtime، CLI، Telegram، Approval، Publication یا Scheduling به این
+  برش ایزوله متصل نشده است؛ اقدام پیشنهادی بعدی T043 است.

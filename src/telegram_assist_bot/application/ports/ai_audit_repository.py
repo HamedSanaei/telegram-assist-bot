@@ -25,6 +25,8 @@ class AIAuditEventType(StrEnum):
     NORMALIZED_RESULT = "normalized_result"
     INVALID_PROVIDER_RESPONSE = "invalid_provider_response"
     FINAL_FAILURE = "final_failure"
+    ADVERTISEMENT_RESULT_APPLIED = "advertisement_result_applied"
+    ADVERTISEMENT_FAILURE_POLICY_APPLIED = "advertisement_failure_policy_applied"
 
 
 class AIAuditRepositoryError(Exception):

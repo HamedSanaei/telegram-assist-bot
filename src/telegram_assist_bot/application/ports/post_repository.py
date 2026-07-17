@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
 from telegram_assist_bot.domain.posts import (
     Post,
     PostId,
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 __all__ = (
+    "AdvertisementPostRepository",
+    "AdvertisementPostUpdateRequest",
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
@@ -192,6 +195,28 @@ class PostTransitionRequest:
             raise InvalidPostRepositoryRequestError
 
 
+@dataclass(frozen=True, slots=True)
+class AdvertisementPostUpdateRequest:
+    """Carry one validated advertisement-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: AdvertisementProcessingState
+
+    def __post_init__(self) -> None:
+        """Require exactly one additive processing-state step."""
+        if type(self.post) is not Post:
+            raise InvalidPostRepositoryRequestError
+        if (
+            type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.advertisement_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not AdvertisementProcessingState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
 @runtime_checkable
 class PostRepository(Protocol):
     """Persist posts without exposing storage-specific objects or exceptions."""
@@ -228,4 +253,20 @@ class PostRepository(Protocol):
 
     async def claim_for_next_stage(self, request: PostClaimRequest) -> PostClaimResult:
         """Atomically create one durable next-stage marker for a stored post."""
+        ...
+
+
+@runtime_checkable
+class AdvertisementPostRepository(Protocol):
+    """Expose only the Post reads and CAS needed by advertisement detection."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return a non-expired canonical Post."""
+        ...
+
+    async def update_advertisement(
+        self,
+        request: AdvertisementPostUpdateRequest,
+    ) -> Post:
+        """Atomically persist one advertisement result/failure state transition."""
         ...

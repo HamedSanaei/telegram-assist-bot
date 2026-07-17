@@ -76,6 +76,8 @@ from telegram_assist_bot.application.ports.operational_approval import (
     OperationalApprovalRepository,
 )
 from telegram_assist_bot.application.ports.post_repository import (
+    AdvertisementPostRepository,
+    AdvertisementPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -160,6 +162,8 @@ __all__ = (
     "AIJobRepositoryError",
     "AIProvider",
     "AdminMessagingGateway",
+    "AdvertisementPostRepository",
+    "AdvertisementPostUpdateRequest",
     "AlbumFinalizationStatus",
     "ApprovalAdministratorDeliveryState",
     "ApprovalContent",

@@ -285,6 +285,10 @@ class ExecuteAIWithFallback:
                     result=cache_result.payload or {},
                     completed_at=self.clock.utc_now(),
                 )
+                completed_job = replace(
+                    completed_job,
+                    normalized_result=cache_result.model_dump(mode="json"),
+                )
                 await self.ai_job_repository.update(completed_job)
                 return cache_result
             await self._append_audit(
@@ -597,6 +601,7 @@ class ExecuteAIWithFallback:
                 )
                 completed_job = replace(
                     completed_job,
+                    normalized_result=ai_result.model_dump(mode="json"),
                     attempts_history=attempts_history,
                     attempted_candidates_count=attempted_candidates_count,
                     retry_count=retry_count,

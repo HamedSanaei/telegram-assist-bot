@@ -329,7 +329,7 @@ async def test_fallback_pipeline_all_providers_failed_persists_properly(
             failure_policies=(
                 AiTaskFailurePolicyConfig(
                     task=AITaskType.ADVERTISEMENT_DETECTION,
-                    action=AiTaskFailureAction.CONTINUE,
+                    action=AiTaskFailureAction.CONTINUE_PROCESSING,
                 ),
             ),
         )
@@ -376,7 +376,7 @@ async def test_fallback_pipeline_all_providers_failed_persists_properly(
                 request_context=DummyContext(text="Click here for money!"),
             )
 
-        assert exc_info.value.action == AiTaskFailureAction.CONTINUE
+        assert exc_info.value.action == AiTaskFailureAction.CONTINUE_PROCESSING
 
         # Retrieve and assert final failure state
         updated_job = await repo.get_by_id("job-integration-2")

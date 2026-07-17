@@ -7,6 +7,14 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Final, Self, cast
 
+from telegram_assist_bot.domain.advertisement import (
+    ADVERTISEMENT_MANUAL_REVIEW_REASON,
+    AdvertisementCheckFailure,
+    AdvertisementCheckResult,
+    AdvertisementFailurePolicy,
+    AdvertisementProcessingState,
+    InvalidAdvertisementTransitionError,
+)
 from telegram_assist_bot.domain.posts.entities import TelegramEntity
 from telegram_assist_bot.domain.posts.errors import (
     InvalidPostIdentifierError,
@@ -149,6 +157,19 @@ class Post:
         default=(),
         repr=False,
     )
+    advertisement_state: AdvertisementProcessingState = (
+        AdvertisementProcessingState.NOT_REQUESTED
+    )
+    advertisement_processing_version: int = 0
+    advertisement_job_id: str | None = None
+    advertisement_result: AdvertisementCheckResult | None = field(
+        default=None,
+        repr=False,
+    )
+    advertisement_failure: AdvertisementCheckFailure | None = field(
+        default=None,
+        repr=False,
+    )
     expires_at: datetime = field(init=False)
 
     def __post_init__(self) -> None:
@@ -175,6 +196,28 @@ class Post:
             raise PostInvariantError
         if type(self.version) is not int or self.version < 0:
             raise InvalidPostVersionError
+        if type(self.advertisement_state) is not AdvertisementProcessingState:
+            raise PostInvariantError
+        if (
+            type(self.advertisement_processing_version) is not int
+            or self.advertisement_processing_version < 0
+        ):
+            raise PostInvariantError
+        if self.advertisement_job_id is not None and (
+            type(self.advertisement_job_id) is not str
+            or not self.advertisement_job_id
+            or self.advertisement_job_id.isspace()
+            or len(self.advertisement_job_id) > 128
+        ):
+            raise PostInvariantError
+        if self.advertisement_result is not None and (
+            type(self.advertisement_result) is not AdvertisementCheckResult
+        ):
+            raise PostInvariantError
+        if self.advertisement_failure is not None and (
+            type(self.advertisement_failure) is not AdvertisementCheckFailure
+        ):
+            raise PostInvariantError
 
         source_published_at = _canonical_utc(self.source_published_at)
         received_at = _canonical_utc(self.received_at)
@@ -188,6 +231,7 @@ class Post:
             raise PostInvariantError from None
         object.__setattr__(self, "expires_at", expires_at)
         self._validate_lifecycle_history()
+        self._validate_advertisement_state()
 
     def __eq__(self, other: object) -> bool:
         """Compare stable aggregate identity rather than mutable lifecycle state."""
@@ -278,6 +322,171 @@ class Post:
             transition_history=(*self.transition_history, transition),
         )
 
+    @property
+    def advertisement_allows_next_stage(self) -> bool:
+        """Return whether the next normal content stage may run exactly once."""
+        return self.advertisement_state.allows_next_pipeline_stage
+
+    @property
+    def advertisement_requires_manual_review(self) -> bool:
+        """Expose a typed handoff consumable by the approval application layer."""
+        return self.advertisement_state.approval_review_eligible
+
+    @property
+    def advertisement_manual_review_reason(self) -> str | None:
+        """Return the stable approval handoff reason only for manual review."""
+        if not self.advertisement_requires_manual_review:
+            return None
+        return ADVERTISEMENT_MANUAL_REVIEW_REASON
+
+    def start_advertisement_check(
+        self,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+        requested_at: datetime,
+    ) -> Self:
+        """Bind one canonical AI Job and enter the pending processing state."""
+        self._assert_advertisement_transition_context(
+            expected_processing_version,
+            requested_at,
+        )
+        if (
+            self.advertisement_state is AdvertisementProcessingState.PENDING
+            and self.advertisement_job_id == job_id
+        ):
+            return self
+        if self.advertisement_state is not AdvertisementProcessingState.NOT_REQUESTED:
+            raise InvalidAdvertisementTransitionError
+        if (
+            type(job_id) is not str
+            or not job_id
+            or job_id.isspace()
+            or len(job_id) > 128
+        ):
+            raise InvalidAdvertisementTransitionError
+        return replace(
+            self,
+            advertisement_state=AdvertisementProcessingState.PENDING,
+            advertisement_processing_version=self.advertisement_processing_version + 1,
+            advertisement_job_id=job_id,
+            advertisement_result=None,
+            advertisement_failure=None,
+        )
+
+    def apply_advertisement_result(
+        self,
+        result: AdvertisementCheckResult,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Self:
+        """Apply one validated result without a confidence-threshold policy."""
+        if type(result) is not AdvertisementCheckResult:
+            raise InvalidAdvertisementTransitionError
+        self._assert_advertisement_transition_context(
+            expected_processing_version,
+            result.checked_at,
+        )
+        target = (
+            AdvertisementProcessingState.REJECTED_AS_ADVERTISEMENT
+            if result.is_advertisement
+            else AdvertisementProcessingState.PASSED
+        )
+        if (
+            self.advertisement_state is target
+            and self.advertisement_job_id == job_id
+            and self.advertisement_result == result
+        ):
+            return self
+        if (
+            self.advertisement_state
+            not in {
+                AdvertisementProcessingState.PENDING,
+                AdvertisementProcessingState.RETRY_PENDING,
+            }
+            or self.advertisement_job_id != job_id
+        ):
+            raise InvalidAdvertisementTransitionError
+        return replace(
+            self,
+            advertisement_state=target,
+            advertisement_processing_version=self.advertisement_processing_version + 1,
+            advertisement_result=result,
+            advertisement_failure=None,
+        )
+
+    def apply_advertisement_failure(
+        self,
+        failure: AdvertisementCheckFailure,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Self:
+        """Apply one approved failure policy without fabricating classification."""
+        if type(failure) is not AdvertisementCheckFailure:
+            raise InvalidAdvertisementTransitionError
+        self._assert_advertisement_transition_context(
+            expected_processing_version,
+            failure.failed_at,
+        )
+        target_by_policy = {
+            AdvertisementFailurePolicy.CONTINUE_PROCESSING: (
+                AdvertisementProcessingState.FAILED_CONTINUE
+            ),
+            AdvertisementFailurePolicy.STOP_PROCESSING: (
+                AdvertisementProcessingState.PROCESSING_STOPPED
+            ),
+            AdvertisementFailurePolicy.RETRY_LATER: (
+                AdvertisementProcessingState.RETRY_PENDING
+            ),
+            AdvertisementFailurePolicy.MANUAL_REVIEW: (
+                AdvertisementProcessingState.MANUAL_REVIEW_REQUIRED
+            ),
+        }
+        target = target_by_policy[failure.policy]
+        if (
+            self.advertisement_state is target
+            and self.advertisement_job_id == job_id
+            and self.advertisement_failure == failure
+        ):
+            return self
+        if (
+            self.advertisement_state
+            not in {
+                AdvertisementProcessingState.PENDING,
+                AdvertisementProcessingState.RETRY_PENDING,
+            }
+            or self.advertisement_job_id != job_id
+        ):
+            raise InvalidAdvertisementTransitionError
+        if (
+            failure.policy is AdvertisementFailurePolicy.RETRY_LATER
+            and failure.next_retry_at is None
+        ):
+            raise InvalidAdvertisementTransitionError
+        return replace(
+            self,
+            advertisement_state=target,
+            advertisement_processing_version=self.advertisement_processing_version + 1,
+            advertisement_result=None,
+            advertisement_failure=failure,
+        )
+
+    def _assert_advertisement_transition_context(
+        self,
+        expected_processing_version: int,
+        occurred_at: datetime,
+    ) -> None:
+        """Reject stale or lifecycle-ineligible advertisement state updates."""
+        if (
+            type(expected_processing_version) is not int
+            or expected_processing_version != self.advertisement_processing_version
+            or self.status is not PostStatus.STORED
+            or self.is_expired_at(occurred_at)
+        ):
+            raise InvalidAdvertisementTransitionError
+
     def _validate_transition_timing(
         self,
         new_status: PostStatus,
@@ -316,6 +525,65 @@ class Post:
             expected_previous = transition.new_status
             previous_time = transition.occurred_at
         if self.status is not expected_previous:
+            raise PostInvariantError
+
+    def _validate_advertisement_state(self) -> None:
+        """Validate additive processing state independently from lifecycle history."""
+        state = self.advertisement_state
+        result = self.advertisement_result
+        failure = self.advertisement_failure
+        job_id = self.advertisement_job_id
+        if state is AdvertisementProcessingState.NOT_REQUESTED:
+            if (
+                self.advertisement_processing_version != 0
+                or job_id is not None
+                or result is not None
+                or failure is not None
+            ):
+                raise PostInvariantError
+            return
+        if job_id is None or self.advertisement_processing_version < 1:
+            raise PostInvariantError
+        if state is AdvertisementProcessingState.PENDING:
+            if result is not None or failure is not None:
+                raise PostInvariantError
+            return
+        if state is AdvertisementProcessingState.RETRY_PENDING:
+            if (
+                result is not None
+                or failure is None
+                or failure.policy is not AdvertisementFailurePolicy.RETRY_LATER
+                or failure.next_retry_at is None
+            ):
+                raise PostInvariantError
+            return
+        if state in {
+            AdvertisementProcessingState.PASSED,
+            AdvertisementProcessingState.REJECTED_AS_ADVERTISEMENT,
+        }:
+            if result is None or failure is not None:
+                raise PostInvariantError
+            if (
+                state is AdvertisementProcessingState.PASSED
+            ) is result.is_advertisement:
+                raise PostInvariantError
+            return
+        expected_policy = {
+            AdvertisementProcessingState.FAILED_CONTINUE: (
+                AdvertisementFailurePolicy.CONTINUE_PROCESSING
+            ),
+            AdvertisementProcessingState.PROCESSING_STOPPED: (
+                AdvertisementFailurePolicy.STOP_PROCESSING
+            ),
+            AdvertisementProcessingState.MANUAL_REVIEW_REQUIRED: (
+                AdvertisementFailurePolicy.MANUAL_REVIEW
+            ),
+        }.get(state)
+        if (
+            result is not None
+            or failure is None
+            or failure.policy is not expected_policy
+        ):
             raise PostInvariantError
 
 

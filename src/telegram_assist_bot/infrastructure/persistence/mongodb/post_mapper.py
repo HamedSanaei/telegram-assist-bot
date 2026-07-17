@@ -6,6 +6,13 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Final, Literal, overload
 
+from telegram_assist_bot.domain.advertisement import (
+    AdvertisementCheckFailure,
+    AdvertisementCheckResult,
+    AdvertisementDomainError,
+    AdvertisementFailurePolicy,
+    AdvertisementProcessingState,
+)
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -44,6 +51,41 @@ _ROOT_FIELDS: Final[frozenset[str]] = frozenset(
         "transition_history",
         "next_stage_claimed_at",
         "next_stage_claim_correlation_id",
+        "advertisement_processing",
+    }
+)
+_ADVERTISEMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"state", "version", "job_id", "result", "failure"}
+)
+_ADVERTISEMENT_RESULT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "is_advertisement",
+        "confidence",
+        "reason",
+        "provider_name",
+        "model_name",
+        "checked_at",
+        "checked_at_microsecond_remainder",
+        "prompt_version",
+        "schema_version",
+        "attempt_number",
+        "fallback_count",
+        "cache_hit",
+        "cache_age_seconds",
+    }
+)
+_ADVERTISEMENT_FAILURE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "policy",
+        "failure_category",
+        "failure_type",
+        "failed_at",
+        "failed_at_microsecond_remainder",
+        "attempted_candidates_count",
+        "retry_count",
+        "fallback_count",
+        "next_retry_at",
+        "next_retry_at_microsecond_remainder",
     }
 )
 _CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -108,6 +150,23 @@ def _require_integer(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise InvalidPostDocumentError
     return int(value)
+
+
+@overload
+def _require_float(value: object, *, optional: Literal[False] = False) -> float: ...
+
+
+@overload
+def _require_float(value: object, *, optional: Literal[True]) -> float | None: ...
+
+
+def _require_float(value: object, *, optional: bool = False) -> float | None:
+    """Return an exact BSON double without accepting integers or coercion."""
+    if optional and value is None:
+        return None
+    if type(value) is not float:
+        raise InvalidPostDocumentError
+    return value
 
 
 def _canonical_document_datetime(value: object) -> datetime:
@@ -283,6 +342,144 @@ def _original_content_from_document(value: object) -> OriginalPostContent:
         raise InvalidPostDocumentError from None
 
 
+def advertisement_processing_to_document(post: Post) -> dict[str, object]:
+    """Serialize the additive advertisement state for atomic repository updates."""
+    result_document: dict[str, object] | None = None
+    if post.advertisement_result is not None:
+        result = post.advertisement_result
+        checked_at, checked_remainder = _floor_to_millisecond(result.checked_at)
+        result_document = {
+            "is_advertisement": result.is_advertisement,
+            "confidence": result.confidence,
+            "reason": result.reason,
+            "provider_name": result.provider_name,
+            "model_name": result.model_name,
+            "checked_at": checked_at,
+            "checked_at_microsecond_remainder": checked_remainder,
+            "prompt_version": result.prompt_version,
+            "schema_version": result.schema_version,
+            "attempt_number": result.attempt_number,
+            "fallback_count": result.fallback_count,
+            "cache_hit": result.cache_hit,
+            "cache_age_seconds": result.cache_age_seconds,
+        }
+    failure_document: dict[str, object] | None = None
+    if post.advertisement_failure is not None:
+        failure = post.advertisement_failure
+        failed_at, failed_remainder = _floor_to_millisecond(failure.failed_at)
+        next_retry_at: datetime | None = None
+        next_retry_remainder = 0
+        if failure.next_retry_at is not None:
+            next_retry_at, next_retry_remainder = _floor_to_millisecond(
+                failure.next_retry_at
+            )
+        failure_document = {
+            "policy": failure.policy.value,
+            "failure_category": failure.failure_category,
+            "failure_type": failure.failure_type,
+            "failed_at": failed_at,
+            "failed_at_microsecond_remainder": failed_remainder,
+            "attempted_candidates_count": failure.attempted_candidates_count,
+            "retry_count": failure.retry_count,
+            "fallback_count": failure.fallback_count,
+            "next_retry_at": next_retry_at,
+            "next_retry_at_microsecond_remainder": next_retry_remainder,
+        }
+    return {
+        "state": post.advertisement_state.value,
+        "version": post.advertisement_processing_version,
+        "job_id": post.advertisement_job_id,
+        "result": result_document,
+        "failure": failure_document,
+    }
+
+
+def _advertisement_result_from_document(value: object) -> AdvertisementCheckResult:
+    document = _require_mapping(value, rule="invalid_advertisement_result")
+    _require_exact_fields(document, _ADVERTISEMENT_RESULT_FIELDS)
+    if type(document["is_advertisement"]) is not bool:
+        raise InvalidPostDocumentError
+    if type(document["cache_hit"]) is not bool:
+        raise InvalidPostDocumentError
+    return AdvertisementCheckResult(
+        is_advertisement=document["is_advertisement"],
+        confidence=_require_float(document["confidence"]),
+        reason=_require_string(document["reason"]),
+        provider_name=_require_string(document["provider_name"]),
+        model_name=_require_string(document["model_name"]),
+        checked_at=_restore_floor_datetime(
+            document["checked_at"],
+            document["checked_at_microsecond_remainder"],
+        ),
+        prompt_version=_require_string(document["prompt_version"]),
+        schema_version=_require_string(document["schema_version"]),
+        attempt_number=_require_integer(document["attempt_number"]),
+        fallback_count=_require_integer(document["fallback_count"]),
+        cache_hit=document["cache_hit"],
+        cache_age_seconds=_require_float(document["cache_age_seconds"], optional=True),
+    )
+
+
+def _advertisement_failure_from_document(
+    value: object,
+) -> AdvertisementCheckFailure:
+    document = _require_mapping(value, rule="invalid_advertisement_failure")
+    _require_exact_fields(document, _ADVERTISEMENT_FAILURE_FIELDS)
+    next_retry_at = None
+    if document["next_retry_at"] is not None:
+        next_retry_at = _restore_floor_datetime(
+            document["next_retry_at"],
+            document["next_retry_at_microsecond_remainder"],
+        )
+    elif _require_integer(document["next_retry_at_microsecond_remainder"]) != 0:
+        raise InvalidPostDocumentError
+    return AdvertisementCheckFailure(
+        policy=AdvertisementFailurePolicy(_require_string(document["policy"])),
+        failure_category=_require_string(document["failure_category"]),
+        failure_type=_require_string(document["failure_type"]),
+        failed_at=_restore_floor_datetime(
+            document["failed_at"],
+            document["failed_at_microsecond_remainder"],
+        ),
+        attempted_candidates_count=_require_integer(
+            document["attempted_candidates_count"]
+        ),
+        retry_count=_require_integer(document["retry_count"]),
+        fallback_count=_require_integer(document["fallback_count"]),
+        next_retry_at=next_retry_at,
+    )
+
+
+def _advertisement_processing_from_document(
+    value: object,
+) -> tuple[
+    AdvertisementProcessingState,
+    int,
+    str | None,
+    AdvertisementCheckResult | None,
+    AdvertisementCheckFailure | None,
+]:
+    document = _require_mapping(value, rule="invalid_advertisement_processing")
+    _require_exact_fields(document, _ADVERTISEMENT_FIELDS)
+    result = (
+        None
+        if document["result"] is None
+        else _advertisement_result_from_document(document["result"])
+    )
+    failure = (
+        None
+        if document["failure"] is None
+        else _advertisement_failure_from_document(document["failure"])
+    )
+    return (
+        AdvertisementProcessingState(_require_string(document["state"])),
+        _require_integer(document["version"]),
+        _require_string(document["job_id"], optional=True),
+        result,
+        failure,
+    )
+
+
 def post_to_document(post: Post) -> dict[str, object]:
     """Serialize a post aggregate into the exact version-1 document schema."""
     if type(post) is not Post:
@@ -314,6 +511,7 @@ def post_to_document(post: Post) -> dict[str, object]:
         ],
         "next_stage_claimed_at": None,
         "next_stage_claim_correlation_id": None,
+        "advertisement_processing": advertisement_processing_to_document(post),
     }
 
 
@@ -328,6 +526,14 @@ def post_from_document(value: object) -> Post:
     if not has_claim_time:
         document["next_stage_claimed_at"] = None
         document["next_stage_claim_correlation_id"] = None
+    if "advertisement_processing" not in document:
+        document["advertisement_processing"] = {
+            "state": AdvertisementProcessingState.NOT_REQUESTED.value,
+            "version": 0,
+            "job_id": None,
+            "result": None,
+            "failure": None,
+        }
     _require_exact_fields(document, _ROOT_FIELDS)
     if (
         document["schema_version"] != POST_DOCUMENT_SCHEMA_VERSION
@@ -347,6 +553,9 @@ def post_from_document(value: object) -> Post:
     expires_at = _restore_ceil_datetime(
         document["expires_at"],
         document["expires_at_microsecond_remainder"],
+    )
+    advertisement = _advertisement_processing_from_document(
+        document["advertisement_processing"]
     )
     try:
         post = Post(
@@ -378,8 +587,13 @@ def post_from_document(value: object) -> Post:
             transition_history=tuple(
                 _transition_from_document(item) for item in history_value
             ),
+            advertisement_state=advertisement[0],
+            advertisement_processing_version=advertisement[1],
+            advertisement_job_id=advertisement[2],
+            advertisement_result=advertisement[3],
+            advertisement_failure=advertisement[4],
         )
-    except (PostDomainError, ValueError):
+    except (AdvertisementDomainError, PostDomainError, ValueError):
         raise InvalidPostDocumentError from None
     if post.expires_at != expires_at:
         raise InvalidPostDocumentError("invalid_expiration")
@@ -389,6 +603,7 @@ def post_from_document(value: object) -> Post:
 __all__ = [
     "POST_DOCUMENT_SCHEMA_VERSION",
     "InvalidPostDocumentError",
+    "advertisement_processing_to_document",
     "post_from_document",
     "post_to_document",
     "status_transition_to_document",
