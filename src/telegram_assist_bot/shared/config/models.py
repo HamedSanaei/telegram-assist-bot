@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Final, Literal, Self
+from typing import Annotated, ClassVar, Final, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -20,6 +20,8 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
+
+from telegram_assist_bot.application.ai.contracts import AITaskType
 
 SUPPORTED_CONFIGURATION_SCHEMA_VERSION: Final[int] = 1
 """The only configuration schema version supported by this release."""
@@ -120,9 +122,6 @@ class LogLevel(StrEnum):
     CRITICAL = "CRITICAL"
 
 
-from telegram_assist_bot.application.ai.contracts import AITaskType
-
-
 class AiTask(StrEnum):
     """AI task names that can be assigned an ordered route."""
 
@@ -131,13 +130,13 @@ class AiTask(StrEnum):
     CONTENT_SCORING = "content_scoring"
 
 
-def _map_ai_task_alias(v: Any) -> Any:
-    if isinstance(v, str):
-        if v == "duplicate_detection":
+def _map_ai_task_alias(value: object) -> object:
+    if isinstance(value, str):
+        if value == "duplicate_detection":
             return "semantic_duplicate"
-        if v == "content_scoring":
+        if value == "content_scoring":
             return "scoring"
-    return v
+    return value
 
 
 StrictLogLevel = Annotated[LogLevel, BeforeValidator(_require_string_input)]
@@ -148,7 +147,7 @@ StrictAiTask = Annotated[
     BeforeValidator(_map_ai_task_alias),
     BeforeValidator(_require_string_input),
 ]
-"""An AI task enum parsed only from an exact string scalar, mapping legacy aliases to canonical AITaskType."""
+"""A strict AI task enum that maps the two supported legacy aliases."""
 
 
 class _FrozenConfigModel(BaseModel):
@@ -423,6 +422,18 @@ class AiProviderConfig(_FrozenConfigModel):
     )
 
 
+class AiProviderGuardConfig(_FrozenConfigModel):
+    """Explicit request-capacity and circuit policy for one route candidate."""
+
+    concurrency_limit: Annotated[StrictInt, Field(ge=1, le=1000)]
+    request_limit: Annotated[StrictInt, Field(ge=1, le=1_000_000)]
+    request_window_seconds: Annotated[StrictInt, Field(ge=1, le=86400)]
+    reservation_seconds: Annotated[StrictInt, Field(ge=1, le=3600)]
+    failure_threshold: Annotated[StrictInt, Field(ge=1, le=1000)]
+    open_seconds: Annotated[StrictInt, Field(ge=1, le=86400)]
+    rate_limit_cooldown_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] | None
+
+
 class AiRouteCandidateConfig(_FrozenConfigModel):
     """Describe one bounded model attempt in an ordered AI route."""
 
@@ -438,6 +449,12 @@ class AiRouteCandidateConfig(_FrozenConfigModel):
     )
     max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = Field(
         description="Bounded total attempts, including the initial attempt."
+    )
+    guard_policy: AiProviderGuardConfig | None = Field(
+        default=None,
+        description=(
+            "Explicit T040 guard policy; required before an enabled candidate executes."
+        ),
     )
 
 
@@ -492,7 +509,9 @@ class AiTaskFailurePolicyConfig(_FrozenConfigModel):
     """Define failure policy for a task."""
 
     task: StrictAiTask = Field(description="AI task this failure policy applies to.")
-    action: AiTaskFailureAction = Field(description="Action to take when all providers fail.")
+    action: AiTaskFailureAction = Field(
+        description="Action to take when all providers fail."
+    )
 
 
 class AiConfig(_FrozenConfigModel):
@@ -509,8 +528,7 @@ class AiConfig(_FrozenConfigModel):
         description="Configured AI task routes."
     )
     failure_policies: tuple[AiTaskFailurePolicyConfig, ...] = Field(
-        default=(),
-        description="Configured AI task failure policies."
+        default=(), description="Configured AI task failure policies."
     )
 
 
@@ -619,6 +637,7 @@ __all__ = [
     "AdvertisementRouteConfig",
     "AiConfig",
     "AiProviderConfig",
+    "AiProviderGuardConfig",
     "AiRouteCandidateConfig",
     "AiTask",
     "AiTaskRouteConfig",

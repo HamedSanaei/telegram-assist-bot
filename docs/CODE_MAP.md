@@ -202,6 +202,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `domain/posts/status.py` | Enumها، جدول immutable Transition و history recordهای UTC |
 | `domain/posts/errors.py` | Exceptionهای Domain برای invariant، زمان، transition، version و تغییر محتوای اصلی |
 | `domain/ai_job.py` | مدل دامنه صف کارهای AI شامل وضعیت‌ها، مهلت اجاره (lease)، کنترل همروندی خوش‌بینانه و اعتبارسنجی |
+| `domain/ai/provider_health.py` | وضعیت مستقل Provider/Model، Reservationهای چندگانه، پنجره ثابت درخواست و ماشین Closed/Open/HalfOpen |
 | `domain/posts/__init__.py` | API عمومی و مستند قرارداد Post Domain |
 | `domain/media/` | هویت و metadata immutable فایل Media بدون وابستگی به Filesystem/Telegram |
 | `domain/duplicates/` | نتیجهٔ نسخه‌دار duplicate دقیق و reference تطبیق‌یافته |
@@ -213,6 +214,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
 | `application/ports/ai_job_repository.py` | قرارداد درگاه پایدار صف کارهای هوش مصنوعی |
 | `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
+| `application/ports/provider_state_repository.py` | Port رزرو اتمیک ظرفیت و ثبت outcome تایپ‌شدهٔ Provider/Model |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
@@ -238,8 +240,10 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
 | `application/ai/routing.py` | انتخاب و رتبه‌بندی قطعی کاندیداهای کارهای AI بر اساس نوع وظیفه و اولویت |
 | `application/ai/retry.py` | اجرای نامتقارن و بازآزمایی خطاهای گذرا با Backoff و Jitter روی مدل‌های هوش مصنوعی |
+| `application/ai/provider_guard.py` | Guard هر تلاش خارجی با policy صریح، Reservation پایدار، outcome امن و nearest eligibility |
 | `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور اجرای وظایف AI با انتخاب کاندیدا، بازآزمایی و Fallback نهایی |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
+| `infrastructure/mongodb/provider_state_repository.py` | Adapter اتمیک MongoDB برای ظرفیت، پنجره درخواست، Cooldown، Circuit و Reservationهای بدون TTL |
 | `infrastructure/ai/z_ai.py` | آداپتور تک-Attempt ارائه‌دهنده z-ai با مدل glm-4.7-flash، رد هدایت مجدد و Base URL غیراستاندارد، و طبقه‌بندی و پاک‌سازی خطاها |
 | `infrastructure/ai/deepseek.py` | آداپتور تک-Attempt DeepSeek برای Modelهای allowlisted v4، با capability ثابت، host/redirect allowlist، سقف پاسخ و خطاهای redacted؛ بدون Retry/Fallback و بدون اتصال Runtime |
 | `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |

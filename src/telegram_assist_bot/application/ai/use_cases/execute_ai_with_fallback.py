@@ -6,6 +6,11 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from telegram_assist_bot.application.ai.contracts import AITaskType
+from telegram_assist_bot.application.ai.provider_guard import (
+    AllProvidersTemporarilyUnavailableError,
+    ProviderAttemptGuard,
+    ProviderTemporarilyUnavailableError,
+)
 from telegram_assist_bot.application.ai.response_normalizer import ResponseNormalizer
 from telegram_assist_bot.application.ai.response_parser import ResponseParser
 from telegram_assist_bot.application.ai.response_validator import ResponseValidator
@@ -16,6 +21,8 @@ from telegram_assist_bot.domain.ai_job import AIJobStatus
 from telegram_assist_bot.shared.errors import ConfigurationError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pydantic import BaseModel
 
     from telegram_assist_bot.application.ai.contracts import AIResult
@@ -44,11 +51,12 @@ class ExecuteAIWithFallback:
     def __init__(
         self,
         config: AiConfig,
-        providers_by_name: dict[str, AIProvider],
+        providers_by_name: Mapping[str, AIProvider],
         ai_job_repository: AIJobRepository,
         clock: Clock,
         sleeper: AsyncSleeper,
         jitter_source: JitterSource,
+        provider_guard: ProviderAttemptGuard,
     ) -> None:
         """Initialize the orchestrator."""
         self.config = config
@@ -57,6 +65,7 @@ class ExecuteAIWithFallback:
         self.clock = clock
         self.sleeper = sleeper
         self.jitter_source = jitter_source
+        self.provider_guard = provider_guard
 
     async def execute(
         self,
@@ -101,19 +110,20 @@ class ExecuteAIWithFallback:
         fallback_count = 0
         attempted_candidates_count = 0
         safe_last_failure_code = None
+        temporary_unavailability: list[ProviderTemporarilyUnavailableError] = []
 
         # 4. Iterate over route candidates
         for fallback_idx, candidate in enumerate(candidates):
-            provider = self.providers_by_name.get(candidate.provider_name)
-            if not provider:
+            provider_instance = self.providers_by_name.get(candidate.provider_name)
+            if provider_instance is None:
                 raise ConfigurationError(
                     cause=ValueError(
                         f"Instance for provider "
                         f"'{candidate.provider_name}' not provided"
                     )
                 )
+            provider: AIProvider = provider_instance
 
-            attempted_candidates_count += 1
             if fallback_idx > 0:
                 fallback_count += 1
 
@@ -125,101 +135,100 @@ class ExecuteAIWithFallback:
                 fallback_idx: int = fallback_idx,
             ) -> AIResult:
                 nonlocal current_attempt_in_candidate, retry_count
+                nonlocal attempted_candidates_count
                 nonlocal safe_last_failure_code
-                current_attempt_in_candidate += 1
-                if current_attempt_in_candidate > 1:
-                    retry_count += 1
 
-                start_time = self.clock.utc_now()
-                success = False
-                failure_category = None
-                prompt_tokens = None
-                completion_tokens = None
-                total_tokens = None
-                err_to_classify = None
+                async def external_attempt() -> AIResult:
+                    nonlocal current_attempt_in_candidate, retry_count
+                    nonlocal attempted_candidates_count
+                    nonlocal safe_last_failure_code
+                    current_attempt_in_candidate += 1
+                    if current_attempt_in_candidate == 1:
+                        attempted_candidates_count += 1
+                    else:
+                        retry_count += 1
 
-                try:
-                    # Execute
-                    raw_envelope = await provider.execute_attempt(
-                        task_type=task_type,
-                        prompt=prompt_text,
-                        request_context=request_context,
-                        provider_name=candidate.provider_name,
-                        model_name=candidate.model_name,
-                        timeout_seconds=float(candidate.timeout_seconds),
-                    )
+                    start_time = self.clock.utc_now()
+                    success = False
+                    failure_category = None
+                    prompt_tokens = None
+                    completion_tokens = None
+                    total_tokens = None
+                    err_to_classify = None
 
-                    # Parse
-                    parser = ResponseParser()
-                    parsed_payload, _ = parser.parse(raw_envelope)
+                    try:
+                        raw_envelope = await provider.execute_attempt(
+                            task_type=task_type,
+                            prompt=prompt_text,
+                            request_context=request_context,
+                            provider_name=candidate.provider_name,
+                            model_name=candidate.model_name,
+                            timeout_seconds=float(candidate.timeout_seconds),
+                        )
+                        parsed_payload, _ = ResponseParser().parse(raw_envelope)
+                        validated_output = ResponseValidator().validate(
+                            parsed_payload, task_type, job.schema_version
+                        )
+                        ai_result = ResponseNormalizer().normalize(
+                            envelope=raw_envelope,
+                            validated_model=validated_output,
+                            task_type=task_type,
+                            provider_name=candidate.provider_name,
+                            model_name=candidate.model_name,
+                            prompt_version=job.prompt_version,
+                            schema_version=job.schema_version,
+                            attempt_number=current_attempt_in_candidate,
+                            fallback_count=fallback_idx,
+                        )
+                        prompt_tokens = raw_envelope.input_tokens
+                        completion_tokens = raw_envelope.output_tokens
+                        total_tokens = (
+                            (prompt_tokens or 0) + (completion_tokens or 0)
+                            if prompt_tokens is not None
+                            or completion_tokens is not None
+                            else None
+                        )
+                        success = True
+                        return ai_result
+                    except Exception as err:
+                        err_to_classify = err
+                        from telegram_assist_bot.shared.errors import classify_error
 
-                    # Validate
-                    validator = ResponseValidator()
-                    validated_output = validator.validate(
-                        parsed_payload, task_type, job.schema_version
-                    )
+                        failure_category = classify_error(err).category.value
+                        safe_last_failure_code = failure_category
+                        raise
+                    finally:
+                        from telegram_assist_bot.shared.errors import classify_error
 
-                    # Normalize
-                    normalizer = ResponseNormalizer()
-                    ai_result = normalizer.normalize(
-                        envelope=raw_envelope,
-                        validated_model=validated_output,
-                        task_type=task_type,
-                        provider_name=candidate.provider_name,
-                        model_name=candidate.model_name,
-                        prompt_version=job.prompt_version,
-                        schema_version=job.schema_version,
-                        attempt_number=current_attempt_in_candidate,
-                        fallback_count=fallback_idx,
-                    )
+                        duration = (self.clock.utc_now() - start_time).total_seconds()
+                        attempts_history.append(
+                            {
+                                "sequence_number": len(attempts_history) + 1,
+                                "provider_name": candidate.provider_name,
+                                "model_name": candidate.model_name,
+                                "internal_attempt_number": current_attempt_in_candidate,
+                                "fallback_index": fallback_idx,
+                                "duration_seconds": duration,
+                                "success": success,
+                                "failure_category": failure_category,
+                                "retryable": (
+                                    classify_error(err_to_classify).retryable
+                                    if not success and err_to_classify
+                                    else None
+                                ),
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": total_tokens,
+                            }
+                        )
 
-                    # Safe tokens
-                    prompt_tokens = raw_envelope.input_tokens
-                    completion_tokens = raw_envelope.output_tokens
-                    total_tokens = (
-                        (prompt_tokens or 0) + (completion_tokens or 0)
-                        if prompt_tokens is not None
-                        or completion_tokens is not None
-                        else None
-                    )
-
-                    success = True
-                    return ai_result
-
-                except Exception as err:
-                    err_to_classify = err
-                    import traceback
-                    traceback.print_exc()
-                    from telegram_assist_bot.shared.errors import classify_error
-                    classification = classify_error(err)
-                    failure_category = classification.category.value
-                    safe_last_failure_code = failure_category
-                    raise
-
-                finally:
-                    end_time = self.clock.utc_now()
-                    duration = (end_time - start_time).total_seconds()
-
-                    from telegram_assist_bot.shared.errors import classify_error
-                    # Build attempt telemetry record
-                    attempt_record = {
-                        "sequence_number": len(attempts_history) + 1,
-                        "provider_name": candidate.provider_name,
-                        "model_name": candidate.model_name,
-                        "internal_attempt_number": current_attempt_in_candidate,
-                        "fallback_index": fallback_idx,
-                        "duration_seconds": duration,
-                        "success": success,
-                        "failure_category": failure_category,
-                        "retryable": (
-                            classify_error(err_to_classify).retryable
-                            if not success and err_to_classify else None
-                        ),
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": total_tokens,
-                    }
-                    attempts_history.append(attempt_record)
+                return await self.provider_guard.execute(
+                    provider_name=candidate.provider_name,
+                    model_name=candidate.model_name,
+                    owner_id=owner,
+                    policy=candidate.guard_policy,
+                    operation=external_attempt,
+                )
 
             try:
                 # Bounded retry on the model
@@ -233,7 +242,7 @@ class ExecuteAIWithFallback:
                 # First valid result completes the job
                 completed_job = job.complete(
                     owner=owner,
-                    result=ai_result.payload,
+                    result=ai_result.payload or {},
                     completed_at=self.clock.utc_now(),
                 )
                 completed_job = replace(
@@ -247,17 +256,25 @@ class ExecuteAIWithFallback:
                 await self.ai_job_repository.update(completed_job)
                 return ai_result
 
+            except ProviderTemporarilyUnavailableError as error:
+                temporary_unavailability.append(error)
+                continue
             except Exception:  # noqa: BLE001, S112
                 # Fallback to the next candidate
                 continue
 
         # 5. If we reach here, all providers/candidates failed
+        if attempted_candidates_count == 0 and temporary_unavailability:
+            times = [
+                error.next_eligible_at
+                for error in temporary_unavailability
+                if error.next_eligible_at is not None
+            ]
+            raise AllProvidersTemporarilyUnavailableError(min(times) if times else None)
         failed_job = job.fail(
             owner=owner,
             error=f"All providers failed. Last failure: {safe_last_failure_code}",
-            next_run_delay_seconds=float(
-                self.config.queue.next_run_delay_seconds
-            ),
+            next_run_delay_seconds=float(self.config.queue.next_run_delay_seconds),
             failed_at=self.clock.utc_now(),
         )
         failed_job = replace(

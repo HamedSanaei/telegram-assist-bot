@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from telegram_assist_bot.shared.errors import classify_error
 from telegram_assist_bot.shared.retry.policy import RetryPolicy
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 
 class AsyncSleeper(Protocol):

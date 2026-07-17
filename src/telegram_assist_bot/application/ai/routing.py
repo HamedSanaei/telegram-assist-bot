@@ -61,7 +61,8 @@ def select_route_candidates(
 ) -> list[AiRouteCandidateConfig]:
     """Selects and orders enabled AI route candidates for a given task type.
 
-    Performs strict route validation and raises ConfigurationError on invalid definitions.
+    Performs strict route validation and raises ``ConfigurationError`` for invalid
+    definitions.
     """
     # 1. Locate route for task_type
     target_route = None
@@ -131,8 +132,7 @@ def select_route_candidates(
         if providers_map[p_name].enabled:
             validated_candidates.append((candidate, index))
 
-    # 3. Sort candidates by priority (ascending), using original_index as a stable tie-breaker
-    # Key: (priority, original_index)
+    # Sort by ascending priority and retain original order as a stable tie-breaker.
     validated_candidates.sort(key=lambda item: (item[0].priority, item[1]))
 
     return [item[0] for item in validated_candidates]

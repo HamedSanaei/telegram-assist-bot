@@ -78,6 +78,11 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryUnavailableError,
     PostTransitionRequest,
 )
+from telegram_assist_bot.application.ports.provider_state_repository import (
+    ProviderReservationResult,
+    ProviderStateRepository,
+    ProviderStateRepositoryError,
+)
 from telegram_assist_bot.application.ports.publication import (
     PublicationClaimOutcome,
     PublicationClaimResult,
@@ -188,6 +193,9 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "ProviderReservationResult",
+    "ProviderStateRepository",
+    "ProviderStateRepositoryError",
     "PublicationClaimOutcome",
     "PublicationClaimResult",
     "PublicationMedia",

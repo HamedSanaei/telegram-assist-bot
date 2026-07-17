@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import BaseModel
@@ -36,6 +36,14 @@ from telegram_assist_bot.shared.errors import (
     PermissionDeniedError,
     TransientOperationError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
+    from telegram_assist_bot.application.ports.ai_job_repository import (
+        EnqueueJobResult,
+    )
+    from telegram_assist_bot.shared.config import AiProviderGuardConfig
 
 
 def async_test(function: object) -> object:
@@ -82,11 +90,26 @@ class FakeJitter:
         return self.ratio
 
 
+class PassThroughProviderGuard:
+    """Test guard preserving legacy T039 scenarios without external state."""
+
+    async def execute[T](
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        owner_id: str,
+        policy: AiProviderGuardConfig | None,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        return await operation()
+
+
 class FakeAIProvider(AIProvider):
     """Fake AI provider configured to return canned responses or raise errors."""
 
-    def __init__(self, behavior: list[RawResponseEnvelope | Exception]) -> None:
-        self.behavior = behavior
+    def __init__(self, behavior: Sequence[RawResponseEnvelope | BaseException]) -> None:
+        self.behavior = list(behavior)
         self.calls: list[dict[str, Any]] = []
 
     async def execute_attempt(
@@ -121,13 +144,22 @@ class FakeAIJobRepository(AIJobRepository):
     def __init__(self, jobs: dict[str, AIJob]) -> None:
         self.jobs = jobs
 
-    async def enqueue(self, job: AIJob) -> None:
+    async def enqueue(self, job: AIJob) -> EnqueueJobResult:
         self.jobs[job.job_id] = job
+        from telegram_assist_bot.application.ports.ai_job_repository import (
+            EnqueueJobOutcome,
+            EnqueueJobResult,
+        )
 
-    async def claim_due_jobs(
-        self, owner: str, limit: int, lease_duration_seconds: float
-    ) -> list[AIJob]:
-        return []
+        return EnqueueJobResult(outcome=EnqueueJobOutcome.CREATED, job=job)
+
+    async def claim_next_due(
+        self,
+        owner: str,
+        lease_duration_seconds: float,
+        as_of: datetime,
+    ) -> AIJob | None:
+        return None
 
     async def update(self, job: AIJob) -> None:
         existing = self.jobs.get(job.job_id)
@@ -179,11 +211,11 @@ def make_raw_envelope(
     )
     return RawResponseEnvelope(
         raw_content=raw_body,
-        model_name="test-model",
-        provider_name="test-provider",
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+        status_code=200,
+        headers={},
+        latency_seconds=0.1,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
     )
 
 
@@ -278,6 +310,7 @@ async def test_fallback_to_second_provider_on_failure() -> None:
         clock=clock,
         sleeper=sleeper,
         jitter_source=jitter,
+        provider_guard=PassThroughProviderGuard(),
     )
 
     result = await orchestrator.execute(
@@ -288,6 +321,7 @@ async def test_fallback_to_second_provider_on_failure() -> None:
     )
 
     assert result is not None
+    assert result.payload is not None
     assert result.payload["is_advertisement"] is True
     assert result.provider_name == "deepseek"
     assert result.model_name == "deepseek-v4-flash"
@@ -403,6 +437,7 @@ async def test_non_retryable_failure_causes_immediate_fallback() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     result = await orchestrator.execute(
@@ -416,6 +451,7 @@ async def test_non_retryable_failure_causes_immediate_fallback() -> None:
     updated_job = repo.jobs["job-123"]
     assert updated_job.status == AIJobStatus.COMPLETED
     assert len(updated_job.attempts_history or []) == 2
+    assert updated_job.attempts_history is not None
     assert updated_job.attempts_history[0]["failure_category"] == "permission"
 
 
@@ -503,6 +539,7 @@ async def test_invalid_t038_schema_causes_fallback() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     result = await orchestrator.execute(
@@ -516,6 +553,7 @@ async def test_invalid_t038_schema_causes_fallback() -> None:
     updated_job = repo.jobs["job-123"]
     assert updated_job.status == AIJobStatus.COMPLETED
     assert len(updated_job.attempts_history or []) == 2
+    assert updated_job.attempts_history is not None
     assert updated_job.attempts_history[0]["failure_category"] == "validation"
 
 
@@ -597,6 +635,7 @@ async def test_first_valid_result_stops_execution() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     result = await orchestrator.execute(
@@ -686,6 +725,7 @@ async def test_all_candidates_failing_raises_all_providers_failed_error() -> Non
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     with pytest.raises(AllProvidersFailedError) as exc_info:
@@ -768,6 +808,7 @@ async def test_all_candidates_failing_with_retry_available() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     with pytest.raises(AllProvidersFailedError):
@@ -835,6 +876,7 @@ async def test_execute_raises_error_on_missing_failure_policy() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -899,6 +941,7 @@ async def test_execute_raises_concurrency_conflict_on_stale_job() -> None:
         lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         version=1,
     )
+
     class ConflictRepository(FakeAIJobRepository):
         async def get_by_id(self, job_id: str) -> AIJob | None:
             job_obj = await super().get_by_id(job_id)
@@ -915,6 +958,7 @@ async def test_execute_raises_concurrency_conflict_on_stale_job() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     # Simulating concurrency conflict
@@ -986,6 +1030,7 @@ async def test_cancellation_propagates_immediately() -> None:
         clock=FakeClock(),
         sleeper=FakeSleeper(),
         jitter_source=FakeJitter(),
+        provider_guard=PassThroughProviderGuard(),
     )
 
     with pytest.raises(asyncio.CancelledError):

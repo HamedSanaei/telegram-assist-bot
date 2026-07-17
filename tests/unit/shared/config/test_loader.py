@@ -107,6 +107,7 @@ def test_loads_example_into_all_typed_immutable_sections(
     assert isinstance(settings.ai.providers[0], AiProviderConfig)
     assert isinstance(settings.ai.routes[0], AiTaskRouteConfig)
     from telegram_assist_bot.application.ai.contracts import AITaskType
+
     assert settings.ai.routes[0].task is AITaskType.ADVERTISEMENT_DETECTION
     assert isinstance(settings.ai.routes[0].candidates[0], AiRouteCandidateConfig)
     assert isinstance(settings.advertisements, AdvertisementConfig)

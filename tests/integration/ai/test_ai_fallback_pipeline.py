@@ -40,7 +40,11 @@ from telegram_assist_bot.shared.config.loader import ResolvedSecrets
 from telegram_assist_bot.shared.errors import TransientOperationError
 
 if TYPE_CHECKING:
-    from tests.conftest import MongoTestSettings
+    from collections.abc import Awaitable, Callable
+
+    from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
+
+    from telegram_assist_bot.shared.config import AiProviderGuardConfig
 
 pytestmark = pytest.mark.integration
 _URI_ENV = "TEST_MONGODB_URI"
@@ -85,6 +89,21 @@ class IntegrationFakeJitter:
         return 0.5
 
 
+class PassThroughProviderGuard:
+    """Keep T039 integration scenarios isolated from T040 persistence."""
+
+    async def execute[T](
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        owner_id: str,
+        policy: AiProviderGuardConfig | None,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        return await operation()
+
+
 class FakeAIProvider(AIProvider):
     """Fake AI provider configured to return canned responses or raise errors."""
 
@@ -124,11 +143,11 @@ def make_raw_envelope(content: str) -> RawResponseEnvelope:
     )
     return RawResponseEnvelope(
         raw_content=raw_body,
-        model_name="test-model",
-        provider_name="test-provider",
-        prompt_tokens=10,
-        completion_tokens=5,
-        total_tokens=15,
+        status_code=200,
+        headers={},
+        latency_seconds=0.1,
+        input_tokens=10,
+        output_tokens=5,
     )
 
 
@@ -235,6 +254,7 @@ async def test_fallback_pipeline_integration_with_mongodb(
             clock=clock,
             sleeper=sleeper,
             jitter_source=jitter,
+            provider_guard=PassThroughProviderGuard(),
         )
 
         result = await orchestrator.execute(
@@ -245,6 +265,7 @@ async def test_fallback_pipeline_integration_with_mongodb(
         )
 
         assert result is not None
+        assert result.payload is not None
         assert result.payload["is_advertisement"] is True
         assert result.provider_name == "deepseek"
 
@@ -257,6 +278,7 @@ async def test_fallback_pipeline_integration_with_mongodb(
         assert updated_job.fallback_count == 1
         assert updated_job.retry_count == 0
         assert len(updated_job.attempts_history or []) == 2
+        assert updated_job.attempts_history is not None
         assert updated_job.attempts_history[0]["provider_name"] == "z-ai"
         assert updated_job.attempts_history[0]["success"] is False
         assert updated_job.attempts_history[1]["provider_name"] == "deepseek"
@@ -343,6 +365,7 @@ async def test_fallback_pipeline_all_providers_failed_persists_properly(
             clock=IntegrationFakeClock(),
             sleeper=IntegrationFakeSleeper(),
             jitter_source=IntegrationFakeJitter(),
+            provider_guard=PassThroughProviderGuard(),
         )
 
         with pytest.raises(AllProvidersFailedError) as exc_info:

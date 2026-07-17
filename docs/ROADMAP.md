@@ -89,7 +89,7 @@
 | [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Completed |
 | [T038](tasks/T038-ai-response-normalization.md) | Validation، Repair و Normalization | T034، T036، T037 | `11.4`، `11.5`، `11.11` | Completed |
 | [T039](tasks/T039-ai-routing-retry-fallback.md) | Routing، Retry، Fallback و شکست نهایی | T035، T038 | `11.3`، `11.6`، `11.9`، `11.10`، `11.12` | Completed |
-| [T040](tasks/T040-ai-rate-limit-circuit-breaker.md) | Rate limit، Cooldown و Circuit Breaker | T035، T039 | `11.7`، `11.8`، `11.18` | Planned |
+| [T040](tasks/T040-ai-rate-limit-circuit-breaker.md) | Rate limit، Cooldown و Circuit Breaker | T035، T039 | `11.7`، `11.8`، `11.18` | Completed |
 | [T041](tasks/T041-ai-cache-audit-metrics.md) | Cache، Audit و آمار Provider | T004، T039، T040 | `11.15–11.17` | Planned |
 | [T042](tasks/T042-advertisement-detection.md) | تشخیص تبلیغ و سیاست شکست | T019، T035، T039، T041 | `5.8` | Planned |
 | [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Planned |
