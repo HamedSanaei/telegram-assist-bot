@@ -215,6 +215,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/ai_job_repository.py` | قرارداد درگاه پایدار صف کارهای هوش مصنوعی |
 | `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
 | `application/ports/provider_state_repository.py` | Port رزرو اتمیک ظرفیت و ثبت outcome تایپ‌شدهٔ Provider/Model |
+| `application/ports/ai_cache_repository.py` | قرارداد Cache نسخه‌دار، lookup معتبر و first-valid-write-wins مستقل از MongoDB |
+| `application/ports/ai_audit_repository.py` | قرارداد eventهای immutable، sanitized و idempotent اجرای AI |
+| `application/ports/provider_metrics_repository.py` | delta و snapshot آمار تجمعی مستقل هر Provider/Model |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
@@ -241,9 +244,13 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/routing.py` | انتخاب و رتبه‌بندی قطعی کاندیداهای کارهای AI بر اساس نوع وظیفه و اولویت |
 | `application/ai/retry.py` | اجرای نامتقارن و بازآزمایی خطاهای گذرا با Backoff و Jitter روی مدل‌های هوش مصنوعی |
 | `application/ai/provider_guard.py` | Guard هر تلاش خارجی با policy صریح، Reservation پایدار، outcome امن و nearest eligibility |
-| `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور اجرای وظایف AI با انتخاب کاندیدا، بازآزمایی و Fallback نهایی |
+| `application/ai/cache_key.py` | canonical JSON UTF-8، hash رمزنگاری‌شده و هویت Cache نسخه‌دار بدون Provider/Model |
+| `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور انتخاب، Retry/Fallback و Guard با bypass کامل Provider روی Cache hit و side effectهای امن Audit/Metrics |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
 | `infrastructure/mongodb/provider_state_repository.py` | Adapter اتمیک MongoDB برای ظرفیت، پنجره درخواست، Cooldown، Circuit و Reservationهای بدون TTL |
+| `infrastructure/mongodb/ai_cache_repository.py` | Cache disposable با unique identity، TTL، expiry صریح و write اتمیک |
+| `infrastructure/mongodb/ai_audit_repository.py` | Audit append-only با event ID یکتا، indexهای query و retention اختیاری |
+| `infrastructure/mongodb/provider_metrics_repository.py` | increment اتمیک شمارنده‌ها، tokenها و مجموع/sample latency بدون average mutable |
 | `infrastructure/ai/z_ai.py` | آداپتور تک-Attempt ارائه‌دهنده z-ai با مدل glm-4.7-flash، رد هدایت مجدد و Base URL غیراستاندارد، و طبقه‌بندی و پاک‌سازی خطاها |
 | `infrastructure/ai/deepseek.py` | آداپتور تک-Attempt DeepSeek برای Modelهای allowlisted v4، با capability ثابت، host/redirect allowlist، سقف پاسخ و خطاهای redacted؛ بدون Retry/Fallback و بدون اتصال Runtime |
 | `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
