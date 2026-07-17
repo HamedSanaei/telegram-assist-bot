@@ -77,6 +77,7 @@ _SYNTHETIC_ENVIRONMENT = {
     "TAB_TELEGRAM_BOT_TOKEN": "fixture-" + "telegram-bot-token-value",
     "TAB_AI_PROVIDER_KEY": "fixture-" + "ai-provider-key-value",
     "TAB_ZAI_API_KEY": "fixture-" + "zai-api-key-value",
+    "TAB_DEEPSEEK_API_KEY": "fixture-" + "deepseek-api-key-value",
 }
 
 

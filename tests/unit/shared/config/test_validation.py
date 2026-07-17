@@ -182,7 +182,7 @@ def test_semantic_and_secret_errors_are_aggregated_together(
         "advertisements.routes[1].name",
         "advertisements.routes[0].destination_names[1]",
         "advertisements.routes[0].destination_names[2]",
-        "ai.providers[2].name",
+        "ai.providers[3].name",
         "ai.routes[1].task",
         "ai.routes[0].candidates[1].priority",
         "ai.routes[0].candidates[1].model_name",
@@ -631,7 +631,7 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
             "destination_channels[0].name",
             "duplicate_value",
         ),
-        ("provider_name", "ai.providers[2].name", "duplicate_value"),
+        ("provider_name", "ai.providers[3].name", "duplicate_value"),
         ("ai_task", "ai.routes[1].task", "duplicate_value"),
         (
             "candidate_priority",

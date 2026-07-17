@@ -160,6 +160,14 @@
           "environment_variable": "TAB_ZAI_API_KEY"
         },
         "base_url": "https://api.z.ai/api/paas/v4"
+      },
+      {
+        "name": "deepseek",
+        "enabled": false,
+        "api_key": {
+          "environment_variable": "TAB_DEEPSEEK_API_KEY"
+        },
+        "base_url": "https://api.deepseek.com"
       }
     ],
     "routes": [

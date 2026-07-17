@@ -113,6 +113,7 @@ def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
     providers = _as_list(_as_object(payload["ai"])["providers"])
     provider0 = _as_object(providers[0])
     provider1 = _as_object(providers[1])
+    provider2 = _as_object(providers[2])
     mongodb_value = "mongodb://inline.example.invalid:27017"
     api_id_value = "123456"
     hash_value = "fixture-one"
@@ -120,10 +121,12 @@ def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
     bot_value = "inline-bot-credential"
     provider0_value = "fixture-two"
     provider1_value = "fixture-three"
+    provider2_value = "fixture-four"
     hash_field = next(name for name in telegram_user if name.endswith("hash"))
     bot_field = next(name for name in telegram_bot if name.endswith("ken"))
     provider0_field = next(name for name in provider0 if name.endswith("_key"))
     provider1_field = next(name for name in provider1 if name.endswith("_key"))
+    provider2_field = next(name for name in provider2 if name.endswith("_key"))
     mongodb["uri"] = mongodb_value
     telegram_user["api_id"] = int(api_id_value)
     telegram_user[hash_field] = hash_value
@@ -131,6 +134,7 @@ def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
     telegram_bot[bot_field] = bot_value
     provider0[provider0_field] = provider0_value
     provider1[provider1_field] = provider1_value
+    provider2[provider2_field] = provider2_value
     return (
         mongodb_value,
         api_id_value,
@@ -139,6 +143,7 @@ def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
         bot_value,
         provider0_value,
         provider1_value,
+        provider2_value,
     )
 
 
@@ -183,8 +188,10 @@ def test_local_configuration_resolves_direct_secrets_without_environment(
     settings = loaded.settings
     provider0 = settings.ai.providers[0]
     provider1 = settings.ai.providers[1]
+    provider2 = settings.ai.providers[2]
     assert provider0.api_key is not None
     assert provider1.api_key is not None
+    assert provider2.api_key is not None
     resolved = (
         loaded.secrets.get(settings.mongodb.uri).get_secret_value(),
         loaded.secrets.get(settings.telegram.user.api_id).get_secret_value(),
@@ -193,6 +200,7 @@ def test_local_configuration_resolves_direct_secrets_without_environment(
         loaded.secrets.get(settings.telegram.bot.token).get_secret_value(),
         loaded.secrets.get(provider0.api_key).get_secret_value(),
         loaded.secrets.get(provider1.api_key).get_secret_value(),
+        loaded.secrets.get(provider2.api_key).get_secret_value(),
     )
 
     assert resolved == values
