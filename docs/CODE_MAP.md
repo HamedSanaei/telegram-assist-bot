@@ -52,7 +52,11 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   │   ├── claim_ai_job.py
 │   │   │   ├── contracts.py
 │   │   │   ├── enqueue_ai_job.py
+│   │   │   ├── exceptions.py
 │   │   │   ├── prompt_registry.py
+│   │   │   ├── response_normalizer.py
+│   │   │   ├── response_parser.py
+│   │   │   ├── response_validator.py
 │   │   │   ├── schemas.py
 │   │   │   └── prompts/
 │   │   │       ├── advertisement_detection.txt
@@ -221,6 +225,10 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/runtime_ingestion.py` | مسیر مشترک History/Live؛ observation پیش‌دانلود، claim/lease و anchor canonical Album، isolation خطای هر گروه و preparation idempotent |
 | `application/ai/contracts.py` | قراردادهای عمومی AI شامل `AITaskType` و `AIResult` |
 | `application/ai/schemas.py` | انتیتی‌ها و اعتبارسنجی ورودی/خروجی‌های AI |
+| `application/ai/exceptions.py` | طبقه‌بندی و استثناهای پارس و اعتبارسنجی پاسخ هوش مصنوعی |
+| `application/ai/response_parser.py` | پارسر پاسخ ارائه‌دهنده‌های هوش مصنوعی با پشتیبانی از حداکثر یک دور اصلاح (Repair) قطعی و اعتبارسنجی عمق JSON |
+| `application/ai/response_validator.py` | اعتبارسنجی پاسخ هوش مصنوعی بر اساس Pydantic با حالت سخت‌گیرانه (Strict) و ممانعت از فیلدهای ناشناخته (extra=forbid) |
+| `application/ai/response_normalizer.py` | یکسان‌ساز نتایج ارائه‌دهنده‌های متفاوت تلقیح شده در AIResult استاندارد |
 | `application/ai/enqueue_ai_job.py` | Use Case برای درج idempotent کارها با کلید یکتا و سطح اولویت |
 | `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |

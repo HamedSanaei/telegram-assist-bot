@@ -9,10 +9,21 @@ from telegram_assist_bot.application.ai.contracts import (
     RawResponseEnvelope,
 )
 from telegram_assist_bot.application.ai.enqueue_ai_job import EnqueueAIJob
+from telegram_assist_bot.application.ai.exceptions import (
+    AIEmptyResponseError,
+    AIInvalidJSONError,
+    AIRepairFailedError,
+    AIResponseError,
+    AISchemaValidationError,
+    AIValidationConstraintError,
+)
 from telegram_assist_bot.application.ai.prompt_registry import (
     PromptMetadata,
     PromptRegistry,
 )
+from telegram_assist_bot.application.ai.response_normalizer import ResponseNormalizer
+from telegram_assist_bot.application.ai.response_parser import ResponseParser
+from telegram_assist_bot.application.ai.response_validator import ResponseValidator
 from telegram_assist_bot.application.ai.schemas import (
     AdvertisementDetectionContext,
     AdvertisementDetectionOutput,
@@ -26,8 +37,14 @@ from telegram_assist_bot.application.ai.schemas import (
 )
 
 __all__ = (
+    "AIEmptyResponseError",
+    "AIInvalidJSONError",
+    "AIRepairFailedError",
+    "AIResponseError",
     "AIResult",
+    "AISchemaValidationError",
     "AITaskType",
+    "AIValidationConstraintError",
     "AdvertisementDetectionContext",
     "AdvertisementDetectionOutput",
     "BaseAIOutput",
@@ -38,6 +55,9 @@ __all__ = (
     "PromptMetadata",
     "PromptRegistry",
     "RawResponseEnvelope",
+    "ResponseNormalizer",
+    "ResponseParser",
+    "ResponseValidator",
     "ScoringContext",
     "ScoringOutput",
     "SemanticDuplicateContext",

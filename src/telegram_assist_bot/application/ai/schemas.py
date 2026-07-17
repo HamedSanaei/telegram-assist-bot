@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from telegram_assist_bot.application.ai.contracts import AITaskType
 
@@ -74,6 +74,8 @@ class BaseAIOutput(BaseModel):
     """Base class for all Phase 1 AI output schemas."""
 
     SCHEMA_VERSION: ClassVar[str] = "1"
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
 
 # Output Schemas (AI Outputs)

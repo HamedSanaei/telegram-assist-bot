@@ -607,6 +607,13 @@ Routing، Retry، Fallback، Repair و Normalization به‌ترتیب در T038
    - **مکانیزم اجاره (`lease_owner` و `lease_expires_at`):** قفل کردن کار کاندید تحت مالکیت کارگر فعال برای مدت معین (Lease) جهت پیشگیری از تداخل همزمان. در صورت بروز Crash یا اتمام مهلت، کار مجدداً در فرآیند اجرا قرار گرفته و توسط دیگر کارگرها قابل بازپس‌گیری (Reclaim) خواهد بود.
    - **کنترل همروندی خوش‌بینانه (`Optimistic Concurrency Control`):** هرگونه ثبت تغییر نهایی در وضعیت کارها با مقایسه نسخه سند (`version`) و شناسه آن انجام می‌شود.
 
+6. **جریان پردازش و یکسان‌سازی پاسخ هوش مصنوعی (Validation, Repair, Normalization):**
+   - **فراخوانی اولیه (Parse):** `ResponseParser` پاسخ خام `RawResponseEnvelope.raw_content` را بررسی و بخش کلیدی پیام دستیار هوش مصنوعی (`choices[0].message.content`) را استخراج و به عنوان JSON پارس می‌کند.
+   - **سیاست اصلاح قطعی و بدون حالت (Deterministic, Stateless Repair):** در صورتی که پارس اولیه به دلیل وجود Markdown Code Fences (مانند ` ```json ... ``` `) با شکست مواجه شود، در صورتی که متن اضافه یا Prose دیگری وجود نداشته باشد (مجموعاً ۲ تگ backtick)، یک‌بار اقدام به حذف تگ‌ها و استخراج بلاک اصلی JSON می‌کند. هرگونه شکست مجدد یا ناتوانی در اصلاح، بلافاصله منجر به لغو تلاش با شکست قطعی می‌شود.
+   - **اعتبارسنجی سخت‌گیرانه (Strict Validation):** ساختار نهایی استخراج‌شده توسط `ResponseValidator` با Schema متناظر تسک در کلاس‌های Pydantic اعتبارسنجی می‌شود. ویژگی `strict=True` و `extra="forbid"` بر روی تمامی خروجی‌ها فعال است تا از هرگونه Coercion نوع داده‌ای ناخواسته یا ارسال فیلدهای ناشناخته جلوگیری به عمل آید.
+   - **یکسان‌سازی و ساختار خروجی استاندارد (Normalization):** پس از راستی‌آزمایی کامل، خروجی به شکل مستقل از ارائه‌دهنده در قالب `AIResult` یکسان همراه با متادیتای واقعی (شناسه مدل، ارائه‌دهنده، توکن‌های مصرفی و تاخیر) کپسوله‌سازی می‌شود.
+   - **دسته‌بندی خطاها (Failure Taxonomy):** کلاس‌های استثنای مشخص و مستقل مانند `AIEmptyResponseError` ،`AIInvalidJSONError` ،`AISchemaValidationError` و `AIValidationConstraintError` (همگی زیرمجموعه `ValidationError` یا `ApplicationError`) برای استفاده کارآمد جریان‌های مسیریابی و Fallback در T039 پیاده‌سازی شده‌اند.
+
 ## 13. Configuration و Secret
 
 - قرارداد Commitشدنی فقط `config/configuration.example.json` با
