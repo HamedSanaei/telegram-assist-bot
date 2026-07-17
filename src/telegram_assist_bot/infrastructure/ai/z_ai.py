@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -26,6 +25,8 @@ from telegram_assist_bot.shared.errors import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pydantic import BaseModel
 
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
 import asyncio
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -21,6 +21,9 @@ from telegram_assist_bot.shared.errors import (
     RateLimitError,
     TransientOperationError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 _URI_ENV = "TEST_MONGODB_URI"
 

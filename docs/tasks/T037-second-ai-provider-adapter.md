@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Active`
+`Completed`
 
 ## هدف
 
@@ -109,7 +109,11 @@ git diff --check
 - `ruff format --check src tests scripts`: موفق.
 - `scripts/check_text_integrity.py --changed`: موفق.
 - `git diff --check`: موفق.
-- `ruff check src tests scripts`: ناموفق فقط به‌علت سه خطای import ازپیش‌موجود در دو فایل بدون تغییر T036؛ طبق محدودیت Task، کد نامرتبط صرفاً برای lint تغییر داده نشد.
+- `ruff check src tests scripts`: موفق پس از اصلاح import-only دو فایل مجاور T036، بدون تغییر رفتار.
+- `ruff format --check src tests scripts`: موفق؛ `259 files already formatted`.
+- suite کامل non-live نهایی با MongoDB محلی: `1059 passed`.
+- baseline تأییدشدهٔ پیاده‌سازی پیش از اصلاح import-only: commit فعلی `736da7c`.
+- Adapterهای AI همچنان از Runtime، Worker، CLI و جریان‌های Telegram جدا هستند.
 
 ## تعریف Done
 
