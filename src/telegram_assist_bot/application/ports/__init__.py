@@ -91,6 +91,8 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryError,
     PostRepositoryUnavailableError,
     PostTransitionRequest,
+    SemanticDuplicatePostRepository,
+    SemanticDuplicatePostUpdateRequest,
 )
 from telegram_assist_bot.application.ports.provider_metrics_repository import (
     ProviderMetricDelta,
@@ -116,6 +118,10 @@ from telegram_assist_bot.application.ports.publication import (
 from telegram_assist_bot.application.ports.scheduling import (
     ScheduleRepository,
     ScheduleReservation,
+)
+from telegram_assist_bot.application.ports.semantic_duplicate_candidates import (
+    SemanticDuplicateCandidate,
+    SemanticDuplicateCandidateRepository,
 )
 from telegram_assist_bot.application.ports.telegram_source_gateway import (
     ResolvedTelegramChannel,
@@ -240,6 +246,10 @@ __all__ = (
     "ResolvedTelegramChannel",
     "ScheduleRepository",
     "ScheduleReservation",
+    "SemanticDuplicateCandidate",
+    "SemanticDuplicateCandidateRepository",
+    "SemanticDuplicatePostRepository",
+    "SemanticDuplicatePostUpdateRequest",
     "TelegramAccount",
     "TelegramAuthenticationGateway",
     "TelegramChannelNotFoundError",

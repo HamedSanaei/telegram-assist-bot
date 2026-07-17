@@ -70,13 +70,15 @@ def test_valid_outputs_all_tasks(
 
     # 2. Semantic Duplicate
     env = make_envelope(
-        '{"is_duplicate": false, "confidence": 0.88, "reason": "متن متفاوت است"}'
+        '{"is_duplicate": false, "similarity": 0.4, '
+        '"confidence": 0.88, "reason": "متن متفاوت است"}'
     )
     parsed, rep = parser.parse(env)
     assert not rep
-    validated = validator.validate(parsed, AITaskType.SEMANTIC_DUPLICATE, "1")
+    validated = validator.validate(parsed, AITaskType.SEMANTIC_DUPLICATE, "2")
     assert isinstance(validated, SemanticDuplicateOutput)
     assert validated.is_duplicate is False
+    assert validated.similarity == 0.4
     assert validated.confidence == 0.88
     assert validated.reason == "متن متفاوت است"
 

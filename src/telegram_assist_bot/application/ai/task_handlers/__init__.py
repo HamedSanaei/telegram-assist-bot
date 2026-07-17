@@ -5,9 +5,13 @@ from telegram_assist_bot.application.ai.task_handlers.advertisement_detection im
     AdvertisementHandlerOutcome,
     AdvertisementTaskValidationError,
 )
+from telegram_assist_bot.application.ai.task_handlers.semantic_duplicate import (
+    SemanticDuplicateHandler,
+)
 
 __all__ = (
     "AdvertisementDetectionHandler",
     "AdvertisementHandlerOutcome",
     "AdvertisementTaskValidationError",
+    "SemanticDuplicateHandler",
 )

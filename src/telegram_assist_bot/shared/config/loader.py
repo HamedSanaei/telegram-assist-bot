@@ -365,6 +365,7 @@ def _raw_ai_issues(
     ai_value: object,
     features_value: object,
     source_channels_value: object,
+    semantic_duplicate_value: object,
 ) -> list[ConfigurationIssue]:
     """Recover AI identity and reference issues from independently valid fields."""
     if not isinstance(ai_value, dict):
@@ -492,6 +493,7 @@ def _raw_ai_issues(
             features_value.get("advertisement_detection_enabled") is True
         )
         advertisement_effectively_enabled = False
+        semantic_effectively_enabled = False
         if advertisement_globally_enabled:
             for source_index, source in sources:
                 if source.get("enabled") is not True:
@@ -514,6 +516,28 @@ def _raw_ai_issues(
                     )
                 elif per_source is True:
                     advertisement_effectively_enabled = True
+        if features_value.get("duplicate_detection_enabled") is True:
+            for source_index, source in sources:
+                if source.get("enabled") is not True:
+                    continue
+                per_source = source.get("duplicate_detection_enabled", _MISSING)
+                if per_source is _MISSING:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(
+                                "source_channels",
+                                source_index,
+                                "duplicate_detection_enabled",
+                            ),
+                            code="missing_feature_policy",
+                            message=(
+                                "enabled source requires an explicit semantic "
+                                "duplicate detection flag"
+                            ),
+                        )
+                    )
+                elif per_source is True:
+                    semantic_effectively_enabled = True
         required_routes = (
             (
                 "advertisement_detection_enabled",
@@ -523,7 +547,7 @@ def _raw_ai_issues(
             (
                 "duplicate_detection_enabled",
                 AiTask.DUPLICATE_DETECTION.value,
-                features_value.get("duplicate_detection_enabled") is True,
+                semantic_effectively_enabled,
             ),
             (
                 "ai_scoring_enabled",
@@ -561,6 +585,32 @@ def _raw_ai_issues(
                     ),
                 )
             )
+        if semantic_effectively_enabled:
+            if not isinstance(semantic_duplicate_value, dict):
+                issues.append(
+                    ConfigurationIssue(
+                        path=("semantic_duplicate",),
+                        code="missing_semantic_policy",
+                        message=(
+                            "enabled semantic duplicate detection requires explicit "
+                            "threshold and duplicate policy"
+                        ),
+                    )
+                )
+            if (
+                _canonicalize_task_name(AiTask.DUPLICATE_DETECTION.value)
+                not in configured_failure_tasks
+            ):
+                issues.append(
+                    ConfigurationIssue(
+                        path=("ai", "failure_policies"),
+                        code="missing_failure_policy",
+                        message=(
+                            "enabled semantic duplicate detection requires an "
+                            "explicit AI failure policy"
+                        ),
+                    )
+                )
     return issues
 
 
@@ -648,6 +698,7 @@ def _raw_semantic_issues(
             document.get("ai", _MISSING),
             document.get("features", _MISSING),
             document.get("source_channels", _MISSING),
+            document.get("semantic_duplicate", _MISSING),
         )
     )
     return issues

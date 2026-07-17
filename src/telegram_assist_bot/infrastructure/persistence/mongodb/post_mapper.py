@@ -13,6 +13,12 @@ from telegram_assist_bot.domain.advertisement import (
     AdvertisementFailurePolicy,
     AdvertisementProcessingState,
 )
+from telegram_assist_bot.domain.duplicates import (
+    SemanticDuplicateFailure,
+    SemanticDuplicateFailurePolicy,
+    SemanticDuplicateResult,
+    SemanticDuplicateState,
+)
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -52,6 +58,7 @@ _ROOT_FIELDS: Final[frozenset[str]] = frozenset(
         "next_stage_claimed_at",
         "next_stage_claim_correlation_id",
         "advertisement_processing",
+        "semantic_duplicate_processing",
     }
 )
 _ADVERTISEMENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -84,6 +91,37 @@ _ADVERTISEMENT_FAILURE_FIELDS: Final[frozenset[str]] = frozenset(
         "attempted_candidates_count",
         "retry_count",
         "fallback_count",
+        "next_retry_at",
+        "next_retry_at_microsecond_remainder",
+    }
+)
+_SEMANTIC_FIELDS = frozenset({"state", "version", "job_id", "result", "failure"})
+_SEMANTIC_RESULT_FIELDS = frozenset(
+    {
+        "method",
+        "is_duplicate",
+        "similarity",
+        "confidence",
+        "matched_post_id",
+        "reason",
+        "provider_name",
+        "model_name",
+        "checked_at",
+        "checked_at_microsecond_remainder",
+        "prompt_version",
+        "schema_version",
+        "attempt_number",
+        "fallback_count",
+        "cache_hit",
+        "cache_age_seconds",
+    }
+)
+_SEMANTIC_FAILURE_FIELDS = frozenset(
+    {
+        "policy",
+        "failure_category",
+        "failed_at",
+        "failed_at_microsecond_remainder",
         "next_retry_at",
         "next_retry_at_microsecond_remainder",
     }
@@ -480,6 +518,129 @@ def _advertisement_processing_from_document(
     )
 
 
+def semantic_duplicate_processing_to_document(post: Post) -> dict[str, object]:
+    """Serialize additive semantic state for full and atomic writes."""
+    result_document = None
+    if post.semantic_duplicate_result is not None:
+        result = post.semantic_duplicate_result
+        checked_at, remainder = _floor_to_millisecond(result.checked_at)
+        result_document = {
+            "method": result.method,
+            "is_duplicate": result.is_duplicate,
+            "similarity": result.similarity,
+            "confidence": result.confidence,
+            "matched_post_id": (
+                result.matched_post_id.value if result.matched_post_id else None
+            ),
+            "reason": result.reason,
+            "provider_name": result.provider_name,
+            "model_name": result.model_name,
+            "checked_at": checked_at,
+            "checked_at_microsecond_remainder": remainder,
+            "prompt_version": result.prompt_version,
+            "schema_version": result.schema_version,
+            "attempt_number": result.attempt_number,
+            "fallback_count": result.fallback_count,
+            "cache_hit": result.cache_hit,
+            "cache_age_seconds": result.cache_age_seconds,
+        }
+    failure_document = None
+    if post.semantic_duplicate_failure is not None:
+        failure = post.semantic_duplicate_failure
+        failed_at, failed_remainder = _floor_to_millisecond(failure.failed_at)
+        retry_at = None
+        retry_remainder = 0
+        if failure.next_retry_at is not None:
+            retry_at, retry_remainder = _floor_to_millisecond(failure.next_retry_at)
+        failure_document = {
+            "policy": failure.policy.value,
+            "failure_category": failure.failure_category,
+            "failed_at": failed_at,
+            "failed_at_microsecond_remainder": failed_remainder,
+            "next_retry_at": retry_at,
+            "next_retry_at_microsecond_remainder": retry_remainder,
+        }
+    return {
+        "state": post.semantic_duplicate_state.value,
+        "version": post.semantic_duplicate_version,
+        "job_id": post.semantic_duplicate_job_id,
+        "result": result_document,
+        "failure": failure_document,
+    }
+
+
+def _semantic_result_from_document(value: object) -> SemanticDuplicateResult:
+    document = _require_mapping(value, rule="invalid_semantic_duplicate_result")
+    _require_exact_fields(document, _SEMANTIC_RESULT_FIELDS)
+    if (
+        type(document["is_duplicate"]) is not bool
+        or type(document["cache_hit"]) is not bool
+    ):
+        raise InvalidPostDocumentError
+    matched = _require_string(document["matched_post_id"], optional=True)
+    return SemanticDuplicateResult(
+        method=_require_string(document["method"]),
+        is_duplicate=document["is_duplicate"],
+        similarity=_require_float(document["similarity"]),
+        confidence=_require_float(document["confidence"]),
+        matched_post_id=PostId(matched) if matched is not None else None,
+        reason=_require_string(document["reason"]),
+        provider_name=_require_string(document["provider_name"]),
+        model_name=_require_string(document["model_name"]),
+        checked_at=_restore_floor_datetime(
+            document["checked_at"], document["checked_at_microsecond_remainder"]
+        ),
+        prompt_version=_require_string(document["prompt_version"]),
+        schema_version=_require_string(document["schema_version"]),
+        attempt_number=_require_integer(document["attempt_number"]),
+        fallback_count=_require_integer(document["fallback_count"]),
+        cache_hit=document["cache_hit"],
+        cache_age_seconds=_require_float(document["cache_age_seconds"], optional=True),
+    )
+
+
+def _semantic_failure_from_document(value: object) -> SemanticDuplicateFailure:
+    document = _require_mapping(value, rule="invalid_semantic_duplicate_failure")
+    _require_exact_fields(document, _SEMANTIC_FAILURE_FIELDS)
+    retry_at = None
+    if document["next_retry_at"] is not None:
+        retry_at = _restore_floor_datetime(
+            document["next_retry_at"], document["next_retry_at_microsecond_remainder"]
+        )
+    return SemanticDuplicateFailure(
+        policy=SemanticDuplicateFailurePolicy(_require_string(document["policy"])),
+        failure_category=_require_string(document["failure_category"]),
+        failed_at=_restore_floor_datetime(
+            document["failed_at"], document["failed_at_microsecond_remainder"]
+        ),
+        next_retry_at=retry_at,
+    )
+
+
+def _semantic_processing_from_document(
+    value: object,
+) -> tuple[
+    SemanticDuplicateState,
+    int,
+    str | None,
+    SemanticDuplicateResult | None,
+    SemanticDuplicateFailure | None,
+]:
+    document = _require_mapping(value, rule="invalid_semantic_duplicate_processing")
+    _require_exact_fields(document, _SEMANTIC_FIELDS)
+    return (
+        SemanticDuplicateState(_require_string(document["state"])),
+        _require_integer(document["version"]),
+        _require_string(document["job_id"], optional=True),
+        None
+        if document["result"] is None
+        else _semantic_result_from_document(document["result"]),
+        None
+        if document["failure"] is None
+        else _semantic_failure_from_document(document["failure"]),
+    )
+
+
 def post_to_document(post: Post) -> dict[str, object]:
     """Serialize a post aggregate into the exact version-1 document schema."""
     if type(post) is not Post:
@@ -512,6 +673,9 @@ def post_to_document(post: Post) -> dict[str, object]:
         "next_stage_claimed_at": None,
         "next_stage_claim_correlation_id": None,
         "advertisement_processing": advertisement_processing_to_document(post),
+        "semantic_duplicate_processing": semantic_duplicate_processing_to_document(
+            post
+        ),
     }
 
 
@@ -529,6 +693,14 @@ def post_from_document(value: object) -> Post:
     if "advertisement_processing" not in document:
         document["advertisement_processing"] = {
             "state": AdvertisementProcessingState.NOT_REQUESTED.value,
+            "version": 0,
+            "job_id": None,
+            "result": None,
+            "failure": None,
+        }
+    if "semantic_duplicate_processing" not in document:
+        document["semantic_duplicate_processing"] = {
+            "state": SemanticDuplicateState.NOT_REQUESTED.value,
             "version": 0,
             "job_id": None,
             "result": None,
@@ -556,6 +728,9 @@ def post_from_document(value: object) -> Post:
     )
     advertisement = _advertisement_processing_from_document(
         document["advertisement_processing"]
+    )
+    semantic = _semantic_processing_from_document(
+        document["semantic_duplicate_processing"]
     )
     try:
         post = Post(
@@ -592,6 +767,11 @@ def post_from_document(value: object) -> Post:
             advertisement_job_id=advertisement[2],
             advertisement_result=advertisement[3],
             advertisement_failure=advertisement[4],
+            semantic_duplicate_state=semantic[0],
+            semantic_duplicate_version=semantic[1],
+            semantic_duplicate_job_id=semantic[2],
+            semantic_duplicate_result=semantic[3],
+            semantic_duplicate_failure=semantic[4],
         )
     except (AdvertisementDomainError, PostDomainError, ValueError):
         raise InvalidPostDocumentError from None
@@ -606,5 +786,6 @@ __all__ = [
     "advertisement_processing_to_document",
     "post_from_document",
     "post_to_document",
+    "semantic_duplicate_processing_to_document",
     "status_transition_to_document",
 ]

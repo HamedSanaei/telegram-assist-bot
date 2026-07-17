@@ -27,6 +27,9 @@ POST_SOURCE_IDENTITY_INDEX_NAME: Final[str] = "uq_posts_source_identity_v1"
 POST_EXPIRATION_INDEX_NAME: Final[str] = "ttl_posts_expires_at_v1"
 """Stable name of the absolute post-expiration TTL index."""
 
+POST_SEMANTIC_WINDOW_INDEX_NAME: Final[str] = "ix_posts_semantic_window_v1"
+"""Support status-scoped newest-first semantic candidate scans."""
+
 _NAMESPACE_NOT_FOUND_CODE: Final[int] = 26
 _INDEX_OPTION_FIELDS: Final[tuple[str, ...]] = (
     "collation",
@@ -69,6 +72,10 @@ POST_INDEX_SPECS: Final[tuple[PostIndexSpec, ...]] = (
         name=POST_EXPIRATION_INDEX_NAME,
         keys=(("expires_at", ASCENDING),),
         expire_after_seconds=0,
+    ),
+    PostIndexSpec(
+        name=POST_SEMANTIC_WINDOW_INDEX_NAME,
+        keys=(("status", ASCENDING), ("received_at", -1), ("_id", ASCENDING)),
     ),
 )
 """The complete index set owned by T004, excluding MongoDB's `_id_` index."""
@@ -177,6 +184,7 @@ async def initialize_post_indexes(
 __all__ = (
     "POST_EXPIRATION_INDEX_NAME",
     "POST_INDEX_SPECS",
+    "POST_SEMANTIC_WINDOW_INDEX_NAME",
     "POST_SOURCE_IDENTITY_INDEX_NAME",
     "PostIndexSpec",
     "initialize_post_indexes",

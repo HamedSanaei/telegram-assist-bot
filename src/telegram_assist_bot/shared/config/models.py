@@ -15,13 +15,14 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictFloat,
     StrictInt,
     StrictStr,
     StringConstraints,
     model_validator,
 )
 
-from telegram_assist_bot.application.ai.contracts import AITaskType
+from telegram_assist_bot.domain.ai_task import AITaskType
 
 SUPPORTED_CONFIGURATION_SCHEMA_VERSION: Final[int] = 1
 """The only configuration schema version supported by this release."""
@@ -298,6 +299,13 @@ class SourceChannelConfig(_FrozenConfigModel):
             "when the global feature is enabled."
         ),
     )
+    duplicate_detection_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Per-source semantic duplicate flag; required for enabled sources "
+            "when the global duplicate feature is enabled."
+        ),
+    )
     allowed_destination_names: Annotated[
         tuple[NonBlankString, ...], Field(min_length=1)
     ] = Field(description="Destination names permitted for collected posts.")
@@ -551,6 +559,21 @@ class AiTaskFailurePolicyConfig(_FrozenConfigModel):
     )
 
 
+class SemanticDuplicatePolicy(StrEnum):
+    """Approved actions for a valid semantic duplicate result."""
+
+    REJECT = "reject"
+    MANUAL_REVIEW = "manual_review"
+    CONTINUE_PROCESSING = "continue_processing"
+
+
+class SemanticDuplicateConfig(_FrozenConfigModel):
+    """Hold explicit semantic threshold and valid-duplicate policy."""
+
+    threshold: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    duplicate_policy: SemanticDuplicatePolicy
+
+
 class AiConfig(_FrozenConfigModel):
     """Hold provider declarations and task-routing skeletons."""
 
@@ -631,6 +654,10 @@ class ApplicationConfig(_FrozenConfigModel):
     logging: LoggingConfig = Field(description="Application logging configuration.")
     media: MediaStorageConfig = Field(default_factory=MediaStorageConfig)
     categorization: CategorizationConfig = Field(default_factory=CategorizationConfig)
+    semantic_duplicate: SemanticDuplicateConfig | None = Field(
+        default=None,
+        description="Explicit semantic policy; required only when effectively enabled.",
+    )
     ai: AiConfig = Field(description="AI provider and routing configuration.")
     advertisements: AdvertisementConfig = Field(
         description="Advertisement routing configuration."
@@ -683,6 +710,31 @@ class ApplicationConfig(_FrozenConfigModel):
                     "enabled advertisement detection requires an explicit "
                     "failure policy"
                 )
+        if self.features.duplicate_detection_enabled:
+            if any(
+                source.duplicate_detection_enabled is None for source in enabled_sources
+            ):
+                raise ValueError(
+                    "enabled semantic duplicate detection requires an explicit "
+                    "per-source flag"
+                )
+            semantic_effectively_enabled = any(
+                source.duplicate_detection_enabled is True for source in enabled_sources
+            )
+            if semantic_effectively_enabled:
+                if self.semantic_duplicate is None:
+                    raise ValueError(
+                        "enabled semantic duplicate detection requires explicit "
+                        "threshold and duplicate policy"
+                    )
+                if not any(
+                    policy.task is AITaskType.SEMANTIC_DUPLICATE
+                    for policy in self.ai.failure_policies
+                ):
+                    raise ValueError(
+                        "enabled semantic duplicate detection requires an explicit "
+                        "AI failure policy"
+                    )
         destination_ids = {
             item.telegram_channel_id for item in self.destination_channels
         }

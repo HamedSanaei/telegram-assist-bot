@@ -616,6 +616,20 @@ Application تأیید موجود است، اما T042 هیچ Bot UX، Worker، 
 نمی‌کند. اسناد Post قدیمی در نبود بخش `advertisement_processing` به `NotRequested`
 نسخه صفر خوانده می‌شوند و متن، Caption، Entity و Media اصلی دست‌نخورده می‌مانند.
 
+T043 یک state مستقل `semantic_duplicate_processing` به Post افزوده است. مرحله فقط
+پس از عبور Advertisement و exact duplicate اجرا می‌شود؛ exact match همچنان
+short-circuit قطعی T016 است. query نامزدها projection حداقلی دارد، بازهٔ دریافت
+`[now - 14 days, now]` را با expiry سخت‌گیرانهٔ `expires_at > now` اعمال می‌کند و
+با ترتیب `received_at DESC, _id ASC` قطعی است. index
+`ix_posts_semantic_window_v1` همین scan را پشتیبانی می‌کند.
+
+هر Post یک AIJob نسخه‌دار semantic دارد و شناسهٔ نامزد فقط در Application به متن
+مقایسه نگاشت می‌شود؛ هیچ Post ID یا metadata تلگرام به Provider داده نمی‌شود.
+خروجی schema 2 شامل Boolean، `similarity` و `confidence` مستقل است. ناسازگاری
+Boolean با threshold یک Provider result نامعتبر است. handler بالاترین similarity
+را انتخاب و در تساوی ترتیب query را حفظ می‌کند، سپس result/state را با CAS ثبت
+می‌کند. policyهای نتیجه و شکست صریح‌اند و این مسیر همچنان Worker/Runtime ندارد.
+
 ### قراردادها و مدل‌های پیاده‌سازی‌شده فاز اول
 
 در راستای فراهم‌سازی زیرساخت هوش مصنوعی مستقل از ارائه دهنده (Provider-agnostic)، بخش‌های زیر تعریف و پیاده‌سازی شده‌اند:
@@ -632,9 +646,9 @@ Application تأیید موجود است، اما T042 هیچ Bot UX، Worker، 
      - `SemanticDuplicateContext`: متن پست جدید، متن کاندید مقایسه و آستانه شباهت.
      - `CategorizationContext`: متن پست و فهرست دسته‌بندی‌های مجاز.
      - `ScoringContext`: متن پست جهت ارزیابی.
-   - برای خروجی هر تسک، یک کلاس پایدار مبتنی بر Pydantic تعریف شده است که از `BaseAIOutput` ارث‌بری می‌کند و دارای ویژگی نسخه سراسری `SCHEMA_VERSION = "1"` است:
+   - برای خروجی هر تسک، یک کلاس پایدار مبتنی بر Pydantic تعریف شده است؛ schemaهای عمومی نسخه ۱ باقی مانده‌اند و Semantic Duplicate به‌طور صریح به نسخه ۲ ارتقا یافته است:
      - `AdvertisementDetectionOutput`: شامل `is_advertisement` (bool)، `confidence` (float 0..1) و `reason` (str).
-     - `SemanticDuplicateOutput`: شامل `is_duplicate` (bool)، `confidence` (float 0..1) و `reason` (str).
+     - `SemanticDuplicateOutput` نسخه ۲: شامل `is_duplicate` (bool)، `similarity` و `confidence` مستقل (هر دو float 0..1) و `reason` محدود.
      - `CategorizationOutput`: شامل `category` (str)، `confidence` (float 0..1) و `reason` (str).
      - `ScoringOutput`: شامل `score` (int 1..10)، `confidence` (float 0..1) و `reason` (str).
 
@@ -791,7 +805,7 @@ JSON از `ensure_ascii=False` و JSON سخت‌گیرانه استفاده می
 4. Providerها، Modelها، روش Auth، Quota و Schema واقعی AI مشخص نشده‌اند.
 5. بخش ۷ Fallback چندمدلی را آینده می‌نامد، اما بخش ۱۱ آن را با معیار پذیرش الزام‌آور می‌کند؛ این نقشه‌راه بخش ۱۱ را برای فاز اول ملاک گرفته است.
 6. مقصد پیام تأیید می‌تواند گروه/کانال مشترک یا گفت‌وگوی جداگانه هر مدیر باشد؛ حالت‌های لازم و UX نهایی مشخص نیست.
-7. آستانه «بسیار نزدیک»، آستانه معنایی اولیه و رفتار Duplicate (رد یا دستی) مقدار قطعی ندارند.
+7. آستانه «بسیار نزدیک» خارج از Semantic Duplicate T043 هنوز مقدار قطعی ندارد؛ آستانه و policy معنایی در ADR-031 حل شده‌اند.
 8. Storage اولیه محیط Production (دیسک پایدار یا Object Storage)، سقف حجم Media و ظرفیت ۱۴روزه معلوم نیست.
 9. رفتار با Edit/Delete پیام منبع و پیام‌های Forwardشده تعریف نشده است.
 10. سیاست Collision تبلیغ و پست عادی گزینه‌ها را نام می‌برد ولی Default قطعی ندارد.

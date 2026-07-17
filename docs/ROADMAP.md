@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ پس از تکمیل T042 فعلاً Task فعالی وجود ندارد و T043 اقدام پیشنهادی بعدی است.
+- تنها یک Task می‌تواند `Active` باشد؛ پس از تکمیل T043 فعلاً Task فعالی وجود ندارد و T044 اقدام پیشنهادی بعدی است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -92,7 +92,7 @@
 | [T040](tasks/T040-ai-rate-limit-circuit-breaker.md) | Rate limit، Cooldown و Circuit Breaker | T035، T039 | `11.7`، `11.8`، `11.18` | Completed |
 | [T041](tasks/T041-ai-cache-audit-metrics.md) | Cache، Audit و آمار Provider | T004، T039، T040 | `11.15–11.17` | Completed |
 | [T042](tasks/T042-advertisement-detection.md) | تشخیص تبلیغ و سیاست شکست | T019، T035، T039، T041 | `5.8` | Completed |
-| [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Planned |
+| [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Completed |
 | [T044](tasks/T044-ai-categorization.md) | دسته‌بندی AI با Fallback پایه | T018، T035، T039 | `5.11`، `11.12` | Planned |
 | [T045](tasks/T045-delayed-ai-scoring.md) | امتیازدهی تأخیری و ویرایش هدر | T022، T025، T035، T039 | `5.20` | Planned |
 | [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Planned |

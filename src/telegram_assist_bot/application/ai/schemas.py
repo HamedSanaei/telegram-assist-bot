@@ -35,7 +35,7 @@ class SemanticDuplicateContext(BaseModel):
         description="The text of the existing candidate post",
     )
     similarity_threshold: float = Field(
-        0.8,
+        ...,
         ge=0.0,
         le=1.0,
         description="The minimum semantic similarity threshold",
@@ -104,9 +104,17 @@ class AdvertisementDetectionOutput(BaseAIOutput):
 class SemanticDuplicateOutput(BaseAIOutput):
     """Expected output structure for semantic duplicate checking."""
 
+    SCHEMA_VERSION: ClassVar[str] = "2"
+
     is_duplicate: bool = Field(
         ...,
         description="True if the content is semantically identical or highly similar",
+    )
+    similarity: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Semantic similarity score from 0.0 to 1.0",
     )
     confidence: float = Field(
         ...,
@@ -117,6 +125,7 @@ class SemanticDuplicateOutput(BaseAIOutput):
     reason: str = Field(
         ...,
         min_length=1,
+        max_length=512,
         description="Brief explanation of why it is or is not a duplicate",
     )
 

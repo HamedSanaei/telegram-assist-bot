@@ -27,6 +27,10 @@ class AIAuditEventType(StrEnum):
     FINAL_FAILURE = "final_failure"
     ADVERTISEMENT_RESULT_APPLIED = "advertisement_result_applied"
     ADVERTISEMENT_FAILURE_POLICY_APPLIED = "advertisement_failure_policy_applied"
+    SEMANTIC_DUPLICATE_RESULT_APPLIED = "semantic_duplicate_result_applied"
+    SEMANTIC_DUPLICATE_FAILURE_POLICY_APPLIED = (
+        "semantic_duplicate_failure_policy_applied"
+    )
 
 
 class AIAuditRepositoryError(Exception):

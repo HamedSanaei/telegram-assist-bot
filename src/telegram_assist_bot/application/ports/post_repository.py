@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import (
     Post,
     PostId,
@@ -33,6 +34,8 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "SemanticDuplicatePostRepository",
+    "SemanticDuplicatePostUpdateRequest",
 )
 
 
@@ -205,14 +208,34 @@ class AdvertisementPostUpdateRequest:
 
     def __post_init__(self) -> None:
         """Require exactly one additive processing-state step."""
-        if type(self.post) is not Post:
-            raise InvalidPostRepositoryRequestError
         if (
-            type(self.expected_processing_version) is not int
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
             or self.expected_processing_version < 0
             or self.post.advertisement_processing_version
             != self.expected_processing_version + 1
             or type(self.expected_processing_state) is not AdvertisementProcessingState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticDuplicatePostUpdateRequest:
+    """Carry one validated semantic-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: SemanticDuplicateState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive semantic transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.semantic_duplicate_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not SemanticDuplicateState
         ):
             raise InvalidPostRepositoryRequestError
 
@@ -269,4 +292,19 @@ class AdvertisementPostRepository(Protocol):
         request: AdvertisementPostUpdateRequest,
     ) -> Post:
         """Atomically persist one advertisement result/failure state transition."""
+        ...
+
+
+@runtime_checkable
+class SemanticDuplicatePostRepository(Protocol):
+    """Expose only canonical reads and semantic CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def update_semantic_duplicate(
+        self, request: SemanticDuplicatePostUpdateRequest
+    ) -> Post:
+        """Atomically persist one semantic result/failure transition."""
         ...

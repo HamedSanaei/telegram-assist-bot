@@ -444,3 +444,19 @@
   ساختگی تبدیل نمی‌شود. مسیر دستی در T042 فقط state/contract است و Telegram UX یا
   Runtime wiring ندارد. تغییر این چهار policy یا افزودن threshold confidence به
   تصمیم مستقل آینده نیاز دارد.
+
+## ADR-031 — آستانه، schema و policy تشخیص Duplicate معنایی
+
+- **Status:** Accepted
+- **Decision:** Semantic Duplicate فقط با threshold صریح typed فعال می‌شود؛ مقدار
+  اولیهٔ مصوب `0.88` است و مرز `similarity >= threshold` Duplicate محسوب می‌شود.
+  نبود threshold یا policy هنگام فعال‌بودن مؤثر feature خطای Configuration است و
+  مقدارهای example default پنهان نیستند. خروجی Semantic به prompt `2.0.0` و schema
+  `2` ارتقا یافته و `similarity` و `confidence` دو مقدار مستقل‌اند؛ ناسازگاری Boolean
+  و similarity نتیجهٔ Provider را نامعتبر می‌کند. policy نتیجه فقط یکی از `reject`،
+  `manual_review` یا `continue_processing` است. نامزد را Application از query قطعی
+  ۱۴روزه انتخاب می‌کند و Provider اجازهٔ انتخاب Post داخلی ندارد.
+- **Consequences:** exact duplicate T016 مقدم و دست‌نخورده است. reject پردازش بعدی
+  را متوقف می‌کند، manual review فقط handoff تایپ‌شدهٔ Application می‌سازد و
+  continue_processing نتیجهٔ Duplicate را حفظ ولی مرحلهٔ بعد را مجاز می‌کند. هیچ
+  Vector DB، embedding، Telegram UX، Worker یا Runtime wiring در T043 اضافه نشده است.

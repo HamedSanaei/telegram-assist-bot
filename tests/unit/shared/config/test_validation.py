@@ -794,6 +794,12 @@ def test_enabled_ai_feature_requires_its_matching_route(
             ("source_channels", 0, "advertisement_detection_enabled"),
             True,
         )
+    if route_task is AiTask.DUPLICATE_DETECTION:
+        _set_at(
+            valid_payload,
+            ("source_channels", 0, "duplicate_detection_enabled"),
+            True,
+        )
     ai = _as_object(valid_payload["ai"])
     routes = _as_list(ai["routes"])
     route = _as_object(routes[0])
@@ -936,6 +942,110 @@ def test_unknown_advertisement_failure_policy_is_rejected(
         )
 
     assert "ai.failure_policies[0].action" in _paths(captured.value)
+
+
+def _enable_semantic_duplicate(payload: JsonObject) -> None:
+    """Enable semantic checks using explicit route and final-failure policy."""
+    _set_at(payload, ("features", "duplicate_detection_enabled"), True)
+    _set_at(
+        payload,
+        ("source_channels", 0, "duplicate_detection_enabled"),
+        True,
+    )
+    ai = _as_object(payload["ai"])
+    route = dict(_as_object(_as_list(ai["routes"])[0]))
+    route["task"] = AiTask.DUPLICATE_DETECTION.value
+    _as_list(ai["routes"]).append(route)
+    policy = dict(_as_object(_as_list(ai["failure_policies"])[0]))
+    policy["task"] = AiTask.DUPLICATE_DETECTION.value
+    _as_list(ai["failure_policies"]).append(policy)
+
+
+def test_disabled_semantic_duplicate_needs_no_policy_or_threshold(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configuration remains valid while semantic detection is disabled."""
+    valid_payload.pop("semantic_duplicate")
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("duplicate_detection_enabled")
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is None
+    assert loaded.settings.source_channels[0].duplicate_detection_enabled is None
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.88, 1.0])
+def test_enabled_semantic_duplicate_accepts_explicit_threshold_boundaries(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    threshold: float,
+) -> None:
+    """Only an explicit bounded threshold configures semantic consistency."""
+    _enable_semantic_duplicate(valid_payload)
+    _set_at(valid_payload, ("semantic_duplicate", "threshold"), threshold)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is not None
+    assert loaded.settings.semantic_duplicate.threshold == threshold
+
+
+@pytest.mark.parametrize("policy", ["reject", "manual_review", "continue_processing"])
+def test_enabled_semantic_duplicate_accepts_only_approved_result_policies(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    policy: str,
+) -> None:
+    """The three approved result policies are explicit configuration values."""
+    _enable_semantic_duplicate(valid_payload)
+    _set_at(valid_payload, ("semantic_duplicate", "duplicate_policy"), policy)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is not None
+    assert loaded.settings.semantic_duplicate.duplicate_policy.value == policy
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("threshold", None),
+        ("threshold", -0.01),
+        ("threshold", 1.01),
+        ("duplicate_policy", None),
+        ("duplicate_policy", "implicit_default"),
+    ],
+)
+def test_enabled_semantic_duplicate_rejects_missing_or_invalid_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    field: str,
+    value: object,
+) -> None:
+    """No threshold or duplicate-result policy is inferred by code."""
+    _enable_semantic_duplicate(valid_payload)
+    semantic = _as_object(valid_payload["semantic_duplicate"])
+    if value is None:
+        semantic.pop(field)
+    else:
+        semantic[field] = value
+
+    with pytest.raises(ConfigurationValidationError):
+        load_configuration(
+            configuration_writer(valid_payload), environ=synthetic_environ
+        )
 
 
 def test_enabled_provider_requires_an_api_key_reference(

@@ -64,8 +64,14 @@ def test_registry_loads_default_prompts() -> None:
     assert len(prompts) == 4
     for prompt in prompts:
         assert isinstance(prompt.task_type, AITaskType)
-        assert prompt.prompt_version == "1.0.0"
-        assert prompt.schema_version == "1"
+        expected_version = (
+            "2.0.0" if prompt.task_type is AITaskType.SEMANTIC_DUPLICATE else "1.0.0"
+        )
+        expected_schema = (
+            "2" if prompt.task_type is AITaskType.SEMANTIC_DUPLICATE else "1"
+        )
+        assert prompt.prompt_version == expected_version
+        assert prompt.schema_version == expected_schema
         assert len(prompt.prompt_hash) == 64
         # Assert Persian and emoji are preserved
         assert "دستیار" in prompt.body or "پست" in prompt.body

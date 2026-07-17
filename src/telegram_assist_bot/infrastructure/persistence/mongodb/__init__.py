@@ -21,6 +21,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
 from telegram_assist_bot.infrastructure.persistence.mongodb.indexes import (
     POST_EXPIRATION_INDEX_NAME,
     POST_INDEX_SPECS,
+    POST_SEMANTIC_WINDOW_INDEX_NAME,
     POST_SOURCE_IDENTITY_INDEX_NAME,
     PostIndexSpec,
     initialize_post_indexes,
@@ -53,6 +54,9 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.publication_reposito
     MongoScheduleRepository,
     initialize_publication_indexes,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.semantic_duplicate_candidates import (  # noqa: E501
+    MongoSemanticDuplicateCandidateRepository,
+)
 
 __all__ = (
     "MINIMUM_MONGODB_WIRE_VERSION",
@@ -60,6 +64,7 @@ __all__ = (
     "POST_DOCUMENT_SCHEMA_VERSION",
     "POST_EXPIRATION_INDEX_NAME",
     "POST_INDEX_SPECS",
+    "POST_SEMANTIC_WINDOW_INDEX_NAME",
     "POST_SOURCE_IDENTITY_INDEX_NAME",
     "InvalidPostDocumentError",
     "MongoApprovalPostLoader",
@@ -74,6 +79,7 @@ __all__ = (
     "MongoPublicationRepository",
     "MongoRuntimeHeartbeatRepository",
     "MongoScheduleRepository",
+    "MongoSemanticDuplicateCandidateRepository",
     "PostIndexSpec",
     "close_mongodb_client",
     "create_mongodb_client",

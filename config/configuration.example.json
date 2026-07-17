@@ -71,6 +71,7 @@
       "username": "source_example",
       "enabled": true,
       "advertisement_detection_enabled": false,
+      "duplicate_detection_enabled": false,
       "default_category_id": "general",
       "allowed_destination_names": [
         "destination-fa"
@@ -89,6 +90,10 @@
     "advertisement_detection_enabled": false,
     "duplicate_detection_enabled": false,
     "ai_scoring_enabled": false
+  },
+  "semantic_duplicate": {
+    "threshold": 0.88,
+    "duplicate_policy": "manual_review"
   },
   "publishing": {
     "scheduled_publication_interval_seconds": 300,

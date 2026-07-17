@@ -8,14 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-class AITaskType(StrEnum):
-    """Supported AI task types for Phase 1."""
-
-    ADVERTISEMENT_DETECTION = "advertisement_detection"
-    SEMANTIC_DUPLICATE = "semantic_duplicate"
-    CATEGORIZATION = "categorization"
-    SCORING = "scoring"
+from telegram_assist_bot.domain.ai_task import AITaskType as AITaskType  # noqa: TC001
 
 
 class AISideEffectWarningCode(StrEnum):

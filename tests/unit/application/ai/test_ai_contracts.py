@@ -78,6 +78,7 @@ def test_semantic_duplicate_schemas() -> None:
     # Valid output
     out = SemanticDuplicateOutput(
         is_duplicate=False,
+        similarity=0.1,
         confidence=0.1,
         reason="متن‌ها متفاوت هستند.",  # noqa: RUF001
     )
@@ -85,7 +86,9 @@ def test_semantic_duplicate_schemas() -> None:
 
     # Invalid confidence
     with pytest.raises(ValidationError):
-        SemanticDuplicateOutput(is_duplicate=False, confidence=-0.5, reason="Test")
+        SemanticDuplicateOutput(
+            is_duplicate=False, similarity=0.1, confidence=-0.5, reason="Test"
+        )
 
 
 def test_categorization_schemas() -> None:

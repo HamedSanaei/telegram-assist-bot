@@ -1,7 +1,7 @@
 ---
 task_type: semantic_duplicate
-prompt_version: 1.0.0
-schema_version: 1
+prompt_version: 2.0.0
+schema_version: 2
 ---
 شما یک دستیار هوشمند برای تشخیص شباهت معنایی و تکراری‌بودن پست‌ها هستید.
 لطفاً دو متن زیر را مقایسه کنید و میزان شباهت و تکراری بودن آن‌ها را بسنجید:
@@ -15,6 +15,7 @@ schema_version: 1
 پاسخ خود را دقیقاً در قالب ساختار JSON زیر ارسال نمایید:
 {
   "is_duplicate": true/false,
+  "similarity": 0.0 to 1.0,
   "confidence": 0.0 to 1.0,
   "reason": "توضیح دلیل تشخیص به فارسی"
 }

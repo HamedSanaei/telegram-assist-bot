@@ -206,7 +206,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `domain/ai/provider_health.py` | وضعیت مستقل Provider/Model، Reservationهای چندگانه، پنجره ثابت درخواست و ماشین Closed/Open/HalfOpen |
 | `domain/posts/__init__.py` | API عمومی و مستند قرارداد Post Domain |
 | `domain/media/` | هویت و metadata immutable فایل Media بدون وابستگی به Filesystem/Telegram |
-| `domain/duplicates/` | نتیجهٔ نسخه‌دار duplicate دقیق و reference تطبیق‌یافته |
+| `domain/duplicates/` | نتیجهٔ exact سازگار و نتیجه/state/policy نسخه‌دار semantic با similarity و confidence مستقل |
 | `domain/categories/` | هویت دسته و نتیجهٔ auditپذیر دسته‌بندی پایه/دستی |
 | `domain/publication.py` و `domain/scheduling.py` | stateهای Publication/Schedule، identity نسخه‌دار، lease، failure و audit due |
 | `application/ports/post_repository.py` | insert یکتا با canonical ID/Conflict، claim اتمیک مرحلهٔ بعد، read/list و CAS مستقل از driver |
@@ -218,7 +218,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/provider_state_repository.py` | Port رزرو اتمیک ظرفیت و ثبت outcome تایپ‌شدهٔ Provider/Model |
 | `application/ports/ai_cache_repository.py` | قرارداد Cache نسخه‌دار، lookup معتبر و first-valid-write-wins مستقل از MongoDB |
 | `application/ports/ai_audit_repository.py` | قرارداد eventهای immutable، sanitized و idempotent اجرای AI |
-| `application/ports/post_repository.py` | Port و درخواست CAS افزایشی نتیجه/شکست تبلیغات در کنار قراردادهای پایدار Post |
+| `application/ports/post_repository.py` | Port و درخواست‌های CAS افزایشی نتیجه/شکست تبلیغات و Duplicate معنایی در کنار قراردادهای پایدار Post |
 | `application/ports/provider_metrics_repository.py` | delta و snapshot آمار تجمعی مستقل هر Provider/Model |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
@@ -250,6 +250,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور انتخاب، Retry/Fallback و Guard با bypass کامل Provider روی Cache hit و side effectهای امن Audit/Metrics |
 | `application/detect_advertisement.py` | enqueue یکتای `advertisement_detection` با رعایت هم‌زمان flag سراسری/per-source و حفظ متن اصلی |
 | `application/ai/task_handlers/advertisement_detection.py` | اعمال idempotent نتیجه یا شکست نهایی AIJob روی Post با CAS، audit امن و handoff تایپ‌شده بررسی دستی |
+| `application/detect_semantic_duplicate.py` | short-circuit exact، query نامزد ۱۴روزه و enqueue یکتای یک AIJob semantic با context بدون شناسه داخلی |
+| `application/ports/semantic_duplicate_candidates.py` | projection application-owned نامزدها و Port query با Clock ثابت |
+| `application/ai/task_handlers/semantic_duplicate.py` | validation آستانه، انتخاب قطعی بیشترین similarity و اعمال result/failure با CAS و Audit امن |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
 | `infrastructure/mongodb/provider_state_repository.py` | Adapter اتمیک MongoDB برای ظرفیت، پنجره درخواست، Cooldown، Circuit و Reservationهای بدون TTL |
 | `infrastructure/mongodb/ai_cache_repository.py` | Cache disposable با unique identity، TTL، expiry صریح و write اتمیک |
@@ -260,9 +263,10 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
-| `infrastructure/persistence/mongodb/indexes.py` | تعریف، ساخت تکرارشونده و Fail-fast دو Index دقیق `uq_posts_source_identity_v1` و `ttl_posts_expires_at_v1` |
-| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity، state/result تبلیغ و default امن برای اسناد legacy |
-| `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ |
+| `infrastructure/persistence/mongodb/indexes.py` | Indexهای source identity، TTL و scan قطعی پنجره semantic با validation تکرارشونده و fail-fast |
+| `infrastructure/persistence/mongodb/semantic_duplicate_candidates.py` | query حداقلی MongoDB برای نامزدهای معتبر ۱۴روزه با ترتیب قطعی |
+| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity و state/result تبلیغ و semantic با default امن legacy |
+| `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
 | `infrastructure/persistence/mongodb/content_repository.py` | Media و preparation به‌همراه mapper سازگار legacy و claim/lease/retry/permanent state برای Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |

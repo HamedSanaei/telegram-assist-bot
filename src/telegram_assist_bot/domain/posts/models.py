@@ -15,6 +15,15 @@ from telegram_assist_bot.domain.advertisement import (
     AdvertisementProcessingState,
     InvalidAdvertisementTransitionError,
 )
+from telegram_assist_bot.domain.duplicates.models import (
+    SEMANTIC_DUPLICATE_MANUAL_REVIEW_REASON,
+    InvalidSemanticDuplicateTransitionError,
+    SemanticDuplicateFailure,
+    SemanticDuplicateFailurePolicy,
+    SemanticDuplicatePolicy,
+    SemanticDuplicateResult,
+    SemanticDuplicateState,
+)
 from telegram_assist_bot.domain.posts.entities import TelegramEntity
 from telegram_assist_bot.domain.posts.errors import (
     InvalidPostIdentifierError,
@@ -170,6 +179,17 @@ class Post:
         default=None,
         repr=False,
     )
+    semantic_duplicate_state: SemanticDuplicateState = (
+        SemanticDuplicateState.NOT_REQUESTED
+    )
+    semantic_duplicate_version: int = 0
+    semantic_duplicate_job_id: str | None = None
+    semantic_duplicate_result: SemanticDuplicateResult | None = field(
+        default=None, repr=False
+    )
+    semantic_duplicate_failure: SemanticDuplicateFailure | None = field(
+        default=None, repr=False
+    )
     expires_at: datetime = field(init=False)
 
     def __post_init__(self) -> None:
@@ -218,6 +238,30 @@ class Post:
             type(self.advertisement_failure) is not AdvertisementCheckFailure
         ):
             raise PostInvariantError
+        if type(self.semantic_duplicate_state) is not SemanticDuplicateState:
+            raise PostInvariantError
+        if (
+            type(self.semantic_duplicate_version) is not int
+            or self.semantic_duplicate_version < 0
+        ):
+            raise PostInvariantError
+        if (
+            self.semantic_duplicate_job_id is not None
+            and not _is_bounded_non_blank_string(
+                self.semantic_duplicate_job_id, _MAX_POST_ID_LENGTH
+            )
+        ):
+            raise PostInvariantError
+        if (
+            self.semantic_duplicate_result is not None
+            and type(self.semantic_duplicate_result) is not SemanticDuplicateResult
+        ):
+            raise PostInvariantError
+        if (
+            self.semantic_duplicate_failure is not None
+            and type(self.semantic_duplicate_failure) is not SemanticDuplicateFailure
+        ):
+            raise PostInvariantError
 
         source_published_at = _canonical_utc(self.source_published_at)
         received_at = _canonical_utc(self.received_at)
@@ -232,6 +276,7 @@ class Post:
         object.__setattr__(self, "expires_at", expires_at)
         self._validate_lifecycle_history()
         self._validate_advertisement_state()
+        self._validate_semantic_duplicate_state()
 
     def __eq__(self, other: object) -> bool:
         """Compare stable aggregate identity rather than mutable lifecycle state."""
@@ -338,6 +383,154 @@ class Post:
         if not self.advertisement_requires_manual_review:
             return None
         return ADVERTISEMENT_MANUAL_REVIEW_REASON
+
+    @property
+    def semantic_duplicate_allows_next_stage(self) -> bool:
+        """Return whether the next required pipeline stage may run."""
+        return self.semantic_duplicate_state.allows_next_pipeline_stage
+
+    @property
+    def semantic_duplicate_requires_manual_review(self) -> bool:
+        """Expose the application-owned review handoff."""
+        return self.semantic_duplicate_state.requires_manual_review
+
+    @property
+    def semantic_duplicate_manual_review_reason(self) -> str | None:
+        """Return a stable reason for a valid duplicate manual-review handoff."""
+        if (
+            self.semantic_duplicate_state
+            is not SemanticDuplicateState.DUPLICATE_MANUAL_REVIEW
+        ):
+            return None
+        return SEMANTIC_DUPLICATE_MANUAL_REVIEW_REASON
+
+    def start_semantic_duplicate_check(
+        self,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+        requested_at: datetime,
+    ) -> Self:
+        """Enter semantic processing only after advertisement permits continuation."""
+        self._assert_semantic_transition_context(
+            expected_processing_version, requested_at
+        )
+        if (
+            self.semantic_duplicate_state is SemanticDuplicateState.PENDING
+            and self.semantic_duplicate_job_id == job_id
+        ):
+            return self
+        if (
+            self.semantic_duplicate_state is not SemanticDuplicateState.NOT_REQUESTED
+            or not self.advertisement_allows_next_stage
+            or not _is_bounded_non_blank_string(job_id, _MAX_POST_ID_LENGTH)
+        ):
+            raise InvalidSemanticDuplicateTransitionError
+        return replace(
+            self,
+            semantic_duplicate_state=SemanticDuplicateState.PENDING,
+            semantic_duplicate_version=self.semantic_duplicate_version + 1,
+            semantic_duplicate_job_id=job_id,
+            semantic_duplicate_result=None,
+            semantic_duplicate_failure=None,
+        )
+
+    def apply_semantic_duplicate_result(
+        self,
+        result: SemanticDuplicateResult,
+        *,
+        policy: SemanticDuplicatePolicy,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Self:
+        """Apply one validated semantic decision and explicit duplicate policy."""
+        self._assert_semantic_transition_context(
+            expected_processing_version, result.checked_at
+        )
+        if (
+            self.semantic_duplicate_state
+            not in {
+                SemanticDuplicateState.PENDING,
+                SemanticDuplicateState.RETRY_PENDING,
+            }
+            or self.semantic_duplicate_job_id != job_id
+            or type(policy) is not SemanticDuplicatePolicy
+        ):
+            raise InvalidSemanticDuplicateTransitionError
+        if not result.is_duplicate:
+            target = SemanticDuplicateState.PASSED
+        else:
+            target = {
+                SemanticDuplicatePolicy.REJECT: (
+                    SemanticDuplicateState.DUPLICATE_REJECTED
+                ),
+                SemanticDuplicatePolicy.MANUAL_REVIEW: (
+                    SemanticDuplicateState.DUPLICATE_MANUAL_REVIEW
+                ),
+                SemanticDuplicatePolicy.CONTINUE_PROCESSING: (
+                    SemanticDuplicateState.DUPLICATE_ALLOWED
+                ),
+            }[policy]
+        return replace(
+            self,
+            semantic_duplicate_state=target,
+            semantic_duplicate_version=self.semantic_duplicate_version + 1,
+            semantic_duplicate_result=result,
+            semantic_duplicate_failure=None,
+        )
+
+    def apply_semantic_duplicate_failure(
+        self,
+        failure: SemanticDuplicateFailure,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Self:
+        """Apply an AI failure policy without fabricating a duplicate result."""
+        self._assert_semantic_transition_context(
+            expected_processing_version, failure.failed_at
+        )
+        if (
+            self.semantic_duplicate_state
+            not in {
+                SemanticDuplicateState.PENDING,
+                SemanticDuplicateState.RETRY_PENDING,
+            }
+            or self.semantic_duplicate_job_id != job_id
+        ):
+            raise InvalidSemanticDuplicateTransitionError
+        target = {
+            SemanticDuplicateFailurePolicy.CONTINUE_PROCESSING: (
+                SemanticDuplicateState.FAILURE_CONTINUE
+            ),
+            SemanticDuplicateFailurePolicy.STOP_PROCESSING: (
+                SemanticDuplicateState.PROCESSING_STOPPED
+            ),
+            SemanticDuplicateFailurePolicy.RETRY_LATER: (
+                SemanticDuplicateState.RETRY_PENDING
+            ),
+            SemanticDuplicateFailurePolicy.MANUAL_REVIEW: (
+                SemanticDuplicateState.FAILURE_MANUAL_REVIEW
+            ),
+        }[failure.policy]
+        return replace(
+            self,
+            semantic_duplicate_state=target,
+            semantic_duplicate_version=self.semantic_duplicate_version + 1,
+            semantic_duplicate_result=None,
+            semantic_duplicate_failure=failure,
+        )
+
+    def _assert_semantic_transition_context(
+        self, expected_processing_version: int, occurred_at: datetime
+    ) -> None:
+        if (
+            type(expected_processing_version) is not int
+            or expected_processing_version != self.semantic_duplicate_version
+            or self.status is not PostStatus.STORED
+            or self.is_expired_at(occurred_at)
+        ):
+            raise InvalidSemanticDuplicateTransitionError
 
     def start_advertisement_check(
         self,
@@ -584,6 +777,42 @@ class Post:
             or failure is None
             or failure.policy is not expected_policy
         ):
+            raise PostInvariantError
+
+    def _validate_semantic_duplicate_state(self) -> None:
+        """Validate additive semantic state and legacy-safe defaults."""
+        state = self.semantic_duplicate_state
+        result = self.semantic_duplicate_result
+        failure = self.semantic_duplicate_failure
+        job_id = self.semantic_duplicate_job_id
+        if state is SemanticDuplicateState.NOT_REQUESTED:
+            if self.semantic_duplicate_version != 0 or any(
+                value is not None for value in (job_id, result, failure)
+            ):
+                raise PostInvariantError
+            return
+        if job_id is None or self.semantic_duplicate_version < 1:
+            raise PostInvariantError
+        if state is SemanticDuplicateState.PENDING:
+            if result is not None or failure is not None:
+                raise PostInvariantError
+            return
+        if state is SemanticDuplicateState.RETRY_PENDING:
+            if result is not None or failure is None or failure.next_retry_at is None:
+                raise PostInvariantError
+            return
+        if state in {
+            SemanticDuplicateState.PASSED,
+            SemanticDuplicateState.DUPLICATE_REJECTED,
+            SemanticDuplicateState.DUPLICATE_MANUAL_REVIEW,
+            SemanticDuplicateState.DUPLICATE_ALLOWED,
+        }:
+            if result is None or failure is not None:
+                raise PostInvariantError
+            if (state is SemanticDuplicateState.PASSED) is result.is_duplicate:
+                raise PostInvariantError
+            return
+        if result is not None or failure is None:
             raise PostInvariantError
 
 
