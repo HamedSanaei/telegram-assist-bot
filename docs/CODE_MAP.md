@@ -46,6 +46,16 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │       ├── models.py
 │   │       └── status.py
 │   ├── application/
+│   │   ├── ai/
+│   │   │   ├── __init__.py
+│   │   │   ├── contracts.py
+│   │   │   ├── prompt_registry.py
+│   │   │   ├── schemas.py
+│   │   │   └── prompts/
+│   │   │       ├── advertisement_detection.txt
+│   │   │       ├── categorization.txt
+│   │   │       ├── scoring.txt
+│   │   │       └── semantic_duplicate.txt
 │   │   ├── authenticate_telegram_session.py
 │   │   ├── validate_telegram_session.py
 │   │   ├── crawl_today_text_posts.py
@@ -54,6 +64,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   ├── text_ingestion.py
 │   │   └── ports/
 │   │       ├── __init__.py
+│   │       ├── ai_provider.py
 │   │       ├── clock.py
 │   │       ├── post_repository.py
 │   │       └── telegram_source_gateway.py
@@ -179,6 +190,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/telegram_source_gateway.py` | DTO، Port، result و errorهای application-owned برای auth، validation، History و subscription |
 | `application/ports/media.py` | Portهای Stream/Storage/Persistence و DTOهای Media، Album، duplicate، category، artifact و readiness |
 | `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
+| `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
@@ -194,6 +206,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/categorize_post.py` | precedence دستی، keyword قطعی و default منبع؛ policy نسخه ۱ |
 | `application/prepare_post_pipeline.py` | resume مرحله‌ای از MongoDB، artifact مستقل مقصد و readiness اتمیک |
 | `application/runtime_ingestion.py` | مسیر مشترک History/Live؛ observation پیش‌دانلود، claim/lease و anchor canonical Album، isolation خطای هر گروه و preparation idempotent |
+| `application/ai/contracts.py` | قراردادهای عمومی AI شامل `AITaskType` و `AIResult` |
+| `application/ai/schemas.py` | انتیتی‌ها و اعتبارسنجی ورودی/خروجی‌های AI |
+| `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
 | `infrastructure/persistence/mongodb/indexes.py` | تعریف، ساخت تکرارشونده و Fail-fast دو Index دقیق `uq_posts_source_identity_v1` و `ttl_posts_expires_at_v1` |

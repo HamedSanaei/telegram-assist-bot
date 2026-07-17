@@ -235,10 +235,15 @@ def test_application_port_sources_do_not_import_infrastructure_or_drivers() -> N
                 allowed = (
                     root in sys.stdlib_module_names
                     or root == "__future__"
+                    or root == "pydantic"
                     or (
                         module in {"telegram_assist_bot.domain", _PORTS_PACKAGE}
                         or module.startswith(
-                            ("telegram_assist_bot.domain.", f"{_PORTS_PACKAGE}.")
+                            (
+                                "telegram_assist_bot.domain.",
+                                f"{_PORTS_PACKAGE}.",
+                                "telegram_assist_bot.application.ai",
+                            )
                         )
                     )
                 )
@@ -253,6 +258,7 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "AIProvider",
         "AlbumFinalizationStatus",
         "AdminMessagingGateway",
         "ApprovalContent",

@@ -20,6 +20,7 @@ from telegram_assist_bot.application.ports.admin import (
     InlineButton,
     InlineKeyboard,
 )
+from telegram_assist_bot.application.ports.ai_provider import AIProvider
 from telegram_assist_bot.application.ports.clock import Clock
 from telegram_assist_bot.application.ports.media import (
     AlbumFinalizationStatus,
@@ -114,6 +115,7 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 )
 
 __all__ = (
+    "AIProvider",
     "AdminMessagingGateway",
     "AlbumFinalizationStatus",
     "ApprovalAdministratorDeliveryState",
