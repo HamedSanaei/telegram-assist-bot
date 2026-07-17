@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from telegram_assist_bot.application.ai.claim_ai_job import ClaimAIJob
 from telegram_assist_bot.application.ai.contracts import (
     AIResult,
     AITaskType,
     RawResponseEnvelope,
 )
+from telegram_assist_bot.application.ai.enqueue_ai_job import EnqueueAIJob
 from telegram_assist_bot.application.ai.prompt_registry import (
     PromptMetadata,
     PromptRegistry,
@@ -31,6 +33,8 @@ __all__ = (
     "BaseAIOutput",
     "CategorizationContext",
     "CategorizationOutput",
+    "ClaimAIJob",
+    "EnqueueAIJob",
     "PromptMetadata",
     "PromptRegistry",
     "RawResponseEnvelope",

@@ -39,6 +39,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   ├── py.typed
 │   ├── domain/
 │   │   ├── __init__.py
+│   │   ├── ai_job.py
 │   │   └── posts/
 │   │       ├── __init__.py
 │   │       ├── entities.py
@@ -48,7 +49,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   ├── application/
 │   │   ├── ai/
 │   │   │   ├── __init__.py
+│   │   │   ├── claim_ai_job.py
 │   │   │   ├── contracts.py
+│   │   │   ├── enqueue_ai_job.py
 │   │   │   ├── prompt_registry.py
 │   │   │   ├── schemas.py
 │   │   │   └── prompts/
@@ -64,12 +67,16 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   ├── text_ingestion.py
 │   │   └── ports/
 │   │       ├── __init__.py
+│   │       ├── ai_job_repository.py
 │   │       ├── ai_provider.py
 │   │       ├── clock.py
 │   │       ├── post_repository.py
 │   │       └── telegram_source_gateway.py
 │   ├── infrastructure/
 │   │   ├── __init__.py
+│   │   ├── mongodb/
+│   │   │   ├── __init__.py
+│   │   │   └── ai_job_repository.py
 │   │   ├── persistence/
 │   │       ├── __init__.py
 │   │       └── mongodb/
@@ -181,6 +188,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `domain/posts/entities.py` | Entity مستقل از SDK با مختصات UTF-16 و metadata محدود Custom Emoji |
 | `domain/posts/status.py` | Enumها، جدول immutable Transition و history recordهای UTC |
 | `domain/posts/errors.py` | Exceptionهای Domain برای invariant، زمان، transition، version و تغییر محتوای اصلی |
+| `domain/ai_job.py` | مدل دامنه صف کارهای AI شامل وضعیت‌ها، مهلت اجاره (lease)، کنترل همروندی خوش‌بینانه و اعتبارسنجی |
 | `domain/posts/__init__.py` | API عمومی و مستند قرارداد Post Domain |
 | `domain/media/` | هویت و metadata immutable فایل Media بدون وابستگی به Filesystem/Telegram |
 | `domain/duplicates/` | نتیجهٔ نسخه‌دار duplicate دقیق و reference تطبیق‌یافته |
@@ -190,6 +198,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ports/telegram_source_gateway.py` | DTO، Port، result و errorهای application-owned برای auth، validation، History و subscription |
 | `application/ports/media.py` | Portهای Stream/Storage/Persistence و DTOهای Media، Album، duplicate، category، artifact و readiness |
 | `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
+| `application/ports/ai_job_repository.py` | قرارداد درگاه پایدار صف کارهای هوش مصنوعی |
 | `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
@@ -208,6 +217,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/runtime_ingestion.py` | مسیر مشترک History/Live؛ observation پیش‌دانلود، claim/lease و anchor canonical Album، isolation خطای هر گروه و preparation idempotent |
 | `application/ai/contracts.py` | قراردادهای عمومی AI شامل `AITaskType` و `AIResult` |
 | `application/ai/schemas.py` | انتیتی‌ها و اعتبارسنجی ورودی/خروجی‌های AI |
+| `application/ai/enqueue_ai_job.py` | Use Case برای درج idempotent کارها با کلید یکتا و سطح اولویت |
+| `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
+| `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
 | `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |

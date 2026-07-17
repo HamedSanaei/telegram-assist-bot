@@ -138,6 +138,12 @@
     ]
   },
   "ai": {
+    "queue": {
+      "lease_duration_seconds": 60,
+      "max_attempts": 3,
+      "next_run_delay_seconds": 30,
+      "worker_poll_seconds": 5
+    },
     "providers": [
       {
         "name": "synthetic-provider",

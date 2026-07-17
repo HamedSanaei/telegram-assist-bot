@@ -258,7 +258,13 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "AIJobConcurrencyConflictError",
+        "AIJobNotFoundError",
+        "AIJobRepository",
+        "AIJobRepositoryError",
         "AIProvider",
+        "EnqueueJobOutcome",
+        "EnqueueJobResult",
         "AlbumFinalizationStatus",
         "AdminMessagingGateway",
         "ApprovalContent",

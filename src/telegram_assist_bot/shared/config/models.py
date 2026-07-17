@@ -434,9 +434,42 @@ class AiTaskRouteConfig(_FrozenConfigModel):
     )
 
 
+class AiQueueConfig(_FrozenConfigModel):
+    """Hold AI Job queue parameters."""
+
+    lease_duration_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=86400,
+        description="Lease duration in seconds for claimed jobs.",
+    )
+    max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        description="Maximum attempts to process a job across fallbacks.",
+    )
+    next_run_delay_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=86400,
+        description="Delay in seconds before retrying a failed job attempt.",
+    )
+    worker_poll_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=3600,
+        description="Polling interval in seconds for workers.",
+    )
+
+
 class AiConfig(_FrozenConfigModel):
     """Hold provider declarations and task-routing skeletons."""
 
+    queue: AiQueueConfig = Field(
+        default_factory=AiQueueConfig,
+        description="Optional AI job queue configuration.",
+    )
     providers: tuple[AiProviderConfig, ...] = Field(
         description="Declared AI providers; may be empty when AI features are off."
     )

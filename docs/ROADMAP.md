@@ -84,7 +84,7 @@
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
 | [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Completed |
-| [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Planned |
+| [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Completed |
 | [T036](tasks/T036-first-ai-provider-adapter.md) | Adapter اولین Provider منتخب | T005، T034 | `11.2–11.5` | Planned |
 | [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Planned |
 | [T038](tasks/T038-ai-response-normalization.md) | Validation، Repair و Normalization | T034، T036، T037 | `11.4`، `11.5`، `11.11` | Planned |
