@@ -74,6 +74,9 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │       └── telegram_source_gateway.py
 │   ├── infrastructure/
 │   │   ├── __init__.py
+│   │   ├── ai/
+│   │   │   ├── __init__.py
+│   │   │   └── z_ai.py
 │   │   ├── mongodb/
 │   │   │   ├── __init__.py
 │   │   │   └── ai_job_repository.py
@@ -220,6 +223,7 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/ai/enqueue_ai_job.py` | Use Case برای درج idempotent کارها با کلید یکتا و سطح اولویت |
 | `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
 | `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
+| `infrastructure/ai/z_ai.py` | آداپتور تک-Attempt ارائه‌دهنده z-ai با مدل glm-4.7-flash، رد هدایت مجدد و Base URL غیراستاندارد، و طبقه‌بندی و پاک‌سازی خطاها |
 | `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |

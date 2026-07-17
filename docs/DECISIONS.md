@@ -374,3 +374,22 @@
   بدون migration، execution یا cancellation خودکار inert می‌مانند. تغییر scheduled
   به immediate تا حذف بومی موفق صبر می‌کند؛ Bot API هرگز Session کاربر را باز
   نمی‌کند.
+
+## ADR-027 — آداپتور اول ارائه‌دهنده هوش مصنوعی (z-ai)
+
+- **Status:** Accepted
+- **Context:** پیاده‌سازی اولین مدل هوش مصنوعی (z-ai) برای تشخیص تبلیغات، تشابه معنایی، دسته‌بندی و امتیازدهی پست‌های تلگرام به صورت ناهمگام (Async) بدون ایجاد وابستگی در لایه Application.
+- **Decision:**
+  - نام ارائه‌دهنده: `z-ai`
+  - مدل مورد استفاده: `glm-4.7-flash`
+  - آدرس رسمی پایگاه: `https://api.z.ai/api/paas/v4/chat/completions`
+  - روش احراز هویت: HTTP Bearer Token
+  - متغیر محیطی Secret: `TAB_ZAI_API_KEY`
+  - بدون قابلیت Streaming
+  - تسک‌های پشتیبانی شده: `advertisement_detection` ،`semantic_duplicate` ،`categorization` ،`scoring`
+  - سیاست Timeout: پیش‌فرض ۳۰ ثانیه
+  - سیاست اندازه پاسخ (Response Size Protection): محدودیت حداکثر پاسخ به ۱ مگابایت (1,048,576 بایت)
+  - فرمت درخواست/پاسخ: مطابق استاندارد Chat Completions REST API ارسالی با فیلد `model` و ساختار `messages` و خروجی فیلد `choices[0].message.content`
+  - مدیریت استثناءها: دسته‌بندی و نگاشت دقیق تمام حالت‌های شکست به خطاهای بومی (transient, timeout, rate_limit, permanent, authorization) بدون اعمال هرگونه تلاش مجدد (Retry) یا Fallback داخلی در آداپتور.
+- **Reason:** ارائه‌دهنده سریع با مدل glm-4.7-flash برای تسک‌های فاز اول با سرعت و پاسخ‌دهی بالا بدون نیاز به منابع پردازشی سنگین.
+- **Consequences:** آداپتور مستقل از بقیه اجزاء و به صورت مجزا تعریف می‌شود و هیچ تغییری در موتور اصلی سیستم یا کلاس‌های اصلی به غیر از تعاریف پیکربندی ایجاد نمی‌کند. کلیدهای احراز هویت و پاسخ‌های خام به هیچ‌وجه در لاگ‌ها، خطاها و خروجی‌ها نشت نخواهند کرد.

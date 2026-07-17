@@ -304,6 +304,7 @@ def loaded_configuration(tmp_path: Path, database_name: str) -> LoadedConfigurat
                 "TAB_TELEGRAM_PHONE_NUMBER": "synthetic-phone",
                 "TAB_TELEGRAM_BOT_TOKEN": "synthetic-bot-token",
                 "TAB_AI_PROVIDER_KEY": "synthetic-provider-key",
+                "TAB_ZAI_API_KEY": "synthetic-zai-key",
             }
         ),
     )

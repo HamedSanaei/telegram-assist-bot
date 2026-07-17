@@ -20,7 +20,10 @@ from telegram_assist_bot.domain.ai_job import AIJob, AIJobStatus
 
 if TYPE_CHECKING:
     from pymongo.asynchronous.collection import AsyncCollection
-    from telegram_assist_bot.infrastructure.persistence.mongodb.client import MongoDocument
+
+    from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
+        MongoDocument,
+    )
 
 _DUPLICATE_KEY_ERROR_CODE: Final[int] = 11000
 

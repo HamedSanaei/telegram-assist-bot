@@ -264,6 +264,7 @@ def loaded_configuration() -> LoadedConfiguration:
                 "TAB_TELEGRAM_PHONE_NUMBER": "synthetic-phone",
                 "TAB_TELEGRAM_BOT_TOKEN": "synthetic-bot-value",
                 "TAB_AI_PROVIDER_KEY": "synthetic-provider-value",
+                "TAB_ZAI_API_KEY": "synthetic-zai-value",
             }
         ),
     )

@@ -152,6 +152,14 @@
           "environment_variable": "TAB_AI_PROVIDER_KEY"
         },
         "base_url": "https://provider.example.invalid/v1"
+      },
+      {
+        "name": "z-ai",
+        "enabled": false,
+        "api_key": {
+          "environment_variable": "TAB_ZAI_API_KEY"
+        },
+        "base_url": "https://api.z.ai/api/paas/v4"
       }
     ],
     "routes": [
