@@ -20,6 +20,18 @@ from telegram_assist_bot.application.ports.admin import (
     InlineButton,
     InlineKeyboard,
 )
+from telegram_assist_bot.application.ports.ai_audit_repository import (
+    AIAuditEvent,
+    AIAuditEventType,
+    AIAuditRepository,
+    AIAuditRepositoryError,
+)
+from telegram_assist_bot.application.ports.ai_cache_repository import (
+    AICacheEntry,
+    AICacheRepository,
+    AICacheRepositoryError,
+    AICacheWriteResult,
+)
 from telegram_assist_bot.application.ports.ai_job_repository import (
     AIJobConcurrencyConflictError,
     AIJobNotFoundError,
@@ -78,6 +90,12 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryUnavailableError,
     PostTransitionRequest,
 )
+from telegram_assist_bot.application.ports.provider_metrics_repository import (
+    ProviderMetricDelta,
+    ProviderMetrics,
+    ProviderMetricsRepository,
+    ProviderMetricsRepositoryError,
+)
 from telegram_assist_bot.application.ports.provider_state_repository import (
     ProviderReservationResult,
     ProviderStateRepository,
@@ -128,6 +146,14 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 )
 
 __all__ = (
+    "AIAuditEvent",
+    "AIAuditEventType",
+    "AIAuditRepository",
+    "AIAuditRepositoryError",
+    "AICacheEntry",
+    "AICacheRepository",
+    "AICacheRepositoryError",
+    "AICacheWriteResult",
     "AIJobConcurrencyConflictError",
     "AIJobNotFoundError",
     "AIJobRepository",
@@ -193,6 +219,10 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "ProviderMetricDelta",
+    "ProviderMetrics",
+    "ProviderMetricsRepository",
+    "ProviderMetricsRepositoryError",
     "ProviderReservationResult",
     "ProviderStateRepository",
     "ProviderStateRepositoryError",

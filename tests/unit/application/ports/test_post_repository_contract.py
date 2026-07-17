@@ -258,6 +258,14 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
     from telegram_assist_bot.application import ports
 
     expected_exports = {
+        "AIAuditEvent",
+        "AIAuditEventType",
+        "AIAuditRepository",
+        "AIAuditRepositoryError",
+        "AICacheEntry",
+        "AICacheRepository",
+        "AICacheRepositoryError",
+        "AICacheWriteResult",
         "AIJobConcurrencyConflictError",
         "AIJobNotFoundError",
         "AIJobRepository",
@@ -323,6 +331,10 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "PostRepositoryUnavailableError",
         "PostTransitionRequest",
         "ProviderReservationResult",
+        "ProviderMetricDelta",
+        "ProviderMetrics",
+        "ProviderMetricsRepository",
+        "ProviderMetricsRepositoryError",
         "ProviderStateRepository",
         "ProviderStateRepositoryError",
         "OperationalApprovalRepository",

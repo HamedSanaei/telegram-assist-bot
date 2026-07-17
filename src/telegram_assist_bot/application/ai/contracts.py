@@ -18,6 +18,16 @@ class AITaskType(StrEnum):
     SCORING = "scoring"
 
 
+class AISideEffectWarningCode(StrEnum):
+    """Sanitized non-fatal persistence warning codes for valid AI results."""
+
+    CACHE_READ_FAILED = "cache_read_failed"
+    CACHE_WRITE_FAILED = "cache_write_failed"
+    AUDIT_REPOSITORY_UNAVAILABLE = "audit_repository_unavailable"
+    AUDIT_APPEND_FAILED = "audit_append_failed"
+    METRICS_INCREMENT_FAILED = "metrics_increment_failed"
+
+
 class RawResponseEnvelope(BaseModel):
     """Raw provider response envelope, decoupled from any SDK.
 
@@ -73,6 +83,19 @@ class AIResult(BaseModel):
     )
     fallback_count: int = Field(
         ..., description="The number of times fallbacks occurred"
+    )
+    cache_hit: bool = Field(
+        default=False,
+        description="Whether this standard result was served from a valid cache entry",
+    )
+    cache_age_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Safe age of the accepted cache entry when available",
+    )
+    side_effect_warnings: tuple[AISideEffectWarningCode, ...] = Field(
+        default=(),
+        description="Sanitized cache, audit or metrics persistence warning codes",
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), description="Timestamp in UTC"

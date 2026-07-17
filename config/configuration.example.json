@@ -183,7 +183,13 @@
           }
         ]
       }
-    ]
+    ],
+    "cache_policies": [],
+    "audit": {
+      "enabled": false,
+      "retention_seconds": null,
+      "raw_storage_enabled": false
+    }
   },
   "advertisements": {
     "routes": [

@@ -434,6 +434,36 @@ class AiProviderGuardConfig(_FrozenConfigModel):
     rate_limit_cooldown_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] | None
 
 
+class AiCachePolicyConfig(_FrozenConfigModel):
+    """Explicit cache enablement and bounded TTL for one canonical AI task."""
+
+    task: StrictAiTask
+    enabled: StrictBool = False
+    ttl_seconds: Annotated[StrictInt, Field(ge=1, le=31_536_000)] | None = None
+
+    @model_validator(mode="after")
+    def validate_enabled_ttl(self) -> Self:
+        """Require an explicit TTL only when caching is enabled."""
+        if self.enabled and self.ttl_seconds is None:
+            raise ValueError("enabled AI cache policy requires ttl_seconds")
+        return self
+
+
+class AiAuditConfig(_FrozenConfigModel):
+    """Disabled-by-default sanitized audit retention policy."""
+
+    enabled: StrictBool = False
+    retention_seconds: Annotated[StrictInt, Field(ge=1, le=31_536_000)] | None = None
+    raw_storage_enabled: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_enabled_retention(self) -> Self:
+        """Require explicit bounded retention before audit persistence is enabled."""
+        if self.enabled and self.retention_seconds is None:
+            raise ValueError("enabled AI audit requires retention_seconds")
+        return self
+
+
 class AiRouteCandidateConfig(_FrozenConfigModel):
     """Describe one bounded model attempt in an ordered AI route."""
 
@@ -530,6 +560,21 @@ class AiConfig(_FrozenConfigModel):
     failure_policies: tuple[AiTaskFailurePolicyConfig, ...] = Field(
         default=(), description="Configured AI task failure policies."
     )
+    cache_policies: tuple[AiCachePolicyConfig, ...] = Field(
+        default=(), description="Explicit per-task result-cache policies."
+    )
+    audit: AiAuditConfig = Field(
+        default_factory=AiAuditConfig,
+        description="Sanitized audit retention; raw storage remains disabled.",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_cache_tasks(self) -> Self:
+        """Reject ambiguous duplicate cache policies after alias canonicalization."""
+        tasks = [policy.task for policy in self.cache_policies]
+        if len(tasks) != len(set(tasks)):
+            raise ValueError("AI cache policy tasks must be unique")
+        return self
 
 
 class AdvertisementRouteConfig(_FrozenConfigModel):
@@ -635,6 +680,8 @@ __all__ = [
     "AdminConfig",
     "AdvertisementConfig",
     "AdvertisementRouteConfig",
+    "AiAuditConfig",
+    "AiCachePolicyConfig",
     "AiConfig",
     "AiProviderConfig",
     "AiProviderGuardConfig",
