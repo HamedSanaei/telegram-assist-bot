@@ -31,6 +31,9 @@ class AIAuditEventType(StrEnum):
     SEMANTIC_DUPLICATE_FAILURE_POLICY_APPLIED = (
         "semantic_duplicate_failure_policy_applied"
     )
+    CATEGORIZATION_RESULT_APPLIED = "categorization_result_applied"
+    CATEGORIZATION_FAILURE_POLICY_APPLIED = "categorization_failure_policy_applied"
+    CATEGORIZATION_RESULT_SUPERSEDED = "categorization_result_superseded"
 
 
 class AIAuditRepositoryError(Exception):

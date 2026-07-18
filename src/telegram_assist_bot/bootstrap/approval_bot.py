@@ -42,6 +42,7 @@ from telegram_assist_bot.domain import (
     AdminPermission,
     CancellationPolicy,
 )
+from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
     MongoNativeScheduleRepository,
@@ -153,6 +154,10 @@ class ApprovalBotApplication:
                 database["media_groups"],
                 destination_names=tuple(
                     item.name for item in settings.destination_channels
+                ),
+                categories=tuple(
+                    Category(c.category_id, c.display_name, c.active)
+                    for c in settings.categorization.categories
                 ),
             )
             schedule_repository = MongoScheduleRepository(schedules, queues)

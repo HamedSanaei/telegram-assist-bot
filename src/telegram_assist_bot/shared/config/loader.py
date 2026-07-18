@@ -554,6 +554,11 @@ def _raw_ai_issues(
                 AiTask.CONTENT_SCORING.value,
                 features_value.get("ai_scoring_enabled") is True,
             ),
+            (
+                "ai_categorization_enabled",
+                AiTask.CATEGORIZATION.value,
+                features_value.get("ai_categorization_enabled") is True,
+            ),
         )
         for field_name, task, enabled in required_routes:
             canonical_task = _canonicalize_task_name(task)
@@ -701,6 +706,233 @@ def _raw_semantic_issues(
             document.get("semantic_duplicate", _MISSING),
         )
     )
+    issues.extend(_raw_categorization_issues(document))
+    return issues
+
+
+def _raw_categorization_issues(
+    document: Mapping[str, object],
+) -> list[ConfigurationIssue]:
+    """Collect cross-field issues for AI categorization."""
+    issues: list[ConfigurationIssue] = []
+    features_value = document.get("features", {})
+    if not isinstance(features_value, dict):
+        return []
+
+    ai_categorization_enabled = features_value.get("ai_categorization_enabled") is True
+
+    categorization_value = document.get("categorization", {})
+    if not isinstance(categorization_value, dict):
+        if ai_categorization_enabled:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization",),
+                    code="missing_categorization_config",
+                    message=(
+                        "ai_categorization_enabled is True but categorization "
+                        "config is missing"
+                    ),
+                )
+            )
+        return issues
+
+    categories = _indexed_objects(categorization_value.get("categories", _MISSING))
+    active_categories = set()
+    category_ids = set()
+
+    for index, category in categories:
+        cat_id = _raw_non_blank_string(category, "category_id")
+        if isinstance(cat_id, str):
+            if cat_id in category_ids:
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "categories", index, "category_id"),
+                        code="duplicate_value",
+                        message="category_id must be unique across categories",
+                    )
+                )
+            else:
+                category_ids.add(cat_id)
+            active = category.get("active", True)
+            if active is True:
+                active_categories.add(cat_id)
+
+    if ai_categorization_enabled:
+        if not active_categories:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "categories"),
+                    code="empty_active_taxonomy",
+                    message=(
+                        "when AI categorization is enabled, at least one active "
+                        "category is required in taxonomy"
+                    ),
+                )
+            )
+
+        method_order = categorization_value.get("method_order")
+        if method_order is None:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "method_order"),
+                    code="missing_method_order",
+                    message=(
+                        "when AI categorization is enabled, method_order must be "
+                        "explicitly configured"
+                    ),
+                )
+            )
+
+        fallback_policy = categorization_value.get("fallback_policy")
+        if fallback_policy is None:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "fallback_policy"),
+                    code="missing_fallback_policy",
+                    message=(
+                        "when AI categorization is enabled, fallback_policy must "
+                        "be explicitly configured"
+                    ),
+                )
+            )
+        elif fallback_policy != "fallback_baseline":
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "fallback_policy"),
+                    code="invalid_fallback_policy",
+                    message="fallback_policy must be fallback_baseline",
+                )
+            )
+
+    method_order = categorization_value.get("method_order")
+    if method_order is not None and isinstance(method_order, (list, tuple)):
+        methods = list(method_order)
+        if not methods:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "method_order"),
+                    code="empty_method_order",
+                    message="method_order must not be empty",
+                )
+            )
+        else:
+            if methods[-1] != "source_default":
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "method_order"),
+                        code="invalid_method_order",
+                        message=(
+                            "source_default must be the final method in method_order"
+                        ),
+                    )
+                )
+            if methods.count("source_default") != 1:
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "method_order"),
+                        code="invalid_method_order",
+                        message=(
+                            "source_default must appear exactly once in method_order"
+                        ),
+                    )
+                )
+            if methods.count("ai") > 1:
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "method_order"),
+                        code="invalid_method_order",
+                        message="ai method may appear at most once in method_order",
+                    )
+                )
+            if methods.count("keyword") > 1:
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "method_order"),
+                        code="invalid_method_order",
+                        message=(
+                            "keyword method may appear at most once in method_order"
+                        ),
+                    )
+                )
+            issues.extend(
+                ConfigurationIssue(
+                    path=("categorization", "method_order"),
+                    code="invalid_method_order",
+                    message=f"unknown method {m} in method_order",
+                )
+                for m in methods
+                if m not in ("ai", "keyword", "source_default")
+            )
+
+    source_channels = _indexed_objects(document.get("source_channels", _MISSING))
+    for index, source in source_channels:
+        default_cat = _raw_non_blank_string(source, "default_category_id")
+        if ai_categorization_enabled and not isinstance(default_cat, str):
+            issues.append(
+                ConfigurationIssue(
+                    path=("source_channels", index, "default_category_id"),
+                    code="missing_source_default",
+                    message=(
+                        "enabled AI categorization requires an explicit active "
+                        "source default category"
+                    ),
+                )
+            )
+        elif isinstance(default_cat, str) and default_cat not in active_categories:
+            issues.append(
+                ConfigurationIssue(
+                    path=("source_channels", index, "default_category_id"),
+                    code="inactive_source_default",
+                    message=(
+                        "source default category must reference an existing active "
+                        "category"
+                    ),
+                )
+            )
+
+    keyword_rules = _indexed_objects(
+        categorization_value.get("keyword_rules", _MISSING)
+    )
+    for index, rule in keyword_rules:
+        rule_cat = _raw_non_blank_string(rule, "category_id")
+        if isinstance(rule_cat, str) and rule_cat not in active_categories:
+            issues.append(
+                ConfigurationIssue(
+                    path=("categorization", "keyword_rules", index, "category_id"),
+                    code="inactive_keyword_category",
+                    message=(
+                        "keyword rule category must reference an existing active "
+                        "category"
+                    ),
+                )
+            )
+
+    aliases = categorization_value.get("aliases")
+    if isinstance(aliases, dict):
+        for alias_key, target_cat_id in aliases.items():
+            if not isinstance(alias_key, str) or not alias_key:
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "aliases"),
+                        code="invalid_alias_key",
+                        message="alias key must be a non-empty string",
+                    )
+                )
+            if (
+                not isinstance(target_cat_id, str)
+                or target_cat_id not in active_categories
+            ):
+                issues.append(
+                    ConfigurationIssue(
+                        path=("categorization", "aliases", alias_key),
+                        code="unknown_alias_target",
+                        message=(
+                            "alias target category must reference an existing "
+                            "active category"
+                        ),
+                    )
+                )
+
     return issues
 
 

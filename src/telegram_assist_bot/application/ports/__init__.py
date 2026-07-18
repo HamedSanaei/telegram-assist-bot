@@ -78,6 +78,8 @@ from telegram_assist_bot.application.ports.operational_approval import (
 from telegram_assist_bot.application.ports.post_repository import (
     AdvertisementPostRepository,
     AdvertisementPostUpdateRequest,
+    CategorizationPostRepository,
+    CategorizationPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -191,6 +193,8 @@ __all__ = (
     "ApprovalSyncClaim",
     "BotEditOutcome",
     "BotUpdate",
+    "CategorizationPostRepository",
+    "CategorizationPostUpdateRequest",
     "Clock",
     "ContentPreparationRepository",
     "DestinationArtifact",

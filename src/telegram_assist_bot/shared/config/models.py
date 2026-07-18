@@ -129,6 +129,7 @@ class AiTask(StrEnum):
     ADVERTISEMENT_DETECTION = "advertisement_detection"
     DUPLICATE_DETECTION = "duplicate_detection"
     CONTENT_SCORING = "content_scoring"
+    CATEGORIZATION = "categorization"
 
 
 def _map_ai_task_alias(value: object) -> object:
@@ -342,6 +343,9 @@ class FeatureFlags(_FrozenConfigModel):
     ai_scoring_enabled: StrictBool = Field(
         description="Whether AI content scoring is enabled."
     )
+    ai_categorization_enabled: StrictBool = Field(
+        default=False, description="Whether AI categorization is enabled."
+    )
 
 
 class PublishingConfig(_FrozenConfigModel):
@@ -404,6 +408,7 @@ class CategoryConfig(_FrozenConfigModel):
 
     category_id: NonBlankString
     display_name: NonBlankString
+    active: StrictBool = Field(default=True)
 
 
 class CategoryKeywordRuleConfig(_FrozenConfigModel):
@@ -420,6 +425,11 @@ class CategorizationConfig(_FrozenConfigModel):
 
     categories: tuple[CategoryConfig, ...] = ()
     keyword_rules: tuple[CategoryKeywordRuleConfig, ...] = ()
+    method_order: tuple[Literal["ai", "keyword", "source_default"], ...] | None = Field(
+        default=None
+    )
+    fallback_policy: Literal["fallback_baseline"] | None = Field(default=None)
+    aliases: dict[str, str] | None = Field(default=None)
 
 
 class AiProviderConfig(_FrozenConfigModel):

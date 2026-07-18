@@ -358,6 +358,7 @@ _FEATURE_BY_AI_TASK = {
     AiTask.ADVERTISEMENT_DETECTION: "advertisement_detection_enabled",
     AiTask.DUPLICATE_DETECTION: "duplicate_detection_enabled",
     AiTask.CONTENT_SCORING: "ai_scoring_enabled",
+    AiTask.CATEGORIZATION: "ai_categorization_enabled",
 }
 
 
@@ -375,12 +376,20 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
         AiTask.ADVERTISEMENT_DETECTION: AITaskType.ADVERTISEMENT_DETECTION,
         AiTask.DUPLICATE_DETECTION: AITaskType.SEMANTIC_DUPLICATE,
         AiTask.CONTENT_SCORING: AITaskType.SCORING,
+        AiTask.CATEGORIZATION: AITaskType.CATEGORIZATION,
     }
 
     features = _as_object(valid_payload["features"])
     for feature_name in _FEATURE_BY_AI_TASK.values():
         features[feature_name] = False
     features[_FEATURE_BY_AI_TASK[task]] = True
+    if task is AiTask.CATEGORIZATION:
+        _set_at(
+            valid_payload, ("categorization", "method_order"), ["ai", "source_default"]
+        )
+        _set_at(
+            valid_payload, ("categorization", "fallback_policy"), "fallback_baseline"
+        )
     _set_at(valid_payload, ("ai", "routes", 0, "task"), task.value)
 
     loaded = load_configuration(
@@ -389,6 +398,84 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
     )
 
     assert loaded.settings.ai.routes[0].task is canonical_map[task]
+
+
+def test_legacy_missing_ai_categorization_flag_is_disabled(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configurations remain valid without enabling T044 implicitly."""
+    _as_object(valid_payload["features"]).pop("ai_categorization_enabled", None)
+    categorization = _as_object(valid_payload["categorization"])
+    categorization.pop("method_order", None)
+    categorization.pop("fallback_policy", None)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.features.ai_categorization_enabled is False
+
+
+def test_enabled_ai_categorization_requires_explicit_order_and_fallback(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Enabled categorization has no hidden method-order or fallback default."""
+    _set_at(valid_payload, ("features", "ai_categorization_enabled"), True)
+    categorization = _as_object(valid_payload["categorization"])
+    categorization.pop("method_order", None)
+    categorization.pop("fallback_policy", None)
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_method_order" in _matching_issues(
+        captured.value, "categorization.method_order"
+    )
+    assert "missing_fallback_policy" in _matching_issues(
+        captured.value, "categorization.fallback_policy"
+    )
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ["ai", "source_default", "keyword"],
+        ["ai", "source_default", "source_default"],
+        ["keyword", "keyword", "source_default"],
+    ],
+)
+def test_categorization_method_order_rejects_invalid_precedence(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    order: list[str],
+) -> None:
+    """The explicit list is unique and source_default is exactly once and last."""
+    _set_at(valid_payload, ("features", "ai_categorization_enabled"), True)
+    _set_at(valid_payload, ("categorization", "method_order"), order)
+    _set_at(
+        valid_payload,
+        ("categorization", "fallback_policy"),
+        "fallback_baseline",
+    )
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "invalid_method_order" in _matching_issues(
+        captured.value, "categorization.method_order"
+    )
 
 
 @pytest.mark.parametrize(

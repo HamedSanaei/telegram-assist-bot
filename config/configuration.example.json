@@ -89,7 +89,8 @@
   "features": {
     "advertisement_detection_enabled": false,
     "duplicate_detection_enabled": false,
-    "ai_scoring_enabled": false
+    "ai_scoring_enabled": false,
+    "ai_categorization_enabled": false
   },
   "semantic_duplicate": {
     "threshold": 0.88,
@@ -141,7 +142,16 @@
         "keyword": "فناوری",
         "priority": 100
       }
-    ]
+    ],
+    "method_order": [
+      "keyword",
+      "ai",
+      "source_default"
+    ],
+    "fallback_policy": "fallback_baseline",
+    "aliases": {
+      "عمومی": "general"
+    }
   },
   "ai": {
     "queue": {

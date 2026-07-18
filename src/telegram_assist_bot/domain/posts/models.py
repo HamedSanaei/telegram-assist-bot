@@ -15,6 +15,12 @@ from telegram_assist_bot.domain.advertisement import (
     AdvertisementProcessingState,
     InvalidAdvertisementTransitionError,
 )
+from telegram_assist_bot.domain.categories import (
+    CategorizationCheckFailure,
+    CategorizationMethod,
+    CategorizationResult,
+    CategorizationState,
+)
 from telegram_assist_bot.domain.duplicates.models import (
     SEMANTIC_DUPLICATE_MANUAL_REVIEW_REASON,
     InvalidSemanticDuplicateTransitionError,
@@ -190,6 +196,13 @@ class Post:
     semantic_duplicate_failure: SemanticDuplicateFailure | None = field(
         default=None, repr=False
     )
+    categorization_state: CategorizationState = CategorizationState.NOT_REQUESTED
+    categorization_processing_version: int = 0
+    categorization_job_id: str | None = None
+    categorization_result: CategorizationResult | None = field(default=None, repr=False)
+    categorization_failure: CategorizationCheckFailure | None = field(
+        default=None, repr=False
+    )
     expires_at: datetime = field(init=False)
 
     def __post_init__(self) -> None:
@@ -263,6 +276,28 @@ class Post:
         ):
             raise PostInvariantError
 
+        if type(self.categorization_state) is not CategorizationState:
+            raise PostInvariantError
+        if (
+            type(self.categorization_processing_version) is not int
+            or self.categorization_processing_version < 0
+        ):
+            raise PostInvariantError
+        if self.categorization_job_id is not None and not _is_bounded_non_blank_string(
+            self.categorization_job_id, _MAX_POST_ID_LENGTH
+        ):
+            raise PostInvariantError
+        if (
+            self.categorization_result is not None
+            and type(self.categorization_result) is not CategorizationResult
+        ):
+            raise PostInvariantError
+        if (
+            self.categorization_failure is not None
+            and type(self.categorization_failure) is not CategorizationCheckFailure
+        ):
+            raise PostInvariantError
+
         source_published_at = _canonical_utc(self.source_published_at)
         received_at = _canonical_utc(self.received_at)
         history = _freeze_history(self.transition_history)
@@ -277,6 +312,7 @@ class Post:
         self._validate_lifecycle_history()
         self._validate_advertisement_state()
         self._validate_semantic_duplicate_state()
+        self._validate_categorization_state()
 
     def __eq__(self, other: object) -> bool:
         """Compare stable aggregate identity rather than mutable lifecycle state."""
@@ -814,6 +850,139 @@ class Post:
             return
         if result is not None or failure is None:
             raise PostInvariantError
+
+    def _validate_categorization_state(self) -> None:
+        """Validate additive categorization state and legacy-safe defaults."""
+        state = self.categorization_state
+        result = self.categorization_result
+        failure = self.categorization_failure
+        job_id = self.categorization_job_id
+        if state is CategorizationState.NOT_REQUESTED:
+            if self.categorization_processing_version != 0 or any(
+                value is not None for value in (job_id, result, failure)
+            ):
+                raise PostInvariantError
+            return
+        if self.categorization_processing_version < 1:
+            raise PostInvariantError
+        if state is CategorizationState.PENDING:
+            if job_id is None or result is not None or failure is not None:
+                raise PostInvariantError
+            return
+        if state is CategorizationState.RETRY_PENDING:
+            if (
+                job_id is None
+                or result is not None
+                or failure is None
+                or failure.next_retry_at is None
+            ):
+                raise PostInvariantError
+            return
+        if state in {
+            CategorizationState.AI_ASSIGNED,
+            CategorizationState.KEYWORD_FALLBACK,
+            CategorizationState.SOURCE_DEFAULT_FALLBACK,
+            CategorizationState.SUPERSEDED_MANUAL,
+        }:
+            if result is None or failure is not None:
+                raise PostInvariantError
+            return
+        if state is CategorizationState.PROCESSING_STOPPED:
+            if job_id is None or result is not None or failure is None:
+                raise PostInvariantError
+            return
+
+    def enqueue_categorization(self, job_id: str) -> Post:
+        """Enter pending categorization state with a claimed job ID."""
+        if not _is_bounded_non_blank_string(job_id, _MAX_POST_ID_LENGTH):
+            raise PostInvariantError
+        state = self.categorization_state
+        if state is CategorizationState.PENDING:
+            if self.categorization_job_id != job_id:
+                raise InvalidPostTransitionError
+            return self
+        if state not in {
+            CategorizationState.NOT_REQUESTED,
+            CategorizationState.RETRY_PENDING,
+        }:
+            raise InvalidPostTransitionError
+        return replace(
+            self,
+            categorization_state=CategorizationState.PENDING,
+            categorization_job_id=job_id,
+            categorization_processing_version=self.categorization_processing_version
+            + 1,
+        )
+
+    def apply_categorization_result(
+        self,
+        result: CategorizationResult,
+        job_id: str | None,
+        expected_processing_version: int,
+    ) -> Post:
+        """Persist a categorization result using CAS version check."""
+        if type(result) is not CategorizationResult:
+            raise PostInvariantError
+        if self.categorization_processing_version != expected_processing_version:
+            raise PostVersionConflictError(
+                expected_processing_version,
+                self.categorization_processing_version,
+            )
+
+        # Check if manual override exists:
+        if (
+            self.categorization_result is not None
+            and self.categorization_result.method is CategorizationMethod.MANUAL
+            and result.method is not CategorizationMethod.MANUAL
+        ):
+            return self
+
+        state_map = {
+            CategorizationMethod.AI: CategorizationState.AI_ASSIGNED,
+            CategorizationMethod.KEYWORD: CategorizationState.KEYWORD_FALLBACK,
+            CategorizationMethod.SOURCE_DEFAULT: (
+                CategorizationState.SOURCE_DEFAULT_FALLBACK
+            ),
+            CategorizationMethod.MANUAL: CategorizationState.SUPERSEDED_MANUAL,
+        }
+        target_state = state_map[result.method]
+
+        return replace(
+            self,
+            categorization_state=target_state,
+            categorization_job_id=job_id or self.categorization_job_id,
+            categorization_result=result,
+            categorization_failure=None,
+            categorization_processing_version=expected_processing_version + 1,
+        )
+
+    def apply_categorization_failure(
+        self,
+        failure: CategorizationCheckFailure,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Post:
+        """Persist categorization failure or retry state."""
+        if type(failure) is not CategorizationCheckFailure:
+            raise PostInvariantError
+        if self.categorization_processing_version != expected_processing_version:
+            raise PostVersionConflictError(
+                expected_processing_version,
+                self.categorization_processing_version,
+            )
+
+        if failure.policy == "retry_later":
+            target_state = CategorizationState.RETRY_PENDING
+        else:
+            target_state = CategorizationState.PROCESSING_STOPPED
+
+        return replace(
+            self,
+            categorization_state=target_state,
+            categorization_job_id=job_id,
+            categorization_failure=failure,
+            categorization_processing_version=expected_processing_version + 1,
+        )
 
 
 __all__ = [

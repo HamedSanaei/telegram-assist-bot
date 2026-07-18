@@ -460,3 +460,21 @@
   را متوقف می‌کند، manual review فقط handoff تایپ‌شدهٔ Application می‌سازد و
   continue_processing نتیجهٔ Duplicate را حفظ ولی مرحلهٔ بعد را مجاز می‌کند. هیچ
   Vector DB، embedding، Telegram UX، Worker یا Runtime wiring در T043 اضافه نشده است.
+
+## ADR-032 — ترتیب روش‌ها، هویت Category و تقدم override دستی
+
+- **Status:** Accepted
+- **Decision:** دسته‌بندی T044 فقط با ترتیب typed و صریح از روش‌های `ai`، `keyword`
+  و `source_default` اجرا می‌شود. روش `source_default` دقیقاً یک‌بار و آخر است؛ روش
+  تکراری رد می‌شود و هیچ ترتیب یا fallback پیش‌فرض پنهانی وجود ندارد. شکست AI یا
+  Category نامعتبر طبق policy صریح `fallback_baseline` فقط روش‌های بعد از AI را
+  اجرا می‌کند. هویت پایدار نتیجه `category_id` است؛ فقط ID فعال یا alias دقیق
+  پیکربندی پذیرفته می‌شود و display name هویت persistence نیست. prompt دسته‌بندی
+  نسخهٔ `2.0.0` و schema نسخهٔ `2` است. override دستی موجود یا هم‌زمان همیشه بر
+  نتیجهٔ AI مقدم می‌ماند.
+- **Consequences:** keyword پیش از AI هیچ AIJob، Cache، Guard یا Provider activity
+  ایجاد نمی‌کند. نتیجهٔ fallback با method واقعی T018 ذخیره می‌شود و AI نامیده
+  نمی‌شود. تغییر IDهای فعال یا aliasها fingerprint و در نتیجه cache identity را
+  تغییر می‌دهد. پیکربندی قدیمی در حالت غیرفعال معتبر است، اما فعال‌سازی AI بدون
+  ترتیب و fallback صریح خطای Configuration است. T044 تا task تثبیت pipeline به
+  Runtime یا Worker متصل نیست.

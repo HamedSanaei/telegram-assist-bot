@@ -84,13 +84,13 @@ def test_valid_outputs_all_tasks(
 
     # 3. Categorization
     env = make_envelope(
-        '{"category": "ورزشی", "confidence": 0.9, "reason": "درباره فوتبال"}'
+        '{"category_id": "ورزشی", "confidence": 0.9, "reason": "درباره فوتبال"}'
     )
     parsed, rep = parser.parse(env)
     assert not rep
-    validated = validator.validate(parsed, AITaskType.CATEGORIZATION, "1")
+    validated = validator.validate(parsed, AITaskType.CATEGORIZATION, "2")
     assert isinstance(validated, CategorizationOutput)
-    assert validated.category == "ورزشی"
+    assert validated.category_id == "ورزشی"
     assert validated.confidence == 0.9
     assert validated.reason == "درباره فوتبال"
 

@@ -13,6 +13,12 @@ from telegram_assist_bot.domain.advertisement import (
     AdvertisementFailurePolicy,
     AdvertisementProcessingState,
 )
+from telegram_assist_bot.domain.categories import (
+    CategorizationCheckFailure,
+    CategorizationMethod,
+    CategorizationResult,
+    CategorizationState,
+)
 from telegram_assist_bot.domain.duplicates import (
     SemanticDuplicateFailure,
     SemanticDuplicateFailurePolicy,
@@ -59,6 +65,7 @@ _ROOT_FIELDS: Final[frozenset[str]] = frozenset(
         "next_stage_claim_correlation_id",
         "advertisement_processing",
         "semantic_duplicate_processing",
+        "categorization_processing",
     }
 )
 _ADVERTISEMENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -126,6 +133,40 @@ _SEMANTIC_FAILURE_FIELDS = frozenset(
         "next_retry_at_microsecond_remainder",
     }
 )
+_CATEGORIZATION_FIELDS = frozenset({"state", "version", "job_id", "result", "failure"})
+_CATEGORIZATION_RESULT_FIELDS = frozenset(
+    {
+        "category_id",
+        "method",
+        "policy_version",
+        "assigned_at",
+        "assigned_at_microsecond_remainder",
+        "rule_id",
+        "reason",
+        "confidence",
+        "provider_name",
+        "model_name",
+        "prompt_version",
+        "schema_version",
+        "attempt_number",
+        "fallback_count",
+        "cache_hit",
+        "cache_age",
+    }
+)
+_CATEGORIZATION_FAILURE_FIELDS = frozenset(
+    {
+        "policy",
+        "failure_category",
+        "failed_at",
+        "failed_at_microsecond_remainder",
+        "attempted_candidates_count",
+        "retry_count",
+        "fallback_count",
+        "next_retry_at",
+        "next_retry_at_microsecond_remainder",
+    }
+)
 _CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
     {"text", "caption", "text_entities", "caption_entities"}
 )
@@ -188,6 +229,23 @@ def _require_integer(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise InvalidPostDocumentError
     return int(value)
+
+
+@overload
+def _require_boolean(value: object, *, optional: Literal[False] = False) -> bool: ...
+
+
+@overload
+def _require_boolean(value: object, *, optional: Literal[True]) -> bool | None: ...
+
+
+def _require_boolean(value: object, *, optional: bool = False) -> bool | None:
+    """Return an exact Boolean scalar with optional ``None`` support."""
+    if optional and value is None:
+        return None
+    if type(value) is not bool:
+        raise InvalidPostDocumentError
+    return value
 
 
 @overload
@@ -641,6 +699,142 @@ def _semantic_processing_from_document(
     )
 
 
+def categorization_processing_to_document(post: Post) -> dict[str, object]:
+    """Serialize additive categorization state for full and atomic writes."""
+    result_document = None
+    if post.categorization_result is not None:
+        result = post.categorization_result
+        assigned_at, remainder = _floor_to_millisecond(result.assigned_at)
+        result_document = {
+            "category_id": result.category_id,
+            "method": result.method.value,
+            "policy_version": result.policy_version,
+            "assigned_at": assigned_at,
+            "assigned_at_microsecond_remainder": remainder,
+            "rule_id": result.rule_id,
+            "reason": result.reason,
+            "confidence": result.confidence,
+            "provider_name": result.provider_name,
+            "model_name": result.model_name,
+            "prompt_version": result.prompt_version,
+            "schema_version": result.schema_version,
+            "attempt_number": result.attempt_number,
+            "fallback_count": result.fallback_count,
+            "cache_hit": result.cache_hit,
+            "cache_age": result.cache_age,
+        }
+    failure_document = None
+    if post.categorization_failure is not None:
+        failure = post.categorization_failure
+        failed_at, failed_remainder = _floor_to_millisecond(failure.failed_at)
+        retry_at = None
+        retry_remainder = 0
+        if failure.next_retry_at is not None:
+            retry_at, retry_remainder = _floor_to_millisecond(failure.next_retry_at)
+        failure_document = {
+            "policy": failure.policy,
+            "failure_category": failure.failure_category,
+            "failed_at": failed_at,
+            "failed_at_microsecond_remainder": failed_remainder,
+            "attempted_candidates_count": failure.attempted_candidates_count,
+            "retry_count": failure.retry_count,
+            "fallback_count": failure.fallback_count,
+            "next_retry_at": retry_at,
+            "next_retry_at_microsecond_remainder": retry_remainder,
+        }
+    return {
+        "state": post.categorization_state.value,
+        "version": post.categorization_processing_version,
+        "job_id": post.categorization_job_id,
+        "result": result_document,
+        "failure": failure_document,
+    }
+
+
+def _categorization_result_from_document(
+    document: Mapping[str, object],
+) -> CategorizationResult:
+    _require_exact_fields(document, _CATEGORIZATION_RESULT_FIELDS)
+    return CategorizationResult(
+        category_id=_require_string(document["category_id"]),
+        method=CategorizationMethod(_require_string(document["method"])),
+        policy_version=_require_integer(document["policy_version"]),
+        assigned_at=_restore_floor_datetime(
+            document["assigned_at"],
+            document["assigned_at_microsecond_remainder"],
+        ),
+        rule_id=_require_string(document.get("rule_id"), optional=True),
+        reason=_require_string(document.get("reason"), optional=True),
+        confidence=_require_float(document.get("confidence"), optional=True),
+        provider_name=_require_string(document.get("provider_name"), optional=True),
+        model_name=_require_string(document.get("model_name"), optional=True),
+        prompt_version=_require_string(document.get("prompt_version"), optional=True),
+        schema_version=_require_string(document.get("schema_version"), optional=True),
+        attempt_number=None
+        if document.get("attempt_number") is None
+        else _require_integer(document["attempt_number"]),
+        fallback_count=None
+        if document.get("fallback_count") is None
+        else _require_integer(document["fallback_count"]),
+        cache_hit=_require_boolean(document.get("cache_hit"), optional=True),
+        cache_age=_require_float(document.get("cache_age"), optional=True),
+    )
+
+
+def _categorization_failure_from_document(
+    document: Mapping[str, object],
+) -> CategorizationCheckFailure:
+    _require_exact_fields(document, _CATEGORIZATION_FAILURE_FIELDS)
+    retry_at = None
+    if document.get("next_retry_at") is not None:
+        retry_at = _restore_floor_datetime(
+            document["next_retry_at"],
+            document["next_retry_at_microsecond_remainder"],
+        )
+    return CategorizationCheckFailure(
+        policy=_require_string(document["policy"]),
+        failure_category=_require_string(document["failure_category"]),
+        failed_at=_restore_floor_datetime(
+            document["failed_at"],
+            document["failed_at_microsecond_remainder"],
+        ),
+        attempted_candidates_count=_require_integer(
+            document.get("attempted_candidates_count", 0)
+        ),
+        retry_count=_require_integer(document.get("retry_count", 0)),
+        fallback_count=_require_integer(document.get("fallback_count", 0)),
+        next_retry_at=retry_at,
+    )
+
+
+def _categorization_processing_from_document(
+    value: object,
+) -> tuple[
+    CategorizationState,
+    int,
+    str | None,
+    CategorizationResult | None,
+    CategorizationCheckFailure | None,
+]:
+    document = _require_mapping(value, rule="invalid_categorization_processing")
+    _require_exact_fields(document, _CATEGORIZATION_FIELDS)
+    return (
+        CategorizationState(_require_string(document["state"])),
+        _require_integer(document["version"]),
+        _require_string(document["job_id"], optional=True),
+        None
+        if document["result"] is None
+        else _categorization_result_from_document(
+            _require_mapping(document["result"], rule="invalid_categorization_result")
+        ),
+        None
+        if document["failure"] is None
+        else _categorization_failure_from_document(
+            _require_mapping(document["failure"], rule="invalid_categorization_failure")
+        ),
+    )
+
+
 def post_to_document(post: Post) -> dict[str, object]:
     """Serialize a post aggregate into the exact version-1 document schema."""
     if type(post) is not Post:
@@ -676,6 +870,7 @@ def post_to_document(post: Post) -> dict[str, object]:
         "semantic_duplicate_processing": semantic_duplicate_processing_to_document(
             post
         ),
+        "categorization_processing": categorization_processing_to_document(post),
     }
 
 
@@ -706,6 +901,14 @@ def post_from_document(value: object) -> Post:
             "result": None,
             "failure": None,
         }
+    if "categorization_processing" not in document:
+        document["categorization_processing"] = {
+            "state": CategorizationState.NOT_REQUESTED.value,
+            "version": 0,
+            "job_id": None,
+            "result": None,
+            "failure": None,
+        }
     _require_exact_fields(document, _ROOT_FIELDS)
     if (
         document["schema_version"] != POST_DOCUMENT_SCHEMA_VERSION
@@ -731,6 +934,9 @@ def post_from_document(value: object) -> Post:
     )
     semantic = _semantic_processing_from_document(
         document["semantic_duplicate_processing"]
+    )
+    categorization = _categorization_processing_from_document(
+        document["categorization_processing"]
     )
     try:
         post = Post(
@@ -772,6 +978,11 @@ def post_from_document(value: object) -> Post:
             semantic_duplicate_job_id=semantic[2],
             semantic_duplicate_result=semantic[3],
             semantic_duplicate_failure=semantic[4],
+            categorization_state=categorization[0],
+            categorization_processing_version=categorization[1],
+            categorization_job_id=categorization[2],
+            categorization_result=categorization[3],
+            categorization_failure=categorization[4],
         )
     except (AdvertisementDomainError, PostDomainError, ValueError):
         raise InvalidPostDocumentError from None
@@ -784,6 +995,7 @@ __all__ = [
     "POST_DOCUMENT_SCHEMA_VERSION",
     "InvalidPostDocumentError",
     "advertisement_processing_to_document",
+    "categorization_processing_to_document",
     "post_from_document",
     "post_to_document",
     "semantic_duplicate_processing_to_document",

@@ -13,6 +13,7 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from telegram_assist_bot.application.ports import (
     AdvertisementPostUpdateRequest,
+    CategorizationPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -27,6 +28,7 @@ from telegram_assist_bot.application.ports import (
     SemanticDuplicatePostUpdateRequest,
 )
 from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
 from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import Post, PostId, SourceMessageIdentity
 from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
@@ -35,6 +37,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
     POST_DOCUMENT_SCHEMA_VERSION,
     advertisement_processing_to_document,
+    categorization_processing_to_document,
     post_from_document,
     post_to_document,
     semantic_duplicate_processing_to_document,
@@ -569,6 +572,81 @@ class MongoPostRepository:
             or persisted.semantic_duplicate_version != target.semantic_duplicate_version
             or persisted.semantic_duplicate_result != target.semantic_duplicate_result
             or persisted.semantic_duplicate_failure != target.semantic_duplicate_failure
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def update_categorization(
+        self, request: CategorizationPostUpdateRequest
+    ) -> Post:
+        """Persist one categorization state/result with an atomic processing CAS."""
+        if type(request) is not CategorizationPostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        if (
+            request.expected_processing_state is CategorizationState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter: MongoDocument = {
+                "$or": [
+                    {"categorization_processing": {"$exists": False}},
+                    {
+                        "categorization_processing.state": (
+                            CategorizationState.NOT_REQUESTED.value
+                        ),
+                        "categorization_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "categorization_processing.state": (
+                    request.expected_processing_state.value
+                ),
+                "categorization_processing.version": (
+                    request.expected_processing_version
+                ),
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "categorization_processing": (
+                                categorization_processing_to_document(target)
+                            )
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                current = (
+                    None
+                    if updated is not None
+                    else await self._collection.find_one({"_id": target.post_id.value})
+                )
+        except (PyMongoError, TimeoutError):
+            raise PostRepositoryUnavailableError from None
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.categorization_state is not target.categorization_state
+            or persisted.categorization_processing_version
+            != target.categorization_processing_version
+            or persisted.categorization_result != target.categorization_result
+            or persisted.categorization_failure != target.categorization_failure
         ):
             raise PostRepositoryDataError
         return persisted

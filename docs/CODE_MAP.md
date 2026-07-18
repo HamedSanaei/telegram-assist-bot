@@ -60,6 +60,8 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   │   ├── retry.py
 │   │   │   ├── routing.py
 │   │   │   ├── schemas.py
+│   │   │   ├── task_handlers/
+│   │   │   │   └── categorization.py
 │   │   │   ├── use_cases/
 │   │   │   │   ├── __init__.py
 │   │   │   │   └── execute_ai_with_fallback.py
@@ -69,6 +71,8 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   │       ├── scoring.txt
 │   │   │       └── semantic_duplicate.txt
 │   │   ├── authenticate_telegram_session.py
+│   │   ├── use_cases/
+│   │   │   └── categorize_with_ai.py
 │   │   ├── validate_telegram_session.py
 │   │   ├── crawl_today_text_posts.py
 │   │   ├── handle_live_message.py

@@ -106,13 +106,13 @@ def test_categorization_schemas() -> None:
 
     # Valid output
     out = CategorizationOutput(
-        category="فناوری", confidence=0.8, reason="مربوط به تکنولوژی است."
+        category_id="فناوری", confidence=0.8, reason="مربوط به تکنولوژی است."
     )
-    assert out.category == "فناوری"
+    assert out.category_id == "فناوری"
 
     # Invalid output
     with pytest.raises(ValidationError):
-        CategorizationOutput(category="", confidence=0.8, reason="Test")
+        CategorizationOutput(category_id="", confidence=0.8, reason="Test")
 
 
 def test_scoring_schemas() -> None:

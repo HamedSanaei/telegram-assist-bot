@@ -65,10 +65,16 @@ def test_registry_loads_default_prompts() -> None:
     for prompt in prompts:
         assert isinstance(prompt.task_type, AITaskType)
         expected_version = (
-            "2.0.0" if prompt.task_type is AITaskType.SEMANTIC_DUPLICATE else "1.0.0"
+            "2.0.0"
+            if prompt.task_type
+            in (AITaskType.SEMANTIC_DUPLICATE, AITaskType.CATEGORIZATION)
+            else "1.0.0"
         )
         expected_schema = (
-            "2" if prompt.task_type is AITaskType.SEMANTIC_DUPLICATE else "1"
+            "2"
+            if prompt.task_type
+            in (AITaskType.SEMANTIC_DUPLICATE, AITaskType.CATEGORIZATION)
+            else "1"
         )
         assert prompt.prompt_version == expected_version
         assert prompt.schema_version == expected_schema

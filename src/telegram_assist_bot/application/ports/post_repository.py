@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
 from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import (
     Post,
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 __all__ = (
     "AdvertisementPostRepository",
     "AdvertisementPostUpdateRequest",
+    "CategorizationPostRepository",
+    "CategorizationPostUpdateRequest",
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
@@ -307,4 +310,40 @@ class SemanticDuplicatePostRepository(Protocol):
         self, request: SemanticDuplicatePostUpdateRequest
     ) -> Post:
         """Atomically persist one semantic result/failure transition."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class CategorizationPostUpdateRequest:
+    """Carry one validated categorization-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: CategorizationState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive categorization transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.categorization_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not CategorizationState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@runtime_checkable
+class CategorizationPostRepository(Protocol):
+    """Expose only canonical reads and categorization CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def update_categorization(
+        self, request: CategorizationPostUpdateRequest
+    ) -> Post:
+        """Atomically persist one categorization result/failure transition."""
         ...

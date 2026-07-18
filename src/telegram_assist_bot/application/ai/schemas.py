@@ -133,10 +133,12 @@ class SemanticDuplicateOutput(BaseAIOutput):
 class CategorizationOutput(BaseAIOutput):
     """Expected output structure for categorization."""
 
-    category: str = Field(
+    SCHEMA_VERSION: ClassVar[str] = "2"
+
+    category_id: str = Field(
         ...,
         min_length=1,
-        description="The predicted category name",
+        description="The predicted category ID",
     )
     confidence: float = Field(
         ...,
