@@ -95,7 +95,7 @@
 | [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Completed |
 | [T044](tasks/T044-ai-categorization.md) | دسته‌بندی AI با Fallback پایه | T018، T035، T039 | `5.11`، `11.12` | Completed |
 | [T045](tasks/T045-delayed-ai-scoring.md) | امتیازدهی تأخیری و ویرایش هدر | T022، T025، T035، T039 | `5.20` | Completed |
-| [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Planned |
+| [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Completed |
 | [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Planned |
 
 ## Milestone 6 — تبلیغات زمان‌بندی‌شده
