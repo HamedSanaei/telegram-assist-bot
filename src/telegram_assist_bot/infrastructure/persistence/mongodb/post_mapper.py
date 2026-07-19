@@ -36,6 +36,12 @@ from telegram_assist_bot.domain.posts import (
     TelegramEntity,
     TransitionActorCategory,
 )
+from telegram_assist_bot.domain.scoring import (
+    ScoringFailure,
+    ScoringFailurePolicy,
+    ScoringResult,
+    ScoringState,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
     InvalidPostDocumentError,
 )
@@ -66,6 +72,7 @@ _ROOT_FIELDS: Final[frozenset[str]] = frozenset(
         "advertisement_processing",
         "semantic_duplicate_processing",
         "categorization_processing",
+        "scoring_processing",
     }
 )
 _ADVERTISEMENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -163,6 +170,50 @@ _CATEGORIZATION_FAILURE_FIELDS = frozenset(
         "attempted_candidates_count",
         "retry_count",
         "fallback_count",
+        "next_retry_at",
+        "next_retry_at_microsecond_remainder",
+    }
+)
+_SCORING_FIELDS = frozenset(
+    {
+        "state",
+        "version",
+        "job_id",
+        "due_at",
+        "due_at_microsecond_remainder",
+        "result",
+        "failure",
+    }
+)
+_SCORING_RESULT_FIELDS = frozenset(
+    {
+        "score",
+        "confidence",
+        "reason",
+        "provider_name",
+        "model_name",
+        "scored_at",
+        "scored_at_microsecond_remainder",
+        "prompt_version",
+        "schema_version",
+        "attractiveness_probability",
+        "engagement_probability",
+        "headline_quality",
+        "freshness",
+        "news_value",
+        "writing_quality",
+        "cache_hit",
+        "cache_age_seconds",
+        "attempt_number",
+        "fallback_count",
+    }
+)
+_SCORING_FAILURE_FIELDS = frozenset(
+    {
+        "policy",
+        "failure_category",
+        "failed_at",
+        "failed_at_microsecond_remainder",
         "next_retry_at",
         "next_retry_at_microsecond_remainder",
     }
@@ -751,6 +802,150 @@ def categorization_processing_to_document(post: Post) -> dict[str, object]:
     }
 
 
+def scoring_processing_to_document(post: Post) -> dict[str, object]:
+    """Serialize additive delayed-scoring state without raw AI payloads."""
+    due_at = None
+    due_remainder = 0
+    if post.scoring_due_at is not None:
+        due_at, due_remainder = _floor_to_millisecond(post.scoring_due_at)
+    result_document = None
+    if post.scoring_result is not None:
+        result = post.scoring_result
+        scored_at, scored_remainder = _floor_to_millisecond(result.scored_at)
+        result_document = {
+            "score": result.score,
+            "confidence": result.confidence,
+            "reason": result.reason,
+            "provider_name": result.provider_name,
+            "model_name": result.model_name,
+            "scored_at": scored_at,
+            "scored_at_microsecond_remainder": scored_remainder,
+            "prompt_version": result.prompt_version,
+            "schema_version": result.schema_version,
+            "attractiveness_probability": result.attractiveness_probability,
+            "engagement_probability": result.engagement_probability,
+            "headline_quality": result.headline_quality,
+            "freshness": result.freshness,
+            "news_value": result.news_value,
+            "writing_quality": result.writing_quality,
+            "cache_hit": result.cache_hit,
+            "cache_age_seconds": result.cache_age_seconds,
+            "attempt_number": result.attempt_number,
+            "fallback_count": result.fallback_count,
+        }
+    failure_document = None
+    if post.scoring_failure is not None:
+        failure = post.scoring_failure
+        failed_at, failed_remainder = _floor_to_millisecond(failure.failed_at)
+        retry_at = None
+        retry_remainder = 0
+        if failure.next_retry_at is not None:
+            retry_at, retry_remainder = _floor_to_millisecond(failure.next_retry_at)
+        failure_document = {
+            "policy": failure.policy.value,
+            "failure_category": failure.failure_category,
+            "failed_at": failed_at,
+            "failed_at_microsecond_remainder": failed_remainder,
+            "next_retry_at": retry_at,
+            "next_retry_at_microsecond_remainder": retry_remainder,
+        }
+    return {
+        "state": post.scoring_state.value,
+        "version": post.scoring_processing_version,
+        "job_id": post.scoring_job_id,
+        "due_at": due_at,
+        "due_at_microsecond_remainder": due_remainder,
+        "result": result_document,
+        "failure": failure_document,
+    }
+
+
+def _scoring_processing_from_document(
+    value: object,
+) -> tuple[
+    ScoringState,
+    int,
+    str | None,
+    datetime | None,
+    ScoringResult | None,
+    ScoringFailure | None,
+]:
+    document = _require_mapping(value, rule="invalid_scoring_processing")
+    _require_exact_fields(document, _SCORING_FIELDS)
+    due_at = None
+    if document["due_at"] is not None:
+        due_at = _restore_floor_datetime(
+            document["due_at"], document["due_at_microsecond_remainder"]
+        )
+    result = None
+    if document["result"] is not None:
+        item = _require_mapping(document["result"], rule="invalid_scoring_result")
+        _require_exact_fields(item, _SCORING_RESULT_FIELDS)
+        result = ScoringResult(
+            score=_require_integer(item["score"]),
+            confidence=_require_float(item["confidence"]),
+            reason=_require_string(item["reason"]),
+            provider_name=_require_string(item["provider_name"]),
+            model_name=_require_string(item["model_name"]),
+            scored_at=_restore_floor_datetime(
+                item["scored_at"], item["scored_at_microsecond_remainder"]
+            ),
+            prompt_version=_require_string(item["prompt_version"]),
+            schema_version=_require_string(item["schema_version"]),
+            attractiveness_probability=_require_float(
+                item["attractiveness_probability"], optional=True
+            ),
+            engagement_probability=_require_float(
+                item["engagement_probability"], optional=True
+            ),
+            headline_quality=None
+            if item["headline_quality"] is None
+            else _require_integer(item["headline_quality"]),
+            freshness=None
+            if item["freshness"] is None
+            else _require_integer(item["freshness"]),
+            news_value=None
+            if item["news_value"] is None
+            else _require_integer(item["news_value"]),
+            writing_quality=None
+            if item["writing_quality"] is None
+            else _require_integer(item["writing_quality"]),
+            cache_hit=_require_boolean(item["cache_hit"]),
+            cache_age_seconds=_require_float(item["cache_age_seconds"], optional=True),
+            attempt_number=None
+            if item["attempt_number"] is None
+            else _require_integer(item["attempt_number"]),
+            fallback_count=None
+            if item["fallback_count"] is None
+            else _require_integer(item["fallback_count"]),
+        )
+    failure = None
+    if document["failure"] is not None:
+        item = _require_mapping(document["failure"], rule="invalid_scoring_failure")
+        _require_exact_fields(item, _SCORING_FAILURE_FIELDS)
+        retry_at = None
+        if item["next_retry_at"] is not None:
+            retry_at = _restore_floor_datetime(
+                item["next_retry_at"], item["next_retry_at_microsecond_remainder"]
+            )
+        failure = ScoringFailure(
+            policy=ScoringFailurePolicy(_require_string(item["policy"])),
+            failure_category=_require_string(item["failure_category"]),
+            failed_at=_restore_floor_datetime(
+                item["failed_at"], item["failed_at_microsecond_remainder"]
+            ),
+            next_retry_at=retry_at,
+        )
+    return (
+        ScoringState(_require_string(document["state"])),
+        _require_integer(document["version"]),
+        _require_string(document["job_id"], optional=True),
+        due_at,
+        result,
+        failure,
+    )
+
+
 def _categorization_result_from_document(
     document: Mapping[str, object],
 ) -> CategorizationResult:
@@ -871,6 +1066,7 @@ def post_to_document(post: Post) -> dict[str, object]:
             post
         ),
         "categorization_processing": categorization_processing_to_document(post),
+        "scoring_processing": scoring_processing_to_document(post),
     }
 
 
@@ -909,6 +1105,16 @@ def post_from_document(value: object) -> Post:
             "result": None,
             "failure": None,
         }
+    if "scoring_processing" not in document:
+        document["scoring_processing"] = {
+            "state": ScoringState.NOT_REQUESTED.value,
+            "version": 0,
+            "job_id": None,
+            "due_at": None,
+            "due_at_microsecond_remainder": 0,
+            "result": None,
+            "failure": None,
+        }
     _require_exact_fields(document, _ROOT_FIELDS)
     if (
         document["schema_version"] != POST_DOCUMENT_SCHEMA_VERSION
@@ -938,6 +1144,7 @@ def post_from_document(value: object) -> Post:
     categorization = _categorization_processing_from_document(
         document["categorization_processing"]
     )
+    scoring = _scoring_processing_from_document(document["scoring_processing"])
     try:
         post = Post(
             post_id=PostId(_require_string(document["_id"])),
@@ -983,6 +1190,12 @@ def post_from_document(value: object) -> Post:
             categorization_job_id=categorization[2],
             categorization_result=categorization[3],
             categorization_failure=categorization[4],
+            scoring_state=scoring[0],
+            scoring_processing_version=scoring[1],
+            scoring_job_id=scoring[2],
+            scoring_due_at=scoring[3],
+            scoring_result=scoring[4],
+            scoring_failure=scoring[5],
         )
     except (AdvertisementDomainError, PostDomainError, ValueError):
         raise InvalidPostDocumentError from None
@@ -998,6 +1211,7 @@ __all__ = [
     "categorization_processing_to_document",
     "post_from_document",
     "post_to_document",
+    "scoring_processing_to_document",
     "semantic_duplicate_processing_to_document",
     "status_transition_to_document",
 ]

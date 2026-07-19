@@ -47,6 +47,12 @@ from telegram_assist_bot.domain.posts.status import (
     _canonical_utc,
     is_post_status_transition_allowed,
 )
+from telegram_assist_bot.domain.scoring import (
+    ScoringFailure,
+    ScoringFailurePolicy,
+    ScoringResult,
+    ScoringState,
+)
 
 POST_RETENTION_PERIOD: Final[timedelta] = timedelta(days=14)
 """The fixed Milestone 0 retention period for a received post."""
@@ -203,6 +209,12 @@ class Post:
     categorization_failure: CategorizationCheckFailure | None = field(
         default=None, repr=False
     )
+    scoring_state: ScoringState = ScoringState.NOT_REQUESTED
+    scoring_processing_version: int = 0
+    scoring_job_id: str | None = None
+    scoring_due_at: datetime | None = None
+    scoring_result: ScoringResult | None = field(default=None, repr=False)
+    scoring_failure: ScoringFailure | None = field(default=None, repr=False)
     expires_at: datetime = field(init=False)
 
     def __post_init__(self) -> None:
@@ -297,6 +309,31 @@ class Post:
             and type(self.categorization_failure) is not CategorizationCheckFailure
         ):
             raise PostInvariantError
+        if type(self.scoring_state) is not ScoringState:
+            raise PostInvariantError
+        if (
+            type(self.scoring_processing_version) is not int
+            or self.scoring_processing_version < 0
+        ):
+            raise PostInvariantError
+        if self.scoring_job_id is not None and not _is_bounded_non_blank_string(
+            self.scoring_job_id, _MAX_POST_ID_LENGTH
+        ):
+            raise PostInvariantError
+        if (
+            self.scoring_result is not None
+            and type(self.scoring_result) is not ScoringResult
+        ):
+            raise PostInvariantError
+        if (
+            self.scoring_failure is not None
+            and type(self.scoring_failure) is not ScoringFailure
+        ):
+            raise PostInvariantError
+        if self.scoring_due_at is not None:
+            object.__setattr__(
+                self, "scoring_due_at", _canonical_utc(self.scoring_due_at)
+            )
 
         source_published_at = _canonical_utc(self.source_published_at)
         received_at = _canonical_utc(self.received_at)
@@ -313,6 +350,7 @@ class Post:
         self._validate_advertisement_state()
         self._validate_semantic_duplicate_state()
         self._validate_categorization_state()
+        self._validate_scoring_state()
 
     def __eq__(self, other: object) -> bool:
         """Compare stable aggregate identity rather than mutable lifecycle state."""
@@ -983,6 +1021,181 @@ class Post:
             categorization_failure=failure,
             categorization_processing_version=expected_processing_version + 1,
         )
+
+    @property
+    def scoring_is_eligible(self) -> bool:
+        """Return whether all required content stages permit delayed scoring."""
+        return (
+            self.status is PostStatus.STORED
+            and self.advertisement_allows_next_stage
+            and self.semantic_duplicate_allows_next_stage
+            and self.categorization_state
+            in {
+                CategorizationState.AI_ASSIGNED,
+                CategorizationState.KEYWORD_FALLBACK,
+                CategorizationState.SOURCE_DEFAULT_FALLBACK,
+                CategorizationState.SUPERSEDED_MANUAL,
+            }
+        )
+
+    def schedule_scoring(
+        self,
+        *,
+        job_id: str,
+        due_at: datetime,
+        expected_processing_version: int,
+    ) -> Post:
+        """Persist one durable scoring schedule using processing CAS."""
+        if self.scoring_processing_version != expected_processing_version:
+            raise PostVersionConflictError(
+                expected_processing_version, self.scoring_processing_version
+            )
+        canonical_due = _canonical_utc(due_at)
+        if self.scoring_state is ScoringState.SCHEDULED:
+            if self.scoring_job_id == job_id and self.scoring_due_at == canonical_due:
+                return self
+            raise InvalidPostTransitionError
+        if (
+            self.scoring_state is not ScoringState.NOT_REQUESTED
+            or not self.scoring_is_eligible
+            or not _is_bounded_non_blank_string(job_id, _MAX_POST_ID_LENGTH)
+        ):
+            raise InvalidPostTransitionError
+        return replace(
+            self,
+            scoring_state=ScoringState.SCHEDULED,
+            scoring_processing_version=expected_processing_version + 1,
+            scoring_job_id=job_id,
+            scoring_due_at=canonical_due,
+        )
+
+    def mark_scoring_pending(self, *, expected_processing_version: int) -> Post:
+        """Mark an already due claimed scoring Job as pending."""
+        if (
+            self.scoring_processing_version != expected_processing_version
+            or self.scoring_state
+            not in {ScoringState.SCHEDULED, ScoringState.RETRY_PENDING}
+        ):
+            raise InvalidPostTransitionError
+        return replace(
+            self,
+            scoring_state=ScoringState.PENDING,
+            scoring_failure=None,
+            scoring_processing_version=expected_processing_version + 1,
+        )
+
+    def apply_scoring_result(
+        self,
+        result: ScoringResult,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Post:
+        """Persist the first valid score even after approval or publication."""
+        if (
+            type(result) is not ScoringResult
+            or self.scoring_processing_version != expected_processing_version
+            or self.scoring_job_id != job_id
+            or self.scoring_state
+            not in {
+                ScoringState.SCHEDULED,
+                ScoringState.PENDING,
+                ScoringState.RETRY_PENDING,
+            }
+        ):
+            raise InvalidPostTransitionError
+        return replace(
+            self,
+            scoring_state=ScoringState.COMPLETED,
+            scoring_result=result,
+            scoring_failure=None,
+            scoring_processing_version=expected_processing_version + 1,
+        )
+
+    def apply_scoring_failure(
+        self,
+        failure: ScoringFailure,
+        *,
+        job_id: str,
+        expected_processing_version: int,
+    ) -> Post:
+        """Persist retry-pending or terminal unavailable scoring state."""
+        if (
+            type(failure) is not ScoringFailure
+            or self.scoring_processing_version != expected_processing_version
+            or self.scoring_job_id != job_id
+            or self.scoring_state
+            not in {
+                ScoringState.SCHEDULED,
+                ScoringState.PENDING,
+                ScoringState.RETRY_PENDING,
+            }
+        ):
+            raise InvalidPostTransitionError
+        target = (
+            ScoringState.RETRY_PENDING
+            if failure.policy is ScoringFailurePolicy.RETRY_LATER
+            else ScoringState.UNAVAILABLE
+        )
+        return replace(
+            self,
+            scoring_state=target,
+            scoring_failure=failure,
+            scoring_result=None,
+            scoring_processing_version=expected_processing_version + 1,
+        )
+
+    def mark_scoring_stale(self, *, expected_processing_version: int) -> Post:
+        """Resolve an expired/deleted scoring request without a fabricated result."""
+        if (
+            self.scoring_processing_version != expected_processing_version
+            or self.scoring_state
+            not in {
+                ScoringState.SCHEDULED,
+                ScoringState.PENDING,
+                ScoringState.RETRY_PENDING,
+            }
+        ):
+            raise InvalidPostTransitionError
+        return replace(
+            self,
+            scoring_state=ScoringState.STALE_OR_EXPIRED,
+            scoring_processing_version=expected_processing_version + 1,
+        )
+
+    def _validate_scoring_state(self) -> None:
+        """Validate additive scoring state and legacy-safe defaults."""
+        state = self.scoring_state
+        values = (self.scoring_job_id, self.scoring_due_at)
+        if state is ScoringState.NOT_REQUESTED:
+            if self.scoring_processing_version != 0 or any(
+                value is not None
+                for value in (*values, self.scoring_result, self.scoring_failure)
+            ):
+                raise PostInvariantError
+            return
+        if self.scoring_processing_version < 1 or any(
+            value is None for value in values
+        ):
+            raise PostInvariantError
+        if state in {ScoringState.SCHEDULED, ScoringState.PENDING}:
+            if self.scoring_result is not None or self.scoring_failure is not None:
+                raise PostInvariantError
+        elif state is ScoringState.RETRY_PENDING:
+            if (
+                self.scoring_result is not None
+                or self.scoring_failure is None
+                or self.scoring_failure.next_retry_at is None
+            ):
+                raise PostInvariantError
+        elif state is ScoringState.COMPLETED:
+            if self.scoring_result is None or self.scoring_failure is not None:
+                raise PostInvariantError
+        elif state is ScoringState.UNAVAILABLE:
+            if self.scoring_result is not None or self.scoring_failure is None:
+                raise PostInvariantError
+        elif state is ScoringState.STALE_OR_EXPIRED and self.scoring_result is not None:
+            raise PostInvariantError
 
 
 __all__ = [

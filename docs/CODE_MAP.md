@@ -551,3 +551,16 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 `directConnection=true` نیاز دارد؛ هیچ تست Foundation به production، Telegram یا AI
 متصل نمی‌شود و نبود MongoDB باعث skip خاموش نمی‌شود. تست live Telegram اختیاری و
 از suite پیش‌فرض حذف است.
+
+## امتیازدهی تأخیری AI (T045)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/scoring.py` و `domain/posts/models.py` | state مستقل scoring، نتیجهٔ strict، failure metadata و transitionهای CAS |
+| `application/use_cases/schedule_ai_scoring.py` | boundary صریح approval، محاسبهٔ UTC due و enqueue قطعی Job یکتا |
+| `application/use_cases/apply_ai_score.py` | تبدیل AIResult استاندارد، persistence یک‌باره، retry/unavailable و fan-out منطقی |
+| `application/ai/task_handlers/scoring.py` | seam ایزولهٔ Worker برای claimed Job و stale check پیش از Provider |
+| `application/scoring_approval.py` و `application/approvals/services.py` | refresh هدر از state تازه با حفظ keyboard و DestinationSelection |
+| `infrastructure/persistence/mongodb/post_mapper.py` و `post_repository.py` | mapper افزایشی legacy-safe و update اتمی scoring با expected version/state |
+| `tests/unit/application/test_delayed_ai_scoring.py` و `test_apply_ai_score.py` | delay، boundary، idempotency، failure policy و stale execution |
+| `tests/integration/workflows/test_delayed_ai_scoring.py` | MongoDB واقعی، due claim، restart، score persistence و legacy Post |

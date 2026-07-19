@@ -93,6 +93,8 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryError,
     PostRepositoryUnavailableError,
     PostTransitionRequest,
+    ScoringPostRepository,
+    ScoringPostUpdateRequest,
     SemanticDuplicatePostRepository,
     SemanticDuplicatePostUpdateRequest,
 )
@@ -250,6 +252,8 @@ __all__ = (
     "ResolvedTelegramChannel",
     "ScheduleRepository",
     "ScheduleReservation",
+    "ScoringPostRepository",
+    "ScoringPostUpdateRequest",
     "SemanticDuplicateCandidate",
     "SemanticDuplicateCandidateRepository",
     "SemanticDuplicatePostRepository",

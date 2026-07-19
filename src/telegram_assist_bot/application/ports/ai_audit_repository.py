@@ -34,6 +34,8 @@ class AIAuditEventType(StrEnum):
     CATEGORIZATION_RESULT_APPLIED = "categorization_result_applied"
     CATEGORIZATION_FAILURE_POLICY_APPLIED = "categorization_failure_policy_applied"
     CATEGORIZATION_RESULT_SUPERSEDED = "categorization_result_superseded"
+    SCORING_RESULT_APPLIED = "scoring_result_applied"
+    SCORING_FAILURE_POLICY_APPLIED = "scoring_failure_policy_applied"
 
 
 class AIAuditRepositoryError(Exception):

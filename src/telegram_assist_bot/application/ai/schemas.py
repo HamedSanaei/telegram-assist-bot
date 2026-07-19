@@ -156,11 +156,13 @@ class CategorizationOutput(BaseAIOutput):
 class ScoringOutput(BaseAIOutput):
     """Expected output structure for post scoring."""
 
+    SCHEMA_VERSION: ClassVar[str] = "2"
+
     score: int = Field(
         ...,
-        ge=1,
-        le=10,
-        description="The quality score assigned to the post, from 1 to 10",
+        ge=0,
+        le=100,
+        description="The quality score assigned to the post, from 0 to 100",
     )
     confidence: float = Field(
         ...,
@@ -171,8 +173,15 @@ class ScoringOutput(BaseAIOutput):
     reason: str = Field(
         ...,
         min_length=1,
+        max_length=512,
         description="Reasoning for the assigned score",
     )
+    attractiveness_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    engagement_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    headline_quality: int | None = Field(default=None, ge=0, le=100)
+    freshness: int | None = Field(default=None, ge=0, le=100)
+    news_value: int | None = Field(default=None, ge=0, le=100)
+    writing_quality: int | None = Field(default=None, ge=0, le=100)
 
 
 # Mappings for Registry Validation

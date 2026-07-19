@@ -615,3 +615,34 @@ def test_toggle_rejections_deleted_sync_and_stale_reference() -> None:
         assert not repository.references["gone"].active
 
     asyncio.run(scenario())
+
+
+def test_scoring_force_refresh_preserves_newer_selection_and_reference_order() -> None:
+    """Render scoring from fresh state without reusing its version as selection."""
+
+    async def scenario() -> None:
+        repository = MemoryRepository()
+        gateway = FakeGateway()
+        selection = DestinationSelection(
+            "post", -2001, SelectionMode.SCHEDULED, version=9
+        )
+        repository.selections[("post", -2001)] = selection
+        repository.references["old"] = ApprovalReference(
+            "old", 1001, 1001, "post", 10, (), rendered_version=5
+        )
+        observed: list[DestinationSelection] = []
+
+        async def render(_item: ApprovalReference) -> tuple[str, InlineKeyboard]:
+            observed.append(await repository.get_selection("post", -2001))
+            return "امتیاز: در انتظار بررسی", InlineKeyboard(())
+
+        await SynchronizeApprovalMessages(gateway, repository).execute(
+            post_id="post", version=2, render=render, now=NOW, force=True
+        )
+
+        assert gateway.edits == [10]
+        assert observed == [selection]
+        assert repository.selections[("post", -2001)] == selection
+        assert repository.references["old"].rendered_version == 6
+
+    asyncio.run(scenario())

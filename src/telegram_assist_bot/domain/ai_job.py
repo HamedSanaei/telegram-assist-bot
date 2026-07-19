@@ -69,6 +69,7 @@ class AIJob:
         priority: int,
         max_attempts: int = 3,
         created_at: datetime | None = None,
+        next_run_at: datetime | None = None,
     ) -> AIJob:
         """Create a new AI Job in Pending state."""
         if (
@@ -81,6 +82,9 @@ class AIJob:
             raise ValueError("Missing required fields for AIJob creation")
 
         now = created_at or datetime.now(UTC)
+        due_at = next_run_at or now
+        if due_at.tzinfo is None or due_at.utcoffset() is None:
+            raise ValueError("AIJob next_run_at must be timezone-aware")
         idempotency_key = f"{post_id}:{task_type}:{prompt_version}:{schema_version}"
 
         return cls(
@@ -94,7 +98,7 @@ class AIJob:
             priority=priority,
             attempts=0,
             max_attempts=max_attempts,
-            next_run_at=now,
+            next_run_at=due_at.astimezone(UTC),
             created_at=now,
             updated_at=now,
             version=0,

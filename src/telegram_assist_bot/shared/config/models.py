@@ -341,7 +341,7 @@ class FeatureFlags(_FrozenConfigModel):
         description="Whether duplicate-content detection is enabled."
     )
     ai_scoring_enabled: StrictBool = Field(
-        description="Whether AI content scoring is enabled."
+        default=False, description="Whether AI content scoring is enabled."
     )
     ai_categorization_enabled: StrictBool = Field(
         default=False, description="Whether AI categorization is enabled."
@@ -584,6 +584,20 @@ class SemanticDuplicateConfig(_FrozenConfigModel):
     duplicate_policy: SemanticDuplicatePolicy
 
 
+class ScoringFailurePolicy(StrEnum):
+    """Approved delayed-scoring failure actions."""
+
+    RETRY_LATER = "retry_later"
+    MARK_UNAVAILABLE = "mark_unavailable"
+
+
+class ScoringConfig(_FrozenConfigModel):
+    """Hold explicit delayed-scoring timing and terminal failure behavior."""
+
+    delay_seconds: Annotated[StrictInt, Field(ge=1200, le=2_592_000)]
+    failure_policy: ScoringFailurePolicy
+
+
 class AiConfig(_FrozenConfigModel):
     """Hold provider declarations and task-routing skeletons."""
 
@@ -668,6 +682,10 @@ class ApplicationConfig(_FrozenConfigModel):
         default=None,
         description="Explicit semantic policy; required only when effectively enabled.",
     )
+    scoring: ScoringConfig | None = Field(
+        default=None,
+        description="Explicit delayed scoring policy; required only when enabled.",
+    )
     ai: AiConfig = Field(description="AI provider and routing configuration.")
     advertisements: AdvertisementConfig = Field(
         description="Advertisement routing configuration."
@@ -745,6 +763,25 @@ class ApplicationConfig(_FrozenConfigModel):
                         "enabled semantic duplicate detection requires an explicit "
                         "AI failure policy"
                     )
+        if self.features.ai_scoring_enabled:
+            if self.scoring is None:
+                raise ValueError(
+                    "enabled AI scoring requires explicit delay and failure policy"
+                )
+            scoring_routes = [
+                route for route in self.ai.routes if route.task is AITaskType.SCORING
+            ]
+            if len(scoring_routes) != 1:
+                raise ValueError(
+                    "enabled AI scoring requires exactly one scoring route"
+                )
+            if any(
+                candidate.guard_policy is None
+                for candidate in scoring_routes[0].candidates
+            ):
+                raise ValueError(
+                    "enabled AI scoring requires explicit provider guard policies"
+                )
         destination_ids = {
             item.telegram_channel_id for item in self.destination_channels
         }
@@ -789,6 +826,8 @@ __all__ = [
     "LoggingConfig",
     "MongoConfig",
     "PublishingConfig",
+    "ScoringConfig",
+    "ScoringFailurePolicy",
     "SecretReference",
     "SourceChannelConfig",
     "TelegramBotConfig",

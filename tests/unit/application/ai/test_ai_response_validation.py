@@ -98,7 +98,7 @@ def test_valid_outputs_all_tasks(
     env = make_envelope('{"score": 8, "confidence": 0.75, "reason": "کیفیت خوب"}')
     parsed, rep = parser.parse(env)
     assert not rep
-    validated = validator.validate(parsed, AITaskType.SCORING, "1")
+    validated = validator.validate(parsed, AITaskType.SCORING, "2")
     assert isinstance(validated, ScoringOutput)
     assert validated.score == 8
     assert validated.confidence == 0.75

@@ -124,12 +124,16 @@ def test_scoring_schemas() -> None:
     out = ScoringOutput(score=8, confidence=0.9, reason="محتوای مناسب")
     assert out.score == 8
 
-    # Invalid score (out of range 1-10)
+    # Boundaries 0 and 100 are valid in scoring schema v2.
+    assert ScoringOutput(score=0, confidence=0.0, reason="مرز صفر").score == 0
+    assert ScoringOutput(score=100, confidence=1.0, reason="مرز صد").score == 100
+
+    # Invalid score (out of range 0-100)
     with pytest.raises(ValidationError):
-        ScoringOutput(score=0, confidence=0.9, reason="Test")
+        ScoringOutput(score=-1, confidence=0.9, reason="Test")
 
     with pytest.raises(ValidationError):
-        ScoringOutput(score=11, confidence=0.9, reason="Test")
+        ScoringOutput(score=101, confidence=0.9, reason="Test")
 
 
 def test_raw_response_envelope() -> None:

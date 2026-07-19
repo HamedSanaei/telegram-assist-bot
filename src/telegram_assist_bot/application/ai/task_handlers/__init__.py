@@ -10,6 +10,7 @@ from telegram_assist_bot.application.ai.task_handlers.categorization import (
     CategorizationHandlerOutcome,
     CategorizationTaskValidationError,
 )
+from telegram_assist_bot.application.ai.task_handlers.scoring import ScoringHandler
 from telegram_assist_bot.application.ai.task_handlers.semantic_duplicate import (
     SemanticDuplicateHandler,
 )
@@ -21,5 +22,6 @@ __all__ = (
     "CategorizationHandler",
     "CategorizationHandlerOutcome",
     "CategorizationTaskValidationError",
+    "ScoringHandler",
     "SemanticDuplicateHandler",
 )

@@ -96,6 +96,10 @@
     "threshold": 0.88,
     "duplicate_policy": "manual_review"
   },
+  "scoring": {
+    "delay_seconds": 1200,
+    "failure_policy": "retry_later"
+  },
   "publishing": {
     "scheduled_publication_interval_seconds": 300,
     "operation_timeout_seconds": 30,

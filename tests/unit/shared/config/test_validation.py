@@ -71,6 +71,104 @@ def _assign_attribute(target: object, name: str, value: object) -> None:
     setattr(target, name, value)
 
 
+def _enable_scoring(document: JsonObject) -> None:
+    """Turn the example route into one fully guarded scoring route."""
+    _set_at(document, ("features", "ai_scoring_enabled"), True)
+    _set_at(document, ("ai", "routes", 0, "task"), "content_scoring")
+    _set_at(
+        document,
+        ("ai", "routes", 0, "candidates", 0, "guard_policy"),
+        {
+            "concurrency_limit": 1,
+            "request_limit": 10,
+            "request_window_seconds": 60,
+            "reservation_seconds": 30,
+            "failure_threshold": 3,
+            "open_seconds": 60,
+            "rate_limit_cooldown_seconds": 60,
+        },
+    )
+
+
+def test_missing_legacy_scoring_flag_safely_disables_scoring(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Keep pre-T045 configurations loadable without enabling scoring."""
+    _as_object(valid_payload["features"]).pop("ai_scoring_enabled")
+    _as_object(valid_payload).pop("scoring")
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert not loaded.settings.features.ai_scoring_enabled
+    assert loaded.settings.scoring is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_path"),
+    [
+        (lambda value: _as_object(value).pop("scoring"), "<root>"),
+        (
+            lambda value: _as_object(_as_object(value)["scoring"]).pop("delay_seconds"),
+            "scoring.delay_seconds",
+        ),
+        (
+            lambda value: _set_at(value, ("scoring", "delay_seconds"), 1199),
+            "scoring.delay_seconds",
+        ),
+        (
+            lambda value: _as_object(_as_object(value)["scoring"]).pop(
+                "failure_policy"
+            ),
+            "scoring.failure_policy",
+        ),
+        (
+            lambda value: _set_at(
+                value, ("scoring", "failure_policy"), "continue_processing"
+            ),
+            "scoring.failure_policy",
+        ),
+    ],
+)
+def test_enabled_scoring_requires_explicit_valid_policy_and_delay(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    mutation: Callable[[JsonObject], object],
+    expected_path: str,
+) -> None:
+    """Reject missing, invalid, or sub-20-minute scoring configuration."""
+    _enable_scoring(valid_payload)
+    mutation(valid_payload)
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload), environ=synthetic_environ
+        )
+
+    assert expected_path in _paths(captured.value)
+
+
+def test_enabled_scoring_accepts_exact_minimum_without_score_gate(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Accept 1200 seconds and expose no minimum-score configuration."""
+    _enable_scoring(valid_payload)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.scoring is not None
+    assert loaded.settings.scoring.delay_seconds == 1200
+    assert not hasattr(loaded.settings.scoring, "minimum_ai_score")
+
+
 def test_structural_errors_are_aggregated_with_exact_paths(
     valid_payload: JsonObject,
     synthetic_environ: dict[str, str],
@@ -389,6 +487,20 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
         )
         _set_at(
             valid_payload, ("categorization", "fallback_policy"), "fallback_baseline"
+        )
+    if task is AiTask.CONTENT_SCORING:
+        _set_at(
+            valid_payload,
+            ("ai", "routes", 0, "candidates", 0, "guard_policy"),
+            {
+                "concurrency_limit": 1,
+                "request_limit": 10,
+                "request_window_seconds": 60,
+                "reservation_seconds": 30,
+                "failure_threshold": 3,
+                "open_seconds": 60,
+                "rate_limit_cooldown_seconds": 60,
+            },
         )
     _set_at(valid_payload, ("ai", "routes", 0, "task"), task.value)
 

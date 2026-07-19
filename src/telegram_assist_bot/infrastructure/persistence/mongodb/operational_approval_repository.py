@@ -577,6 +577,22 @@ class MongoApprovalPostLoader:
         duplicate = (
             None if duplicate_value is None else ("بله" if duplicate_value else "خیر")
         )
+        scoring = post.get("scoring_processing", {})
+        scoring_state = scoring.get("state", "NotRequested")
+        scoring_result = scoring.get("result")
+        if scoring_state == "ScoringCompleted" and isinstance(scoring_result, dict):
+            raw_score = scoring_result.get("score")
+            score = str(raw_score) if type(raw_score) is int else "در دسترس نیست"
+        elif scoring_state in {
+            "ScoringScheduled",
+            "ScoringPending",
+            "ScoringRetryPending",
+        }:
+            score = "در انتظار بررسی"
+        elif scoring_state in {"ScoringUnavailable", "ScoringStaleOrExpired"}:
+            score = "در دسترس نیست"
+        else:
+            score = None
         return ApprovalPost(
             post_id,
             post["source_channel_display_name"],
@@ -592,6 +608,7 @@ class MongoApprovalPostLoader:
             ),
             category=category,
             duplicate=duplicate,
+            score=score,
             source_message_id=post.get("source_message_id"),
             source_published_at=post.get("source_published_at"),
             content_type=content_type,

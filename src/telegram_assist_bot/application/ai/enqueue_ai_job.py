@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from telegram_assist_bot.domain.ai_job import AIJob
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from telegram_assist_bot.application.ports.ai_job_repository import (
         AIJobRepository,
         EnqueueJobResult,
@@ -32,6 +34,7 @@ class EnqueueAIJob:
         priority: int,
         max_attempts: int = 3,
         job_id: str | None = None,
+        next_run_at: datetime | None = None,
     ) -> EnqueueJobResult:
         """Enqueue a new AI Job, returning the result containing outcome and job."""
         now = self.clock.utc_now()
@@ -46,6 +49,7 @@ class EnqueueAIJob:
             priority=priority,
             max_attempts=max_attempts,
             created_at=now,
+            next_run_at=next_run_at,
         )
 
         return await self.repository.enqueue(job)

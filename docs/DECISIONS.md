@@ -478,3 +478,20 @@
   تغییر می‌دهد. پیکربندی قدیمی در حالت غیرفعال معتبر است، اما فعال‌سازی AI بدون
   ترتیب و fallback صریح خطای Configuration است. T044 تا task تثبیت pipeline به
   Runtime یا Worker متصل نیست.
+
+## ADR-033 — تأخیر، schema، شکست و نبود gate در امتیازدهی AI
+
+- **Status:** Accepted
+- **Decision:** امتیازدهی فقط با `ai_scoring_enabled` فعال می‌شود. در حالت فعال،
+  `delay_seconds` صریح با حداقل `1200` و یکی از policyهای صریح `retry_later` یا
+  `mark_unavailable` الزامی است و هیچ default پنهانی وجود ندارد. `due_at` فقط از
+  `source_published_at + delay_seconds` در UTC محاسبه می‌شود. قرارداد scoring به prompt
+  `2.0.0` و schema `2` ارتقا یافته و score صحیح ۰ تا ۱۰۰، confidence، reason و
+  componentهای واقعاً برگشتی را می‌پذیرد؛ component غایب ساخته یا overall score از
+  آن‌ها محاسبه نمی‌شود.
+- **Consequences:** `retry_later` همان AIJob و سیاست retry صف را مصرف می‌کند و پس از
+  exhaustion به unavailable ختم می‌شود؛ `mark_unavailable` score یا AIResult ساختگی
+  نمی‌سازد. score هیچ gate تأیید، انتشار فوری، زمان‌بندی، لغو، اولویت یا انتخاب مقصد
+  ایجاد نمی‌کند. fan-out فقط پیام کنترل Approval را best-effort از state تازه بازسازی
+  می‌کند و keyboard، callback و DestinationSelection را حفظ می‌کند. wiring عملیاتی
+  Worker و startup به T046 واگذار شده است.

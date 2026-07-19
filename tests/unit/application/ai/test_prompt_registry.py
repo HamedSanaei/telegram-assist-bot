@@ -67,13 +67,21 @@ def test_registry_loads_default_prompts() -> None:
         expected_version = (
             "2.0.0"
             if prompt.task_type
-            in (AITaskType.SEMANTIC_DUPLICATE, AITaskType.CATEGORIZATION)
+            in (
+                AITaskType.SEMANTIC_DUPLICATE,
+                AITaskType.CATEGORIZATION,
+                AITaskType.SCORING,
+            )
             else "1.0.0"
         )
         expected_schema = (
             "2"
             if prompt.task_type
-            in (AITaskType.SEMANTIC_DUPLICATE, AITaskType.CATEGORIZATION)
+            in (
+                AITaskType.SEMANTIC_DUPLICATE,
+                AITaskType.CATEGORIZATION,
+                AITaskType.SCORING,
+            )
             else "1"
         )
         assert prompt.prompt_version == expected_version
@@ -122,8 +130,8 @@ def test_registry_raises_on_duplicate_version(tmp_path: Path) -> None:
     p1.write_text(
         """---
 task_type: scoring
-prompt_version: 1.0.0
-schema_version: 1
+prompt_version: 2.0.0
+schema_version: 2
 ---
 Body 1
 """,
@@ -134,8 +142,8 @@ Body 1
     p2.write_text(
         """---
 task_type: scoring
-prompt_version: 1.0.0
-schema_version: 1
+prompt_version: 2.0.0
+schema_version: 2
 ---
 Body 2
 """,
@@ -152,7 +160,7 @@ def test_registry_raises_on_schema_version_mismatch(tmp_path: Path) -> None:
         """---
 task_type: scoring
 prompt_version: 1.0.0
-schema_version: 2
+schema_version: 1
 ---
 Prompt body
 """,
@@ -165,9 +173,9 @@ Prompt body
 
 def test_registry_get_prompt() -> None:
     registry = PromptRegistry()
-    prompt = registry.get_prompt(AITaskType.SCORING, "1.0.0")
+    prompt = registry.get_prompt(AITaskType.SCORING, "2.0.0")
     assert prompt.task_type == AITaskType.SCORING
-    assert prompt.prompt_version == "1.0.0"
+    assert prompt.prompt_version == "2.0.0"
 
     with pytest.raises(KeyError):
         registry.get_prompt(AITaskType.SCORING, "9.9.9")

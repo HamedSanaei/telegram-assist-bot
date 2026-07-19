@@ -15,6 +15,7 @@ from telegram_assist_bot.domain.posts import (
     PostStatus,
     SourceMessageIdentity,
 )
+from telegram_assist_bot.domain.scoring import ScoringState
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -37,6 +38,8 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "ScoringPostRepository",
+    "ScoringPostUpdateRequest",
     "SemanticDuplicatePostRepository",
     "SemanticDuplicatePostUpdateRequest",
 )
@@ -346,4 +349,42 @@ class CategorizationPostRepository(Protocol):
         self, request: CategorizationPostUpdateRequest
     ) -> Post:
         """Atomically persist one categorization result/failure transition."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ScoringPostUpdateRequest:
+    """Carry one validated scoring-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: ScoringState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive scoring transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.scoring_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not ScoringState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@runtime_checkable
+class ScoringPostRepository(Protocol):
+    """Expose only canonical reads and scoring CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def get_for_scoring_completion(self, post_id: PostId) -> Post | None:
+        """Return an existing Post even when expired, only for stale resolution."""
+        ...
+
+    async def update_scoring(self, request: ScoringPostUpdateRequest) -> Post:
+        """Atomically persist one scoring state transition."""
         ...
