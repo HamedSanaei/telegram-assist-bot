@@ -320,3 +320,228 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         assert isinstance(application, module.TextIngestionApplication)
 
     asyncio.run(scenario())
+
+
+def test_runtime_startup_with_ai_enabled_and_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram_assist_bot.application.ai.contracts import AITaskType
+
+    async def scenario() -> None:
+        async def initialize(*args: object) -> None:
+            del args
+
+        # Patch publication/native related repositories
+        monkeypatch.setattr(module, "initialize_publication_indexes", initialize)
+        monkeypatch.setattr(
+            module, "initialize_operational_approval_indexes", initialize
+        )
+        monkeypatch.setattr(module, "initialize_native_schedule_indexes", initialize)
+        monkeypatch.setattr(
+            module, "MongoContentPreparationRepository", lambda *args: object()
+        )
+        monkeypatch.setattr(module, "MongoPublicationPayloadLoader", Loader)
+        monkeypatch.setattr(
+            module, "MongoPublicationRepository", lambda *args: object()
+        )
+        monkeypatch.setattr(module, "MongoScheduleRepository", lambda *args: object())
+        monkeypatch.setattr(
+            module, "MongoNativeScheduleRepository", lambda *args: object()
+        )
+        monkeypatch.setattr(module, "MongoOperationalApprovalRepository", Operational)
+        monkeypatch.setattr(module, "MongoRuntimeHeartbeatRepository", Heartbeat)
+        monkeypatch.setattr(module, "PublishImmediately", PublisherUseCase)
+        monkeypatch.setattr(module, "RunDuePublication", Runner)
+        monkeypatch.setattr(module, "RunNativeScheduling", NativeRunner)
+        monkeypatch.setattr(module, "ScheduledPublicationWorker", Worker)
+
+        # AI mock repositories and indexes
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_job_repository.initialize_ai_job_indexes",
+            initialize,
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_cache_repository.initialize_ai_cache_indexes",
+            initialize,
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_audit_repository.initialize_ai_audit_indexes",
+            initialize,
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.provider_state_repository.initialize_provider_state_indexes",
+            initialize,
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.provider_metrics_repository.initialize_provider_metrics_indexes",
+            initialize,
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_job_repository.MongoAIJobRepository",
+            lambda *args: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_cache_repository.MongoAICacheRepository",
+            lambda *args: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.ai_audit_repository.MongoAIAuditRepository",
+            lambda *args: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.infrastructure.mongodb.provider_metrics_repository.MongoProviderMetricsRepository",
+            lambda *args: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.provider_guard.ProviderGuard",
+            lambda *args: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.use_cases.execute_ai_with_fallback.ExecuteAIWithFallback",
+            lambda **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.prompt_registry.PromptRegistry",
+            lambda *args: object(),
+        )
+
+        # Mock handlers
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.task_handlers.advertisement_detection.AdvertisementDetectionHandler",
+            lambda **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.task_handlers.semantic_duplicate.SemanticDuplicateHandler",
+            lambda **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.task_handlers.categorization.CategorizationHandler",
+            lambda **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.use_cases.apply_ai_score.ApplyAIScore",
+            lambda **kwargs: object(),
+        )
+        monkeypatch.setattr(
+            "telegram_assist_bot.application.ai.task_handlers.scoring.ScoringHandler",
+            lambda **kwargs: object(),
+        )
+
+        # Mock AIWorker
+        class FakeAIWorker:
+            def __init__(self, **kwargs: object) -> None:
+                self.ran = False
+
+            async def run(self) -> None:
+                self.ran = True
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(
+            "telegram_assist_bot.workers.ai_worker.AIWorker", FakeAIWorker
+        )
+
+        publishing = SimpleNamespace(
+            operation_timeout_seconds=30,
+            publication_lease_seconds=60,
+            publication_max_attempts=3,
+            retry_initial_delay_seconds=1,
+            retry_maximum_delay_seconds=30,
+            worker_poll_seconds=5,
+            native_schedule_timeout_seconds=30,
+            native_schedule_lease_seconds=60,
+            native_schedule_poll_seconds=1,
+        )
+        destination = SimpleNamespace(
+            telegram_channel_id=-1001, name="dest", enabled=True
+        )
+
+        # 1. Test when AI features are all disabled
+        settings_disabled = SimpleNamespace(
+            mongodb=SimpleNamespace(database_name="test"),
+            destination_channels=(destination,),
+            media=SimpleNamespace(root=cast("Any", "var/media")),
+            publishing=publishing,
+            features=SimpleNamespace(
+                advertisement_detection_enabled=False,
+                duplicate_detection_enabled=False,
+                ai_scoring_enabled=False,
+                ai_categorization_enabled=False,
+            ),
+        )
+        loaded_disabled = SimpleNamespace(settings=settings_disabled)
+        database = Database()
+        foundation = SimpleNamespace(
+            mongodb_client={"test": database},
+            logger=SimpleNamespace(emit=lambda **values: None),
+            repository=object(),
+        )
+        gateway = SimpleNamespace(
+            publisher=lambda **kwargs: object(),
+            native_scheduler=lambda **kwargs: object(),
+        )
+        report = SimpleNamespace(
+            channels=(
+                SimpleNamespace(
+                    role=SimpleNamespace(value="Destination"),
+                    channel=SimpleNamespace(channel_id=-1001),
+                ),
+            )
+        )
+
+        worker_disabled = await module._create_publication_worker(
+            cast("Any", loaded_disabled),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        assert worker_disabled is not None
+
+        # 2. Test when one AI feature is enabled
+        mock_provider = SimpleNamespace(
+            name="mock-provider",
+            enabled=True,
+            api_key=SimpleNamespace(environment_variable="MOCK_API_KEY"),
+        )
+        settings_enabled = SimpleNamespace(
+            mongodb=SimpleNamespace(database_name="test"),
+            destination_channels=(destination,),
+            media=SimpleNamespace(root=cast("Any", "var/media")),
+            publishing=publishing,
+            features=SimpleNamespace(
+                advertisement_detection_enabled=False,
+                duplicate_detection_enabled=False,
+                ai_scoring_enabled=False,
+                ai_categorization_enabled=True,  # enabled!
+            ),
+            ai=SimpleNamespace(
+                queue=SimpleNamespace(worker_poll_seconds=5),
+                providers=(mock_provider,),
+                routes=(
+                    SimpleNamespace(
+                        task=AITaskType.CATEGORIZATION,
+                        candidates=(
+                            SimpleNamespace(
+                                provider_name="mock-provider", model_name="mock-model"
+                            ),
+                        ),
+                    ),
+                ),
+                audit=SimpleNamespace(enabled=False),
+            ),
+        )
+        loaded_enabled = SimpleNamespace(
+            settings=settings_enabled,
+            secrets=SimpleNamespace(
+                get=lambda k: SimpleNamespace(get_secret_value=lambda: "mock-key")
+            ),
+        )
+
+        worker_enabled = await module._create_publication_worker(
+            cast("Any", loaded_enabled),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        assert worker_enabled is not None
+
+    asyncio.run(scenario())

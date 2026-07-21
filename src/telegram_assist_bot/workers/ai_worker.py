@@ -392,7 +392,9 @@ class AIWorker:
                 import dataclasses
 
                 if best_result is None:
-                    raise ValueError("Best result is missing for semantic duplicate checks")  # noqa: E501
+                    raise ValueError(
+                        "Best result is missing for semantic duplicate checks"
+                    )
                 completed_job = job.complete(
                     self.owner, best_result.payload or {}, self.clock.utc_now()
                 )

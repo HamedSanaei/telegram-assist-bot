@@ -75,6 +75,8 @@ async def test_ai_pipeline_lease_recovery_after_restart(
             schema_version="1",
             priority=0,
             max_attempts=3,
+            created_at=_NOW,
+            next_run_at=_NOW,
         )
         await jobs_repo.enqueue(job)
 

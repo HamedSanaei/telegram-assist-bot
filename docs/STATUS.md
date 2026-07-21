@@ -4,6 +4,6 @@
 - **Active task:** هیچ‌کدام.
 - **Last completed task:** [T046 — Stabilization کامل Pipeline AI](tasks/T046-ai-pipeline-stabilization.md)
 - **Known blockers:** هیچ‌کدام.
-- **Failing tests:** هیچ‌کدام؛ آزمون‌های متمرکز T046 با موفقیت پاس شدند و کل مجموعه آزمون‌های غیرزنده (non-live) به تعداد ۱۲۳۲ عدد بدون شکست اجرا گردیدند.
-- **Last verified commit:** `bc3aefa` به‌عنوان baseline پیش از تغییرات بدون commit T044.
+- **Failing tests:** هیچ‌کدام؛ تمام ۱۲۳۶ آزمون غیرزنده (non-live) شامل ۱۲ تست متمرکز T046 با موفقیت پاس شدند.
+- **Last verified commit:** `23057d5`
 - **Next recommended action:** اجرای T047 — پذیرش End-to-end فاز اول.

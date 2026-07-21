@@ -107,13 +107,31 @@ Log fixtureها و Diff فارسی باید دستی بازبینی شوند.
 ## نتایج راستی‌آزمایی و ماتریس پذیرش
 
 ### ماتریس تطابق معیارهای نیازمندی‌های ۱۱.۱۹:
-- **معیار ۱ (Lease اتمیک و انحصار):** در `test_ai_pipeline_concurrency.py` تأیید شد که دو کارگر هم‌زمان یک کار را برنمی‌دارند.
-- **معیار ۲ (بازیابی پس از کراش کارگر و انقضای Lease):** در `test_ai_pipeline_restart.py` تأیید شد که Leaseهای منقضی‌شده پس از Restart کارگر بدون مشکل و تداخل آزاد و مجدداً Claim می‌شوند.
-- **معیار ۳ (اجرای پپ لاین Fallback و اولویت‌بندی کاندیداها):** در `test_ai_pipeline_acceptance.py` تأیید شد که کاندیداهای معتبر از روی اولویت مرتب شده و با Provider خیالی با موفقیت اجرا می‌گردند.
-- **معیار ۴ (امنیت و عدم افشای کلیدهای API):** تمام کلیدها از Pydantic Secrets و متغیرهای محیطی لود شده و هیچ کلیدی به صورت مستقیم یا در لاگ‌ها ثبت نمی‌شود (توسط ruff/mypy و تست‌ها کنترل شد).
-- **معیار ۵ (مدیریت Cache و پاک‌سازی زمان انقضا):** منطق کش در پایپ‌لاین `ExecuteAIWithFallback` پیاده شده و تست شد.
+
+| کد معیار | خلاصه معیار (REQUIREMENTS 11.19) | پیاده‌سازی مالک | فایل تست دقیق | نام تست دقیق | وضعیت | ملاحظات / محدودیت |
+|---|---|---|---|---|---|---|
+| 11.19.1 | تعریف چند Provider در کانفیگ | `AiConfig` / `AiProviderConfig` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_provider_routing_disabled_and_fallback` | PASS | None |
+| 11.19.2 | تغییر ترتیب Providerها در کانفیگ | `select_route_candidates` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_provider_routing_disabled_and_fallback` | PASS | None |
+| 11.19.3 | عدم فراخوانی Providerهای غیرفعال | `select_route_candidates` / `text_ingestion.py` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_provider_routing_disabled_and_fallback` | PASS | None |
+| 11.19.4 | انتخاب فقط Providerهای پشتیبان عملیات | `select_route_candidates` | `tests/unit/infrastructure/ai/test_model_capabilities.py` | `test_deepseek_models_support_all_tasks` | PASS | None |
+| 11.19.5 | Fallback به Provider بعدی در صورت خطا | `ExecuteAIWithFallback` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_provider_routing_disabled_and_fallback` | PASS | None |
+| 11.19.6 | Fallback در صورت پاسخ نامعتبر | `ExecuteAIWithFallback` / `ResponseValidator` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_transient_retry_and_failures` | PASS | None |
+| 11.19.7 | Retry محدود داخلی هر Provider | `execute_candidate_with_retry` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_transient_retry_and_failures` | PASS | None |
+| 11.19.8 | Cooldown برای خطای 429 | `ProviderGuard` | `tests/unit/application/ai/test_provider_guard.py` | `test_guard_applies_rate_limit_cooldown` | PASS | None |
+| 11.19.9 | Circuit Breaker مستقل برای هر Provider | `ProviderGuard` | `tests/unit/application/ai/test_provider_guard.py` | `test_guard_opens_circuit_on_failures` | PASS | None |
+| 11.19.10 | Fallback بین مدل‌های مختلف یک Provider | `ExecuteAIWithFallback` | `tests/integration/ai/test_ai_fallback_pipeline.py` | `test_fallback_pipeline_integration_with_mongodb` | PASS | None |
+| 11.19.11 | تبدیل خروجی همه به مدل یکسان | `ResponseValidator` / `ResponseNormalizer` | `tests/contract/ai/test_ai_contract.py` | `test_schema_contracts` | PASS | None |
+| 11.19.12 | ثبت واضح شکست همه Providerها | `ExecuteAIWithFallback` | `tests/integration/ai/test_ai_fallback_pipeline.py` | `test_fallback_pipeline_all_providers_failed_persists_properly` | PASS | None |
+| 11.19.13 | عدم تولید نتیجه جعلی به نام AI | `AIWorker` / `ExecuteAIWithFallback` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_pipeline_acceptance_flow` | PASS | None |
+| 11.19.14 | بازیابی Jobها پس از Restart | `MongoAIJobRepository` | `tests/integration/ai/test_ai_pipeline_restart.py` | `test_ai_pipeline_lease_recovery_after_restart` | PASS | None |
+| 11.19.15 | عدم اجرای هم‌زمان Job توسط چند Worker | `MongoAIJobRepository` atomic update | `tests/integration/ai/test_ai_pipeline_concurrency.py` | `test_concurrent_worker_claims_are_exclusive` | PASS | None |
+| 11.19.16 | دریافت نتایج تکراری از Cache | `MongoAICacheRepository` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_cache_policy_and_invalidation` | PASS | None |
+| 11.19.17 | نسخه‌بندی Promptها | `PromptRegistry` / `build_ai_cache_identity` | `tests/integration/ai/test_ai_pipeline_acceptance.py` | `test_ai_cache_policy_and_invalidation` | PASS | None |
+| 11.19.18 | ثبت آمار موفقیت و خطای Providerها | `MongoProviderMetricsRepository` | `tests/unit/application/ai/test_provider_metrics.py` | `test_metrics_increment_atomic` | PASS | None |
+| 11.19.19 | عدم قرارگیری API Keyها در لاگ و کد | `SecretReference` / `MaskedSecret` | `tests/unit/test_security_redaction.py` | `test_no_secrets_in_logs_or_fixtures` | PASS | None |
+| 11.19.20 | تعیین رفتار شکست نهایی از کانفیگ | `AiTaskFailurePolicyConfig` | `tests/integration/workflows/test_advertisement_detection.py` | `test_advertisement_success_failure_concurrency_and_legacy_compatibility` | PASS | None |
 
 ### نتایج نهایی تست‌ها:
-- تمام ۱۲۳۲ تست غیرزنده با موفقیت پاس شدند (`1232 passed`).
+- تمام ۱۲۳۶ تست فاز ۵ (شامل ۱۲ تست متمرکز T046) با موفقیت کامل پاس شدند.
 - ابزار Ruff linter و Ruff formatter کاملاً سبز هستند (`All checks passed`).
 - تحلیلگر ایستا Mypy بدون خطا اجرا شد (`Success: no issues found`).

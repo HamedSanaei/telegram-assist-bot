@@ -76,6 +76,8 @@ async def test_concurrent_worker_claims_are_exclusive(
                 schema_version="1",
                 priority=0,
                 max_attempts=3,
+                created_at=_NOW,
+                next_run_at=_NOW,
             )
             await jobs_repo.enqueue(job)
 

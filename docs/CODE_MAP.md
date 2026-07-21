@@ -11,10 +11,9 @@ T006 نیز Composition Root، CLI و lifecycle واقعی Config/Logging/MongoD
 readiness و shutdown امن متصل کرده است. Milestone 1 (T007–T012) اکنون login و
 Session محافظت‌شده، validation حساب/کانال، crawl روز جاری، Listener زنده، مسیر
 واحد ingest/claim اتمیک و restart recovery را فراهم می‌کند. Milestone 2
-(T013–T019) نیز ذخیره و پاک‌سازی خصوصی Media، Album پایدار، duplicate دقیق،
-محتوای مستقل مقصد، دسته‌بندی پایه و pipeline قابل‌بازیابی را افزوده است. AI،
-هنوز پیاده نشده است. Milestone 3 تعامل Bot API/Approval و Milestone 4 انتشار
-User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompaction را کامل کرد.
+15: محتوای مستقل مقصد، دسته‌بندی پایه و pipeline قابل‌بازیابی را افزوده است.
+16: Milestone 3 تعامل Bot API/Approval و Milestone 4 انتشار User API را کامل نمودند.
+17: Milestone 5 (T034–T046) ساختار کامل AI، زیرساخت چند Provider/Model، Queue، Retry/Fallback، Cache/Metrics و ۴ Feature اصلی (تبلیغات، دپلیکیت سمانتیک، دسته‌بندی و scoring) را به همراه تست‌های Contract و Integration تثبیت کرد.
 
 ## ساختار فعلی
 
