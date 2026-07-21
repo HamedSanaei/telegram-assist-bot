@@ -563,3 +563,14 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `infrastructure/persistence/mongodb/post_mapper.py` و `post_repository.py` | mapper افزایشی legacy-safe و update اتمی scoring با expected version/state |
 | `tests/unit/application/test_delayed_ai_scoring.py` و `test_apply_ai_score.py` | delay، boundary، idempotency، failure policy و stale execution |
 | `tests/integration/workflows/test_delayed_ai_scoring.py` | MongoDB واقعی، due claim، restart، score persistence و legacy Post |
+
+## پذیرش End-to-end فاز اول (T047)
+
+| مسیر | مسئولیت |
+|---|---|
+| `tests/fixtures/telegram/phase_one_post_fixture.json` | Fixture متنی Sanitized با ZWNJ، Emoji، Custom Emoji و URLهای منبع/مقصد |
+| `tests/fixtures/telegram/phase_one_album_fixture.json` | Fixture آلبوم out-of-order Sanitized با `grouped_id` و Caption فارسی |
+| `tests/fixtures/ai/phase_one_ai_responses.json` | Envelopeهای پاسخ Fake AI برای ۴ Task تشخیص تبلیغات، دپلیکیت سمانتیک، دسته‌بندی و scoring |
+| `tests/e2e/test_phase_one_text_flow.py` | سناریوی E2E ۱: دریافت یکتا، AI، Approval، انتشار فوری، User API Fake، و امتیازدهی تاخیری بدون دستکاری محتوای منتشرشده |
+| `tests/e2e/test_phase_one_media_schedule_flow.py` | سناریوی E2E ۲: آلبوم out-of-order، حفظ Caption/Entity، Toggle زمان‌بندی، restart/recovery و انتشار زمان‌بندی‌شده یکتا |
+| `tests/e2e/test_phase_one_restart_idempotency.py` | سناریوی E2E ۳: Idempotency دریافت، بازیابی Lease منقضی AI Job، هم‌زمانی خوش‌بینانه، امنیت Callback، توکن جعلی و Redaction |

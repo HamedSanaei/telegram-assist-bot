@@ -107,7 +107,7 @@ class ConfigurableFakeAIProvider:
             res = self.behavior[key](**call_info)
             if isinstance(res, Exception):
                 raise res
-            return cast(RawResponseEnvelope, res)
+            return cast("RawResponseEnvelope", res)
         raise RuntimeError(f"No programmed behavior for {key}")
 
 

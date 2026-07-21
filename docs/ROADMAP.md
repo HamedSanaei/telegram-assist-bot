@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ پس از تکمیل T046 فعلاً Task فعالی وجود ندارد و T047 اقدام پیشنهادی بعدی است.
+- تنها یک Task می‌تواند `Active` باشد؛ پس از تکمیل T047 فعلاً Task فعالی وجود ندارد و T048 (آغاز فاز دوم) اقدام پیشنهادی بعدی است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -96,7 +96,7 @@
 | [T044](tasks/T044-ai-categorization.md) | دسته‌بندی AI با Fallback پایه | T018، T035، T039 | `5.11`، `11.12` | Completed |
 | [T045](tasks/T045-delayed-ai-scoring.md) | امتیازدهی تأخیری و ویرایش هدر | T022، T025، T035، T039 | `5.20` | Completed |
 | [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Completed |
-| [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Planned |
+| [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Completed |
 
 ## Milestone 6 — تبلیغات زمان‌بندی‌شده
 
