@@ -1,5 +1,9 @@
 """Public construction and adapter API for MongoDB post persistence."""
 
+from telegram_assist_bot.infrastructure.persistence.mongodb.advertisement_repository import (  # noqa: E501
+    MongoAdvertisementRepository,
+    MongoAdvertisementSlotRepository,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.approval_repository import (
     MongoApprovalRepository,
     initialize_approval_indexes,
@@ -46,6 +50,9 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_repository import (
     MongoPostRepository,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.publication_collision_repository import (  # noqa: E501
+    MongoPublicationCollisionRepository,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.publication_payload_loader import (  # noqa: E501
     MongoPublicationPayloadLoader,
 )
@@ -67,6 +74,8 @@ __all__ = (
     "POST_SEMANTIC_WINDOW_INDEX_NAME",
     "POST_SOURCE_IDENTITY_INDEX_NAME",
     "InvalidPostDocumentError",
+    "MongoAdvertisementRepository",
+    "MongoAdvertisementSlotRepository",
     "MongoApprovalPostLoader",
     "MongoApprovalRepository",
     "MongoConnectionError",
@@ -75,6 +84,7 @@ __all__ = (
     "MongoOperationalApprovalRepository",
     "MongoPersistenceError",
     "MongoPostRepository",
+    "MongoPublicationCollisionRepository",
     "MongoPublicationPayloadLoader",
     "MongoPublicationRepository",
     "MongoRuntimeHeartbeatRepository",

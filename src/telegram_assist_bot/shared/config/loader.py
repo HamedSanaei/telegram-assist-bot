@@ -715,11 +715,22 @@ _ALLOWED_CAMPAIGN_KEYS: Final[set[str]] = {
     "minimum_gap_seconds",
     "error_policy",
     "max_retries",
+    "source_cache_policy",
+    "source_unavailable_policy",
+    "snapshot_retention_days",
+    "refresh_interval_seconds",
 }
 
 _ALLOWED_ADVERTISEMENT_KEYS: Final[set[str]] = {
+    "source_fetch",
     "routes",
     "campaigns",
+}
+
+_ALLOWED_ADVERTISEMENT_SOURCE_FETCH_KEYS: Final[set[str]] = {
+    "timeout_seconds",
+    "max_attempts",
+    "initial_backoff_seconds",
 }
 
 _VALID_WEEKDAYS: Final[set[str]] = {
@@ -771,6 +782,57 @@ def _raw_advertisement_issues(
         for key in advertisements
         if key not in _ALLOWED_ADVERTISEMENT_KEYS
     )
+
+    campaigns_raw = advertisements.get("campaigns", ())
+    has_enabled_campaign = isinstance(campaigns_raw, list) and any(
+        isinstance(item, dict) and item.get("enabled") is True for item in campaigns_raw
+    )
+    source_fetch = advertisements.get("source_fetch", _MISSING)
+    if has_enabled_campaign and not isinstance(source_fetch, dict):
+        issues.append(
+            ConfigurationIssue(
+                path=("advertisements", "source_fetch"),
+                code="missing_source_fetch_policy",
+                message="enabled campaigns require explicit source_fetch configuration",
+            )
+        )
+    elif source_fetch is not _MISSING and source_fetch is not None:
+        if not isinstance(source_fetch, dict):
+            issues.append(
+                ConfigurationIssue(
+                    path=("advertisements", "source_fetch"),
+                    code="invalid_type",
+                    message="source_fetch must be an object",
+                )
+            )
+        else:
+            issues.extend(
+                ConfigurationIssue(
+                    path=("advertisements", "source_fetch", key),
+                    code="unknown_field",
+                    message=f"extra field '{key}' is not permitted",
+                )
+                for key in source_fetch
+                if key not in _ALLOWED_ADVERTISEMENT_SOURCE_FETCH_KEYS
+            )
+            fetch_ranges = {
+                "timeout_seconds": (1, 120),
+                "max_attempts": (1, 10),
+                "initial_backoff_seconds": (0, 300),
+            }
+            for key, (minimum, maximum) in fetch_ranges.items():
+                value = source_fetch.get(key, _MISSING)
+                if type(value) is not int or not minimum <= value <= maximum:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=("advertisements", "source_fetch", key),
+                            code=f"invalid_{key}",
+                            message=(
+                                f"{key} must be an integer between "
+                                f"{minimum} and {maximum}"
+                            ),
+                        )
+                    )
 
     if "routes" in advertisements and advertisements["routes"] is not _MISSING:
         routes_val = advertisements["routes"]
@@ -1235,6 +1297,102 @@ def _raw_advertisement_issues(
                             path=(*path_prefix, "max_retries"),
                             code="invalid_max_retries",
                             message="max_retries must be an integer between 0 and 10",
+                        )
+                    )
+
+                cache_pol_val = campaign.get("source_cache_policy", _MISSING)
+                valid_cache_pols = {"latest", "cached", "periodic_refresh"}
+                invalid_cache_policy = (
+                    not isinstance(cache_pol_val, str)
+                    or cache_pol_val not in valid_cache_pols
+                )
+                if (is_campaign_enabled and invalid_cache_policy) or (
+                    cache_pol_val is not _MISSING
+                    and cache_pol_val is not None
+                    and invalid_cache_policy
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "source_cache_policy"),
+                            code="invalid_source_cache_policy",
+                            message=(
+                                "source_cache_policy must be 'latest', 'cached', or"
+                                " 'periodic_refresh'"
+                            ),
+                        )
+                    )
+
+                unavail_pol_val = campaign.get("source_unavailable_policy", _MISSING)
+                valid_unavail_pols = {"use_last_valid_snapshot", "fail_closed"}
+                invalid_unavailable_policy = (
+                    not isinstance(unavail_pol_val, str)
+                    or unavail_pol_val not in valid_unavail_pols
+                )
+                if (is_campaign_enabled and invalid_unavailable_policy) or (
+                    unavail_pol_val is not _MISSING
+                    and unavail_pol_val is not None
+                    and invalid_unavailable_policy
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "source_unavailable_policy"),
+                            code="invalid_source_unavailable_policy",
+                            message=(
+                                "source_unavailable_policy must be"
+                                " 'use_last_valid_snapshot' or 'fail_closed'"
+                            ),
+                        )
+                    )
+
+                retention_val = campaign.get("snapshot_retention_days", _MISSING)
+                invalid_retention = type(retention_val) is not int or not (
+                    1 <= retention_val <= 365
+                )
+                if (is_campaign_enabled and invalid_retention) or (
+                    retention_val is not _MISSING
+                    and retention_val is not None
+                    and invalid_retention
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "snapshot_retention_days"),
+                            code="invalid_snapshot_retention_days",
+                            message=(
+                                "snapshot_retention_days must be an integer"
+                                " between 1 and 365"
+                            ),
+                        )
+                    )
+
+                interval_val = campaign.get("refresh_interval_seconds", _MISSING)
+                if cache_pol_val == "periodic_refresh":
+                    if type(interval_val) is not int or not (
+                        60 <= interval_val <= 86400
+                    ):
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(*path_prefix, "refresh_interval_seconds"),
+                                code="invalid_refresh_interval_seconds",
+                                message=(
+                                    "refresh_interval_seconds must be an integer"
+                                    " between 60 and 86400 when source_cache_policy is"
+                                    " periodic_refresh"
+                                ),
+                            )
+                        )
+                elif (
+                    cache_pol_val in ("latest", "cached")
+                    and interval_val is not _MISSING
+                    and interval_val is not None
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "refresh_interval_seconds"),
+                            code="invalid_refresh_interval_seconds",
+                            message=(
+                                "refresh_interval_seconds must be omitted or None"
+                                " when source_cache_policy is not periodic_refresh"
+                            ),
                         )
                     )
 

@@ -56,7 +56,7 @@ minversion = "8.3"
 addopts = [
     "--strict-config",
     "--strict-markers",
-    "--basetemp=.pytest-tmp",
+    "--basetemp=.pytest-tmp-current",
     "-ra",
     "-m",
     "not live",

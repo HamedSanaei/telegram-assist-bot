@@ -7,6 +7,8 @@ from telegram_assist_bot.domain.advertisements.campaign import (
     AdvertisementErrorPolicy,
     AdvertisementPublicationMode,
     SourceAdvertisementPost,
+    SourceCachePolicy,
+    SourceUnavailablePolicy,
     Weekday,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "AdvertisementErrorPolicy",
     "AdvertisementPublicationMode",
     "SourceAdvertisementPost",
+    "SourceCachePolicy",
+    "SourceUnavailablePolicy",
     "Weekday",
 ]

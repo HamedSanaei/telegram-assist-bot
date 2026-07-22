@@ -44,6 +44,10 @@ def _make_valid_campaign_dict() -> dict[str, object]:
         "minimum_gap_seconds": 300,
         "error_policy": "retry_then_fail",
         "max_retries": 3,
+        "source_cache_policy": "periodic_refresh",
+        "source_unavailable_policy": "use_last_valid_snapshot",
+        "snapshot_retention_days": 30,
+        "refresh_interval_seconds": 900,
     }
 
 

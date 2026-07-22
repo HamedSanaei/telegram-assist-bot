@@ -2,7 +2,10 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
+
+نتیجهٔ نهایی: سیاست مصوب اولویت تبلیغ، فاصلهٔ دوطرفه، جابه‌جایی صف عادی و
+tie-break تبلیغ‌ها با CAS محدود و MongoDB واقعی پیاده‌سازی و اثبات شد.
 
 ## هدف
 
@@ -101,3 +104,10 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decision Collision ثبت، policyهای مصوب با تست اتمیک/رقابتی و Restart اثبات، min-gap و bounded defer رعایت، همه Quality Gateها موفق و هیچ policy ضمنی یا تماس Telegram افزوده نشده باشد.
+
+## نتیجهٔ راستی‌آزمایی نهایی
+
+- تست متمرکز T052: ۸ آزمون موفق؛ تست رقابت MongoDB پنج بار پیاپی نیز موفق بود.
+- رگرسیون Advertisement/Scheduling/Cancellation: ۷۶ آزمون موفق.
+- مجموعهٔ کامل non-live: ۱۳۲۲ آزمون موفق.
+- Lock، Ruff، format، MyPy، یکپارچگی متن و `git diff --check`: موفق.

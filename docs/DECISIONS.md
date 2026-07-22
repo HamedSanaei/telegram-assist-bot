@@ -501,3 +501,58 @@
 - **Status:** Accepted
 - **Decision:** شناسهٔ `campaign_id` هویت پایدار ماشین به‌صورت slug کاراکترهای ASCII (`^[a-zA-Z0-9_-]+$`) با حداکثر طول ۶۴ است. `name` نام نمایشی UTF-8 انسان‌خوانا با حفظ حروف فارسی، ZWNJ و Emoji است. آدرس منبع `source_post_url` فقط به فرم کانونی عمومی HTTPS به‌صورت `https://t.me/<username>/<message_id>` پذیرفته می‌شود و `source_channel_username` باید با segment نام کاربری URL یکسان باشد. مرجع مقصدهای campaign باید در کل مقاصد پیکربندی‌شده موجود باشد و در صورتی که campaign فعال است، مقاصد مربوطه نیز باید فعال باشند. تمام فیلدهای عددی و زمان/روز/تاریخ به‌صورت صریح بدون coercion بولین اعتبارسنجی می‌شوند. عدم حضور کلید `campaigns` یا لیست خالی به‌معنای غیرفعال بودن تبلیغات زمان‌بندی‌شده است.
 - **Consequences:** پیکربندی در زمان startup به‌صورت snapshot غیرقابل‌تغییر (Immutable) بارگذاری می‌شود و fail-fast تجمعی پیش از هرگونه اتصال خارجی رخ می‌دهد. هیچ سند MongoDB، Job، Worker یا تماس شبکه/تلگرام در فاز پیکربندی ساخته نمی‌شود. خطاهای اعتبارسنجی آدرس‌های نامعتبر را کامل فاش نمی‌کنند.
+
+## ADR-035 — سیاست دریافت، نسخه‌بندی و نگهداری منبع تبلیغ
+
+- **Status:** Accepted
+- **Decision:** هر Campaign فعال باید policy دریافت را صریحاً از میان `latest`، `cached` یا
+  `periodic_refresh` انتخاب کند. حالت periodic بازهٔ صریح ۶۰ تا ۸۶۴۰۰ ثانیه می‌خواهد. سیاست عدم
+  دسترسی فقط `use_last_valid_snapshot` یا `fail_closed` است و retention تاریخچه باید صریحاً بین ۱ تا
+  ۳۶۵ روز باشد. تنظیم سراسری fetch نیز timeout، حداکثر تلاش و backoff اولیهٔ صریح دارد؛ مقادیر نمونهٔ
+  ۲۰، ۳ و ۲ default کد نیستند. محتوای یکسان نسخهٔ تازه نمی‌سازد؛ edit واقعی snapshot immutable جدید
+  با hash قطعی SHA-256 canonical UTF-8 می‌سازد. حذف منبع با reason پایدار `source_deleted` ثبت می‌شود
+  و snapshot سالم قبلی را از بین نمی‌برد. تغییر URL یا username پس از restart هویت منبع تازه می‌سازد.
+- **Consequences:** snapshot جاری صرفاً به‌علت سن حذف نمی‌شود و TTL تنها تاریخچه را مطابق retention
+  پاک می‌کند. `cached` پس از cache اولیه تماس تازه ندارد، `latest` در هر resolve refresh می‌کند و
+  `periodic_refresh` فقط در سررسید refresh می‌کند. پیکربندی ناقص Campaign فعال پیش از تماس Telegram
+  fail-fast است؛ Campaign غیرفعال با پیکربندی legacy همچنان بارگذاری می‌شود.
+
+## ADR-036 — مرز زمانی، DST و reconciliation برای Slot تبلیغ
+
+- **Status:** Accepted
+- **Decision:** برای هر ترکیب Campaign، مقصد و زمان محلی configured در بازهٔ تاریخ inclusive دقیقاً یک
+  Slot پایدار ساخته می‌شود. instant در UTC ذخیره و timezone و مقدار محلی نیز حفظ می‌شوند. زمان محلی
+  ناموجود DST با audit امن `nonexistent_local_time` رد می‌شود؛ زمان ambiguous فقط occurrence نخست
+  (`fold=0`) را می‌سازد. expansion کل بازهٔ finite Campaign را پوشش می‌دهد و اجرای دوباره/restart با
+  هویت SHA-256 و unique index idempotent است. تغییر Config پس از restart فقط Slotهای آیندهٔ اجرا‌نشده را
+  reconcile می‌کند.
+- **Consequences:** Slotهای `completed` هرگز حذف، عقب‌برده یا بازتفسیر نمی‌شوند. زمان‌های گذشتهٔ بازه
+  هویت اصلی خود را حفظ می‌کنند و اجرای آینده می‌تواند آن‌ها را طبق صف durable claim کند. این تصمیم هیچ
+  publication یا collision resolution را در T050 فعال نمی‌کند.
+
+## ADR-037 — انتشار یکتا و نتیجهٔ مبهم تبلیغ
+
+- **Status:** Accepted
+- **Decision:** انتشار تبلیغ از Telegram User API و Publication یکتای action=`scheduled` با هویت
+  Slot و مقصد استفاده می‌کند. `max_retries` Campaign تعداد Retryهای پس از تلاش نخست است؛ فقط خطای
+  موقت قطعی طبق backoff محدود زیرساخت Publication تکرار می‌شود. اگر درخواست ممکن است به Telegram
+  رسیده باشد، نتیجه `outcome_unknown` و terminal است و ارسال کور تکرار نمی‌شود. Audit شامل due time،
+  زمان واقعی، مقصد، message IDs، تعداد تلاش، execution delay و طبقه‌بندی امن شکست است.
+- **Consequences:** رقابت Worker، تحویل تکراری و Restart حداکثر یک اثر Publication برای Slot/مقصد
+  دارند. شکست مبهم نیازمند بررسی عملیاتی است و success جعلی تولید نمی‌کند. Worker T051 فقط seam
+  ایزوله است؛ Runtime و سیاست Collision صف عادی را فعال یا تغییر نمی‌دهد.
+
+## ADR-038 — اولویت تبلیغ و فاصله با صف عادی
+
+- **Status:** Accepted
+- **Decision:** Advertisement Slot بر محتوای عادی اولویت دارد و زمان اصلی تبلیغ برنده تغییر نمی‌کند.
+  محتوای عادی با فاصلهٔ کمتر از `minimum_gap_seconds` به نخستین زمان آزاد پس از تبلیغ منتقل می‌شود و
+  ترتیب و فاصلهٔ نسبی صف عادی حفظ می‌گردد. بین دو تبلیغ، priority عددی بیشتر و سپس
+  `campaign_id` واژگانی برنده است؛ بازنده به نخستین زمان معتبر آزاد می‌رود. مرز برابر gap معتبر است.
+  سند executing یا published جابه‌جا نمی‌شود. زمان مؤثر از هویت/زمان اصلی Slot جدا و تمام تغییرها با
+  CAS و audit نسخهٔ policy انجام می‌شوند. هیچ سقف زمانی مصنوعی یا missed-window discard افزوده نمی‌شود؛
+  «نخستین زمان معتبر» نتیجهٔ قطعی مجموعهٔ finite موجود است.
+- **Consequences:** T051 فقط Slot حل‌شده را بر اساس `effective_due_at` claim می‌کند. overlap با اجرای
+  غیرقابل‌جابه‌جایی به‌صورت metadata امن و صریح ثبت می‌شود و وضعیت آن سند دست‌نخورده می‌ماند. Resolver
+  تماس Telegram، تغییر Content یا Runtime wiring ندارد و تعارض CAS فقط با تعداد تلاش صریح و bounded
+  تکرار می‌شود.

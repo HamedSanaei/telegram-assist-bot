@@ -569,6 +569,53 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `tests/unit/application/test_delayed_ai_scoring.py` و `test_apply_ai_score.py` | delay، boundary، idempotency، failure policy و stale execution |
 | `tests/integration/workflows/test_delayed_ai_scoring.py` | MongoDB واقعی، due claim، restart، score persistence و legacy Post |
 
+## دریافت و Cache منبع تبلیغ (T049)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_source.py` | هویت پایدار منبع، snapshot نسخه‌دار، مرجع Media ذخیره‌شده و hash محتوای canonical UTF-8 |
+| `application/advertisements/fetch_advertisement_source.py` | اجرای policyهای `latest`، `cached` و `periodic_refresh` با timeout/retry صریح و fallback مصوب |
+| `application/ports/advertisement_repository.py` | قرارداد snapshot جاری، CAS نسخه، ثبت شکست امن و indexهای retention |
+| `application/ports/advertisement_source_gateway.py` | DTO و خطاهای مستقل از SDK برای دریافت Post/Album از Telegram User API |
+| `infrastructure/telegram/user/advertisement_source_gateway.py` | resolve امن URL عمومی Telegram و نگاشت فوری Telethon به DTO داخلی |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | snapshot جاری یکتا، تاریخچهٔ immutable، CAS رقابتی و TTL فقط برای نسخه‌های تاریخی |
+| `tests/unit/application/advertisements/` و `tests/integration/advertisements/` | policy، URL، Entity/Media/Album، retry، restart و رقابت روی MongoDB واقعی |
+
+## Slotهای پایدار تبلیغات (T050)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_slot.py` | هویت قطعی campaign+destination+UTC، state پایه و audit امن DST |
+| `application/advertisements/expand_advertisement_slots.py` | expansion بازهٔ inclusive، تبدیل ZoneInfo، انتخاب fold اول و reconciliation |
+| `application/ports/advertisement_repository.py` | قرارداد مستقل repository برای upsert و reconciliation Slot |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | collection اختصاصی Slot، unique/due index و حفظ اجرای Completed |
+| `tests/unit/application/advertisements/test_expand_advertisement_slots.py` | تاریخ/زمان/مقصد چندگانه، DST و عدم فعالیت Campaign غیرفعال |
+| `tests/integration/mongodb/test_advertisement_slots.py` | رقابت، restart، index یکتا و reconciliation Config روی MongoDB واقعی |
+
+## انتشار یکتای تبلیغات (T051)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_slot.py` | lifecycle اجرای Slot، مالک/Lease، Retry، نتیجهٔ terminal و Audit انتشار |
+| `application/advertisements/publish_advertisement_slot.py` | claim یک Slot due، ساخت payload وفادار از Snapshot و استفاده از Publication یکتای T029 |
+| `application/ports/advertisement_repository.py` | عملیات CAS برای claim، complete، defer و fail Slot |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | claim اتمیک قدیمی‌ترین Slot، بازیابی Lease و persistence امن نتیجه/تأخیر |
+| `workers/advertisement_publication_worker.py` | seam polling ایزوله و ثبت‌نشده در Runtime برای اجرای use case |
+| `tests/unit/application/advertisements/test_publish_advertisement_slot.py` | fidelity متن/Entity/Album، Retry، ambiguity، guard و CAS |
+| `tests/integration/advertisements/test_idempotent_advertisement_publication.py` | رقابت Worker، Restart/Lease، idempotency و Audit روی MongoDB واقعی |
+
+## حل تداخل صف تبلیغ (T052)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/publication_collision.py` | projection و planner خالص اولویت، tie-break، فاصلهٔ دوطرفه و حفظ ترتیب |
+| `domain/advertisement_slot.py` | `effective_due_at`، state حل تداخل و audit امن بدون تغییر هویت Slot |
+| `application/advertisements/resolve_publication_collision.py` | orchestration مقصد و Retry محدود تعارض CAS |
+| `application/ports/publication_collision.py` | snapshot حداقلی و apply-plan مستقل از MongoDB |
+| `infrastructure/persistence/mongodb/publication_collision_repository.py` | CAS اسناد Slot/normal، همگام‌سازی queue و recovery idempotent |
+| `tests/unit/application/advertisements/test_resolve_publication_collision.py` | مرز gap، اولویت/lexical، ترتیب عادی و conflict تایپ‌شده |
+| `tests/integration/advertisements/test_advertisement_queue_collision.py` | رقابت، Restart، claim boundary و immutability روی MongoDB واقعی |
+
 ## پذیرش End-to-end فاز اول (T047)
 
 | مسیر | مسئولیت |

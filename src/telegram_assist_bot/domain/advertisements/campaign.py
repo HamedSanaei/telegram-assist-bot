@@ -39,6 +39,21 @@ class AdvertisementErrorPolicy(StrEnum):
     RETRY_THEN_FAIL = "retry_then_fail"
 
 
+class SourceCachePolicy(StrEnum):
+    """Approved per-campaign source post cache policies."""
+
+    LATEST = "latest"
+    CACHED = "cached"
+    PERIODIC_REFRESH = "periodic_refresh"
+
+
+class SourceUnavailablePolicy(StrEnum):
+    """Approved per-campaign fallback behavior when source fetch fails."""
+
+    USE_LAST_VALID_SNAPSHOT = "use_last_valid_snapshot"
+    FAIL_CLOSED = "fail_closed"
+
+
 @dataclass(frozen=True, slots=True)
 class SourceAdvertisementPost:
     """Immutable representation of a validated public Telegram source post."""
@@ -58,9 +73,7 @@ class SourceAdvertisementPost:
             )
         url_username = match.group(1)
         url_msg_id = int(match.group(2))
-        if (
-            self.channel_username.strip().lower() != url_username.lower()
-        ):
+        if self.channel_username.strip().lower() != url_username.lower():
             raise ValueError("source_channel_username does not match source_post_url")
         if self.message_id != url_msg_id:
             raise ValueError("message_id does not match source_post_url")
@@ -85,13 +98,14 @@ class AdvertisementCampaign:
     minimum_gap_seconds: int
     error_policy: AdvertisementErrorPolicy
     max_retries: int
+    source_cache_policy: SourceCachePolicy | None
+    source_unavailable_policy: SourceUnavailablePolicy | None
+    snapshot_retention_days: int | None
+    refresh_interval_seconds: int | None = None
 
     def __post_init__(self) -> None:
         """Enforce strict invariant rules for advertisement campaigns."""
-        if (
-            not _CAMPAIGN_ID_REGEX.match(self.campaign_id)
-            or len(self.campaign_id) > 64
-        ):
+        if not _CAMPAIGN_ID_REGEX.match(self.campaign_id) or len(self.campaign_id) > 64:
             raise ValueError(
                 "campaign_id must be a valid non-empty ASCII slug "
                 "(letters, digits, _, -)"
@@ -136,3 +150,44 @@ class AdvertisementCampaign:
             raise ValueError("error_policy must be an AdvertisementErrorPolicy enum")
         if type(self.max_retries) is not int or not (0 <= self.max_retries <= 10):
             raise ValueError("max_retries must be an integer between 0 and 10")
+        if self.enabled and not isinstance(self.source_cache_policy, SourceCachePolicy):
+            raise ValueError("enabled campaigns require source_cache_policy")
+        if self.enabled and not isinstance(
+            self.source_unavailable_policy, SourceUnavailablePolicy
+        ):
+            raise ValueError("enabled campaigns require source_unavailable_policy")
+        if self.enabled and (
+            type(self.snapshot_retention_days) is not int
+            or not (1 <= self.snapshot_retention_days <= 365)
+        ):
+            raise ValueError(
+                "enabled campaigns require snapshot_retention_days between 1 and 365"
+            )
+        if self.source_cache_policy is not None and not isinstance(
+            self.source_cache_policy, SourceCachePolicy
+        ):
+            raise ValueError("source_cache_policy must be a SourceCachePolicy enum")
+        if self.source_unavailable_policy is not None and not isinstance(
+            self.source_unavailable_policy, SourceUnavailablePolicy
+        ):
+            raise ValueError(
+                "source_unavailable_policy must be a SourceUnavailablePolicy enum"
+            )
+        if self.snapshot_retention_days is not None and (
+            type(self.snapshot_retention_days) is not int
+            or not (1 <= self.snapshot_retention_days <= 365)
+        ):
+            raise ValueError("snapshot_retention_days must be between 1 and 365")
+        if self.source_cache_policy == SourceCachePolicy.PERIODIC_REFRESH:
+            if type(self.refresh_interval_seconds) is not int or not (
+                60 <= self.refresh_interval_seconds <= 86400
+            ):
+                raise ValueError(
+                    "refresh_interval_seconds must be an integer between 60 and 86400 "
+                    "when source_cache_policy is periodic_refresh"
+                )
+        elif self.refresh_interval_seconds is not None:
+            raise ValueError(
+                "refresh_interval_seconds must be None when source_cache_policy "
+                "is not periodic_refresh"
+            )

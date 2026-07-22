@@ -105,10 +105,10 @@
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
 | [T048](tasks/T048-advertisement-configuration.md) | مدل و Validation تنظیم تبلیغات | T002، T047 | `6`، `6.2` | Completed |
-| [T049](tasks/T049-fetch-cache-advertisement-post.md) | دریافت/Cache پست تبلیغ از URL | T008، T013، T015، T048 | `6.1` | Planned |
-| [T050](tasks/T050-advertisement-slot-scheduling.md) | ساخت Slotهای چندزمانه و پایدار | T031، T048، T049 | `6.2`، `6.3` | Planned |
-| [T051](tasks/T051-idempotent-advertisement-publication.md) | انتشار یکتا، Retry و Audit تبلیغ | T029، T050 | `6.3`، `6.5` | Planned |
-| [T052](tasks/T052-advertisement-queue-collision.md) | سیاست تداخل تبلیغ و صف عادی | T033، T051 | `6.4` | Planned |
+| [T049](tasks/T049-fetch-cache-advertisement-post.md) | دریافت/Cache پست تبلیغ از URL | T008، T013، T015، T048 | `6.1` | Completed |
+| [T050](tasks/T050-advertisement-slot-scheduling.md) | ساخت Slotهای چندزمانه و پایدار | T031، T048، T049 | `6.2`، `6.3` | Completed |
+| [T051](tasks/T051-idempotent-advertisement-publication.md) | انتشار یکتا، Retry و Audit تبلیغ | T029، T050 | `6.3`، `6.5` | Completed |
+| [T052](tasks/T052-advertisement-queue-collision.md) | سیاست تداخل تبلیغ و صف عادی | T033، T051 | `6.4` | Completed |
 | [T053](tasks/T053-advertisement-admin-reports.md) | گزارش امروز، آینده و خطاها | T020، T051 | `6.5` | Planned |
 | [T054](tasks/T054-phase-two-end-to-end.md) | پذیرش End-to-end فاز دوم | T052، T053 | `17` | Planned |
 

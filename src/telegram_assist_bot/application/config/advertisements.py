@@ -7,11 +7,16 @@ from datetime import date, time
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from telegram_assist_bot.domain.advertisement_source import (
+    AdvertisementSourceFetchPolicy,
+)
 from telegram_assist_bot.domain.advertisements import (
     AdvertisementCampaign,
     AdvertisementErrorPolicy,
     AdvertisementPublicationMode,
     SourceAdvertisementPost,
+    SourceCachePolicy,
+    SourceUnavailablePolicy,
     Weekday,
 )
 
@@ -51,6 +56,18 @@ def map_advertisement_campaign(
     mode = AdvertisementPublicationMode(campaign_config.publication_mode)
     policy = AdvertisementErrorPolicy(campaign_config.error_policy)
 
+    cache_policy = (
+        SourceCachePolicy(campaign_config.source_cache_policy)
+        if campaign_config.source_cache_policy is not None
+        else None
+    )
+    unavailable_policy = (
+        SourceUnavailablePolicy(campaign_config.source_unavailable_policy)
+        if campaign_config.source_unavailable_policy is not None
+        else None
+    )
+    interval_sec = campaign_config.refresh_interval_seconds
+
     return AdvertisementCampaign(
         campaign_id=campaign_config.campaign_id,
         name=campaign_config.name,
@@ -67,6 +84,10 @@ def map_advertisement_campaign(
         minimum_gap_seconds=campaign_config.minimum_gap_seconds,
         error_policy=policy,
         max_retries=campaign_config.max_retries,
+        source_cache_policy=cache_policy,
+        source_unavailable_policy=unavailable_policy,
+        snapshot_retention_days=campaign_config.snapshot_retention_days,
+        refresh_interval_seconds=interval_sec,
     )
 
 
@@ -77,4 +98,22 @@ def map_advertisement_campaigns(
     return tuple(
         map_advertisement_campaign(campaign_config)
         for campaign_config in config.campaigns
+    )
+
+
+def map_advertisement_source_fetch_policy(
+    config: AdvertisementConfig,
+) -> AdvertisementSourceFetchPolicy | None:
+    """Map the explicit global source-fetch policy, preserving disabled absence."""
+    source_fetch = config.source_fetch
+    if source_fetch is None:
+        if any(campaign.enabled for campaign in config.campaigns):
+            raise ValueError(
+                "enabled campaigns require explicit source_fetch configuration"
+            )
+        return None
+    return AdvertisementSourceFetchPolicy(
+        timeout_seconds=source_fetch.timeout_seconds,
+        max_attempts=source_fetch.max_attempts,
+        initial_backoff_seconds=source_fetch.initial_backoff_seconds,
     )

@@ -20,6 +20,19 @@ from telegram_assist_bot.application.ports.admin import (
     InlineButton,
     InlineKeyboard,
 )
+from telegram_assist_bot.application.ports.advertisement_repository import (
+    AdvertisementRepository,
+    AdvertisementSlotRepository,
+)
+from telegram_assist_bot.application.ports.advertisement_source_gateway import (
+    AdvertisementSourceError,
+    AdvertisementSourceGroupDTO,
+    AdvertisementSourceMessageDTO,
+    AdvertisementSourceNotFoundError,
+    AdvertisementSourcePermissionError,
+    AdvertisementSourceTransientError,
+    TelegramAdvertisementSourceGateway,
+)
 from telegram_assist_bot.application.ports.ai_audit_repository import (
     AIAuditEvent,
     AIAuditEventType,
@@ -119,6 +132,11 @@ from telegram_assist_bot.application.ports.publication import (
     PublisherError,
     TelegramPublisherGateway,
 )
+from telegram_assist_bot.application.ports.publication_collision import (
+    CollisionApplyOutcome,
+    PublicationCollisionRepository,
+    PublicationCollisionSnapshot,
+)
 from telegram_assist_bot.application.ports.scheduling import (
     ScheduleRepository,
     ScheduleReservation,
@@ -174,6 +192,14 @@ __all__ = (
     "AdminMessagingGateway",
     "AdvertisementPostRepository",
     "AdvertisementPostUpdateRequest",
+    "AdvertisementRepository",
+    "AdvertisementSlotRepository",
+    "AdvertisementSourceError",
+    "AdvertisementSourceGroupDTO",
+    "AdvertisementSourceMessageDTO",
+    "AdvertisementSourceNotFoundError",
+    "AdvertisementSourcePermissionError",
+    "AdvertisementSourceTransientError",
     "AlbumFinalizationStatus",
     "ApprovalAdministratorDeliveryState",
     "ApprovalContent",
@@ -198,6 +224,7 @@ __all__ = (
     "CategorizationPostRepository",
     "CategorizationPostUpdateRequest",
     "Clock",
+    "CollisionApplyOutcome",
     "ContentPreparationRepository",
     "DestinationArtifact",
     "DestinationPublicationState",
@@ -244,6 +271,8 @@ __all__ = (
     "ProviderStateRepositoryError",
     "PublicationClaimOutcome",
     "PublicationClaimResult",
+    "PublicationCollisionRepository",
+    "PublicationCollisionSnapshot",
     "PublicationMedia",
     "PublicationPayload",
     "PublicationPayloadLoader",
@@ -259,6 +288,7 @@ __all__ = (
     "SemanticDuplicatePostRepository",
     "SemanticDuplicatePostUpdateRequest",
     "TelegramAccount",
+    "TelegramAdvertisementSourceGateway",
     "TelegramAuthenticationGateway",
     "TelegramChannelNotFoundError",
     "TelegramChannelPermissionError",

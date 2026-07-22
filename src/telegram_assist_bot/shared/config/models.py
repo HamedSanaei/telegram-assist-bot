@@ -680,8 +680,29 @@ class AdvertisementCampaignConfig(_FrozenConfigModel):
         description="Execution error policy (retry_then_fail)."
     )
     max_retries: int = Field(description="Max retries from 0 to 10.")
+    source_cache_policy: NonBlankString | None = Field(
+        default=None,
+        description="Source cache policy (latest, cached, periodic_refresh).",
+    )
+    source_unavailable_policy: NonBlankString | None = Field(
+        default=None,
+        description="Source unavailable policy (use_last_valid_snapshot, fail_closed).",
+    )
+    snapshot_retention_days: int | None = Field(
+        default=None, description="Snapshot retention in days (1 to 365)."
+    )
+    refresh_interval_seconds: int | None = Field(
+        default=None, description="Refresh interval in seconds (60 to 86400)."
+    )
 
-    @field_validator("priority", "minimum_gap_seconds", "max_retries", mode="before")
+    @field_validator(
+        "priority",
+        "minimum_gap_seconds",
+        "max_retries",
+        "snapshot_retention_days",
+        "refresh_interval_seconds",
+        mode="before",
+    )
     @classmethod
     def validate_strict_int(cls, v: object) -> object:
         """Reject boolean values passed to integer fields."""
@@ -803,12 +824,100 @@ class AdvertisementCampaignConfig(_FrozenConfigModel):
     def validate_retries_val(cls, v: int) -> int:
         """Validate max retries is 0 to 10."""
         if not (0 <= v <= 10):
-            raise ValueError("max_retries must be an integer between 0 and 10")
+            raise ValueError("max_retries must be between 0 and 10")
         return v
+
+    @field_validator("source_cache_policy")
+    @classmethod
+    def validate_cache_policy(cls, v: str | None) -> str | None:
+        """Validate source_cache_policy choices."""
+        if v is not None and v not in ("latest", "cached", "periodic_refresh"):
+            raise ValueError(
+                "source_cache_policy must be 'latest', 'cached', or 'periodic_refresh'"
+            )
+        return v
+
+    @field_validator("source_unavailable_policy")
+    @classmethod
+    def validate_unavailable_policy(cls, v: str | None) -> str | None:
+        """Validate source_unavailable_policy choices."""
+        if v is not None and v not in ("use_last_valid_snapshot", "fail_closed"):
+            raise ValueError(
+                "source_unavailable_policy must be 'use_last_valid_snapshot' "
+                "or 'fail_closed'"
+            )
+        return v
+
+    @field_validator("snapshot_retention_days")
+    @classmethod
+    def validate_retention_days(cls, v: int | None) -> int | None:
+        """Validate snapshot_retention_days range 1 to 365."""
+        if v is not None and not (1 <= v <= 365):
+            raise ValueError("snapshot_retention_days must be between 1 and 365")
+        return v
+
+    @field_validator("refresh_interval_seconds")
+    @classmethod
+    def validate_refresh_interval(cls, v: int | None) -> int | None:
+        """Validate refresh_interval_seconds range 60 to 86400."""
+        if v is not None and not (60 <= v <= 86400):
+            raise ValueError("refresh_interval_seconds must be between 60 and 86400")
+        return v
+
+
+class AdvertisementSourceFetchConfig(_FrozenConfigModel):
+    """Bound source-fetch timeout and retry behavior without hidden defaults."""
+
+    timeout_seconds: int = Field(
+        description="Per-attempt timeout from 1 to 120 seconds."
+    )
+    max_attempts: int = Field(description="Total source-fetch attempts from 1 to 10.")
+    initial_backoff_seconds: int = Field(
+        description="Initial retry backoff from 0 to 300 seconds."
+    )
+
+    @field_validator(
+        "timeout_seconds", "max_attempts", "initial_backoff_seconds", mode="before"
+    )
+    @classmethod
+    def validate_strict_integer(cls, value: object) -> object:
+        """Reject booleans where an explicit integer is required."""
+        if type(value) is bool:
+            raise ValueError("Boolean values are not accepted as integers")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout(cls, value: int) -> int:
+        """Keep each Telegram source attempt bounded."""
+        if not 1 <= value <= 120:
+            raise ValueError("timeout_seconds must be between 1 and 120")
+        return value
+
+    @field_validator("max_attempts")
+    @classmethod
+    def validate_attempts(cls, value: int) -> int:
+        """Keep source fetch retries bounded."""
+        if not 1 <= value <= 10:
+            raise ValueError("max_attempts must be between 1 and 10")
+        return value
+
+    @field_validator("initial_backoff_seconds")
+    @classmethod
+    def validate_backoff(cls, value: int) -> int:
+        """Validate the explicit initial retry delay."""
+        if not 0 <= value <= 300:
+            raise ValueError("initial_backoff_seconds must be between 0 and 300")
+        return value
 
 
 class AdvertisementConfig(_FrozenConfigModel):
     """Hold advertisement routing and scheduled campaign configurations."""
+
+    source_fetch: AdvertisementSourceFetchConfig | None = Field(
+        default=None,
+        description="Explicit source-fetch execution policy for enabled campaigns.",
+    )
 
     routes: tuple[AdvertisementRouteConfig, ...] = Field(
         default=(), description="Configured advertisement routes."
@@ -980,6 +1089,7 @@ __all__ = [
     "AdvertisementCampaignConfig",
     "AdvertisementConfig",
     "AdvertisementRouteConfig",
+    "AdvertisementSourceFetchConfig",
     "AiAuditConfig",
     "AiCachePolicyConfig",
     "AiConfig",

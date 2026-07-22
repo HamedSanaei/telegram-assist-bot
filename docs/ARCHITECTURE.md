@@ -785,6 +785,63 @@ JSON از `ensure_ascii=False` و JSON سخت‌گیرانه استفاده می
 
 ## 16. مرز اولیه و توسعه آینده
 
+### دریافت نسخه‌دار منبع تبلیغ (T049)
+
+`FetchAdvertisementSource` فقط برای Campaign فعال اجرا می‌شود و از portهای
+`TelegramAdvertisementSourceGateway`، `MediaSource`، `MediaStorage` و
+`AdvertisementRepository` استفاده می‌کند. Adapter تلگرام URL عمومی canonical را بدون redirect
+resolve می‌کند و Post یا تمام اعضای Album را فوراً به DTO مستقل از Telethon تبدیل می‌کند. Media با
+ترتیب اصلی به storage محتواآدرس انتقال می‌یابد و Domain تنها `storage_path` و metadata امن را می‌بیند.
+
+Snapshot جاری با fingerprint هویت منبع و hash قطعی SHA-256 از JSON canonical UTF-8 شناخته می‌شود.
+تغییر زمان edit بدون تغییر محتوا نسخهٔ تازه نمی‌سازد. در تغییر واقعی، CAS فقط یک snapshot جاری جدید
+می‌سازد و نسخهٔ قبلی را به تاریخچهٔ immutable با TTL retention منتقل می‌کند؛ snapshot جاری به‌علت سن
+منقضی نمی‌شود. شکست refresh یا حذف منبع نسخهٔ سالم قبلی را حذف نمی‌کند و نتیجه طبق policy صریح
+`use_last_valid_snapshot` یا `fail_closed` بازگردانده می‌شود. Timeout، تعداد تلاش و backoff از
+پیکربندی typed می‌آیند و هیچ مقدار runtime پنهانی ندارند. این flow Slot یا Publication ایجاد نمی‌کند.
+
+### گسترش Slot تبلیغ (T050)
+
+`ExpandAdvertisementSlots` بازهٔ finite و inclusive تاریخ Campaign را برای هر weekday، زمان محلی و
+مقصد معتبر گسترش می‌دهد. هویت Slot از `campaign_id + destination_id + UTC due_at` با SHA-256 ساخته
+می‌شود. `due_at` در UTC و مقدار محلی همراه نام IANA timezone ذخیره می‌شوند؛ بنابراین تغییر بعدی timezone
+اجرای قبلی را بازتفسیر نمی‌کند. زمان محلی ناموجود DST به Slot تبدیل نمی‌شود و audit با reason ثابت
+`nonexistent_local_time` می‌سازد. زمان ambiguous فقط با `fold=0` و occurrence نخست ساخته می‌شود.
+
+Slotها در collection اختصاصی با unique identity index و index `(status, due_at, destination_id)` ذخیره
+می‌شوند. اجرای دوباره و expanderهای رقیب سند تکراری نمی‌سازند. reconciliation فقط Slotهای آیندهٔ
+اجرانشده را لغو یا با Config تازه همگام می‌کند؛ سند `completed` حذف، جابه‌جا یا به عقب بازگردانده نمی‌شود.
+T050 هیچ claim، worker انتشار یا تماس Telegram ندارد.
+
+### حل تداخل تبلیغ و صف عادی (T052)
+
+`ResolvePublicationCollision` فقط projection زمان‌بندی یک مقصد را می‌خواند و هیچ Content یا Telegram
+gateway ندارد. هویت و `due_at` اصلی Slot تغییر نمی‌کنند؛ زمان اجرای حاصل سیاست در
+`effective_due_at` ذخیره می‌شود. تبلیغ‌ها ابتدا با priority عددی نزولی و سپس `campaign_id` واژگانی
+قرار می‌گیرند. برنده در زمان اصلی می‌ماند و بازنده به نخستین instant آزاد با رعایت بیشینهٔ gap دو
+Slot منتقل می‌شود. سپس Jobهای عادی متداخل به بعد از تبلیغ منتقل می‌شوند و فاصله و ترتیب نسبی صف
+عادی حفظ می‌گردد. مرز دقیق gap مجاز و فقط فاصلهٔ کمتر از آن conflict است.
+
+Adapter MongoDB هر move را با destination، status و version به‌صورت CAS اجرا و تاریخچهٔ امن ثبت
+می‌کند؛ projection embedded صف عادی نیز با اسناد canonical همگام می‌شود. Retry تعارض CAS در use case
+صریح و محدود است. اجرای مجدد plan یکسان audit تکراری نمی‌سازد. Jobهای claimed/running/completed
+هرگز جابه‌جا نمی‌شوند و overlap اجتناب‌ناپذیر آن‌ها به‌صورت `immutable_collision_ids` ثبت می‌شود.
+T051 فقط Slot با `collision_state=resolved` و `effective_due_at <= now` را claim می‌کند.
+
+### انتشار یکتای Slot تبلیغ (T051)
+
+`PublishAdvertisementSlot` قدیمی‌ترین Slot سررسیدشده را با owner، lease و version اتمیک claim می‌کند،
+Snapshot نسخهٔ pin‌شده را می‌خواند و payload متن/Caption، Entity و Album را بدون بازنویسی به مرز
+`TelegramPublisherGateway` می‌دهد. انتشار از قرارداد T029 و هویت `scheduled` مبتنی بر Slot و مقصد
+استفاده می‌کند؛ بنابراین Worker رقیب، تحویل تکراری یا Restart اثر Telegram دوم نمی‌سازد.
+
+خطای موقت قطعی فقط تا `max_retries + 1` تلاش کل با backoff محدود قرارداد Publication تکرار می‌شود.
+نتیجهٔ مبهم terminal با state `outcome_unknown` است و کورکورانه دوباره ارسال نمی‌شود. Slot موفق
+`published_at`، message IDs، تعداد تلاش و اختلاف واقعی `published_at - due_at` را ثبت می‌کند؛ شکست
+تنها category/type/reason code امن را نگه می‌دارد. claim با Lease منقضی پس از Restart بازیابی می‌شود
+و complete/fail/defer همگی CAS مالک و version هستند. Worker ارائه‌شده seam ایزوله است و در Runtime
+ثبت نشده؛ حل Collision عمداً به T052 واگذار شده است.
+
 | موضوع | نسخه اولیه | آینده |
 |---|---|---|
 | استقرار | یک Package و چند Entry Point/Worker قابل اجرای مشترک | تفکیک Process/Service فقط با نیاز مقیاس |
@@ -808,8 +865,6 @@ JSON از `ensure_ascii=False` و JSON سخت‌گیرانه استفاده می
 7. آستانه «بسیار نزدیک» خارج از Semantic Duplicate T043 هنوز مقدار قطعی ندارد؛ آستانه و policy معنایی در ADR-031 حل شده‌اند.
 8. Storage اولیه محیط Production (دیسک پایدار یا Object Storage)، سقف حجم Media و ظرفیت ۱۴روزه معلوم نیست.
 9. رفتار با Edit/Delete پیام منبع و پیام‌های Forwardشده تعریف نشده است.
-10. سیاست Collision تبلیغ و پست عادی گزینه‌ها را نام می‌برد ولی Default قطعی ندارد.
-11. رفتار Cache تبلیغ پس از Edit منبع قابل تنظیم است، اما Default و بازه Refresh تعیین نشده‌اند.
 12. سطح دسترسی/Roleهای Admin، Commandهای گزارش و عملیات Reject صریح تعریف نشده‌اند.
 13. فازهای سوم تا پنجم پیشنهادی‌اند و معیار پذیرش، UX، داده و اولویت قطعی ندارند؛ T055 تا T057 ابتدا آن‌ها را قابل برنامه‌ریزی می‌کنند.
 
