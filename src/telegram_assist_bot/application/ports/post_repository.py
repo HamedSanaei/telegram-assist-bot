@@ -6,17 +6,25 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
+from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import (
     Post,
     PostId,
     PostStatus,
     SourceMessageIdentity,
 )
+from telegram_assist_bot.domain.scoring import ScoringState
 
 if TYPE_CHECKING:
     from datetime import datetime
 
 __all__ = (
+    "AdvertisementPostRepository",
+    "AdvertisementPostUpdateRequest",
+    "CategorizationPostRepository",
+    "CategorizationPostUpdateRequest",
     "InsertPostOutcome",
     "InsertPostResult",
     "InvalidPostRepositoryRequestError",
@@ -30,6 +38,10 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "ScoringPostRepository",
+    "ScoringPostUpdateRequest",
+    "SemanticDuplicatePostRepository",
+    "SemanticDuplicatePostUpdateRequest",
 )
 
 
@@ -192,6 +204,48 @@ class PostTransitionRequest:
             raise InvalidPostRepositoryRequestError
 
 
+@dataclass(frozen=True, slots=True)
+class AdvertisementPostUpdateRequest:
+    """Carry one validated advertisement-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: AdvertisementProcessingState
+
+    def __post_init__(self) -> None:
+        """Require exactly one additive processing-state step."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.advertisement_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not AdvertisementProcessingState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticDuplicatePostUpdateRequest:
+    """Carry one validated semantic-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: SemanticDuplicateState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive semantic transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.semantic_duplicate_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not SemanticDuplicateState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
 @runtime_checkable
 class PostRepository(Protocol):
     """Persist posts without exposing storage-specific objects or exceptions."""
@@ -228,4 +282,109 @@ class PostRepository(Protocol):
 
     async def claim_for_next_stage(self, request: PostClaimRequest) -> PostClaimResult:
         """Atomically create one durable next-stage marker for a stored post."""
+        ...
+
+
+@runtime_checkable
+class AdvertisementPostRepository(Protocol):
+    """Expose only the Post reads and CAS needed by advertisement detection."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return a non-expired canonical Post."""
+        ...
+
+    async def update_advertisement(
+        self,
+        request: AdvertisementPostUpdateRequest,
+    ) -> Post:
+        """Atomically persist one advertisement result/failure state transition."""
+        ...
+
+
+@runtime_checkable
+class SemanticDuplicatePostRepository(Protocol):
+    """Expose only canonical reads and semantic CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def update_semantic_duplicate(
+        self, request: SemanticDuplicatePostUpdateRequest
+    ) -> Post:
+        """Atomically persist one semantic result/failure transition."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class CategorizationPostUpdateRequest:
+    """Carry one validated categorization-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: CategorizationState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive categorization transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.categorization_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not CategorizationState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@runtime_checkable
+class CategorizationPostRepository(Protocol):
+    """Expose only canonical reads and categorization CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def update_categorization(
+        self, request: CategorizationPostUpdateRequest
+    ) -> Post:
+        """Atomically persist one categorization result/failure transition."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ScoringPostUpdateRequest:
+    """Carry one validated scoring-processing CAS update."""
+
+    post: Post
+    expected_processing_version: int
+    expected_processing_state: ScoringState
+
+    def __post_init__(self) -> None:
+        """Require one coherent additive scoring transition."""
+        if (
+            type(self.post) is not Post
+            or type(self.expected_processing_version) is not int
+            or self.expected_processing_version < 0
+            or self.post.scoring_processing_version
+            != self.expected_processing_version + 1
+            or type(self.expected_processing_state) is not ScoringState
+        ):
+            raise InvalidPostRepositoryRequestError
+
+
+@runtime_checkable
+class ScoringPostRepository(Protocol):
+    """Expose only canonical reads and scoring CAS writes."""
+
+    async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+        """Return one non-expired canonical Post."""
+        ...
+
+    async def get_for_scoring_completion(self, post_id: PostId) -> Post | None:
+        """Return an existing Post even when expired, only for stale resolution."""
+        ...
+
+    async def update_scoring(self, request: ScoringPostUpdateRequest) -> Post:
+        """Atomically persist one scoring state transition."""
         ...

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
-"""
-NPVT Link Extractor
+"""NPVT Link Extractor
 
 - Reads decrypted Pantegnos .txt output directly.
 - Can also accept an .npvt file when pantegnos-win.exe is placed next to this script.
@@ -59,8 +57,7 @@ def find_pantegnos(script_dir: Path) -> Path | None:
 
 
 def decrypt_npvt(npvt_path: Path, pantegnos_path: Path) -> Path:
-    """
-    Pantegnos commonly expects input/output directories rather than one file.
+    """Pantegnos commonly expects input/output directories rather than one file.
     Copy the requested file into a temporary input folder and locate the
     generated text file afterward.
     """
@@ -131,8 +128,7 @@ def decrypt_npvt(npvt_path: Path, pantegnos_path: Path) -> Path:
 
 
 def iter_json_values(text: str):
-    """
-    Pantegnos output may contain multiple JSON values concatenated together,
+    """Pantegnos output may contain multiple JSON values concatenated together,
     repeated arrays, leading counters such as '1', and non-JSON console text.
     Scan the complete text and yield every valid JSON value.
     """
@@ -174,13 +170,9 @@ def collect_profiles(value: Any) -> list[dict[str, Any]]:
     # lockConfig objects for proxy profiles merely because they contain a
     # "password" field.
     has_server = any(
-        str(value.get(key, "")).strip()
-        for key in ("server", "address", "hostName")
+        str(value.get(key, "")).strip() for key in ("server", "address", "hostName")
     )
-    has_port = any(
-        str(value.get(key, "")).strip()
-        for key in ("serverPort", "port")
-    )
+    has_port = any(str(value.get(key, "")).strip() for key in ("serverPort", "port"))
     has_credential = any(
         str(value.get(key, "")).strip()
         for key in ("uuid", "id", "userId", "password", "passwd")
@@ -271,11 +263,7 @@ def detect_protocol(profile: dict[str, Any]) -> str:
         return "ss"
 
     if profile.get("uuid"):
-        if (
-            str(raw.get("alterId", "")).strip()
-            or "alterId" in raw
-            or "aid" in raw
-        ):
+        if str(raw.get("alterId", "")).strip() or "alterId" in raw or "aid" in raw:
             return "vmess"
         return "vless"
 
@@ -350,8 +338,7 @@ def build_vless(profile: dict[str, Any]) -> str:
 
     query = urlencode(params, quote_via=quote, safe="")
     return (
-        f"vless://{quote(uuid, safe='')}@{server}:{port}"
-        f"?{query}#{quote(name, safe='')}"
+        f"vless://{quote(uuid, safe='')}@{server}:{port}?{query}#{quote(name, safe='')}"
     )
 
 
@@ -392,9 +379,11 @@ def build_ss(profile: dict[str, Any]) -> str:
     port = str(profile["port"])
     name = str(profile["name"])
 
-    userinfo = base64.urlsafe_b64encode(
-        f"{method}:{password}".encode("utf-8")
-    ).decode("ascii").rstrip("=")
+    userinfo = (
+        base64.urlsafe_b64encode(f"{method}:{password}".encode())
+        .decode("ascii")
+        .rstrip("=")
+    )
 
     return f"ss://{userinfo}@{server}:{port}#{quote(name, safe='')}"
 
@@ -472,9 +461,7 @@ def process_text(text: str) -> tuple[list[dict[str, Any]], list[str], list[str]]
         try:
             links.append(convert_profile(profile))
         except Exception as exc:
-            errors.append(
-                f"{index}. {profile.get('name', 'Unknown')}: {exc}"
-            )
+            errors.append(f"{index}. {profile.get('name', 'Unknown')}: {exc}")
 
     return normalized, links, errors
 

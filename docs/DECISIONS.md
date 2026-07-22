@@ -374,3 +374,201 @@
   بدون migration، execution یا cancellation خودکار inert می‌مانند. تغییر scheduled
   به immediate تا حذف بومی موفق صبر می‌کند؛ Bot API هرگز Session کاربر را باز
   نمی‌کند.
+
+## ADR-027 — آداپتور اول ارائه‌دهنده هوش مصنوعی (z-ai)
+
+- **Status:** Accepted
+- **Context:** پیاده‌سازی اولین مدل هوش مصنوعی (z-ai) برای تشخیص تبلیغات، تشابه معنایی، دسته‌بندی و امتیازدهی پست‌های تلگرام به صورت ناهمگام (Async) بدون ایجاد وابستگی در لایه Application.
+- **Decision:**
+  - نام ارائه‌دهنده: `z-ai`
+  - مدل مورد استفاده: `glm-4.7-flash`
+  - آدرس رسمی پایگاه: `https://api.z.ai/api/paas/v4/chat/completions`
+  - روش احراز هویت: HTTP Bearer Token
+  - متغیر محیطی Secret: `TAB_ZAI_API_KEY`
+  - بدون قابلیت Streaming
+  - تسک‌های پشتیبانی شده: `advertisement_detection` ،`semantic_duplicate` ،`categorization` ،`scoring`
+  - سیاست Timeout: پیش‌فرض ۳۰ ثانیه
+  - سیاست اندازه پاسخ (Response Size Protection): محدودیت حداکثر پاسخ به ۱ مگابایت (1,048,576 بایت)
+  - فرمت درخواست/پاسخ: مطابق استاندارد Chat Completions REST API ارسالی با فیلد `model` و ساختار `messages` و خروجی فیلد `choices[0].message.content`
+  - مدیریت استثناءها: دسته‌بندی و نگاشت دقیق تمام حالت‌های شکست به خطاهای بومی (transient, timeout, rate_limit, permanent, authorization) بدون اعمال هرگونه تلاش مجدد (Retry) یا Fallback داخلی در آداپتور.
+- **Reason:** ارائه‌دهنده سریع با مدل glm-4.7-flash برای تسک‌های فاز اول با سرعت و پاسخ‌دهی بالا بدون نیاز به منابع پردازشی سنگین.
+- **Consequences:** آداپتور مستقل از بقیه اجزاء و به صورت مجزا تعریف می‌شود و هیچ تغییری در موتور اصلی سیستم یا کلاس‌های اصلی به غیر از تعاریف پیکربندی ایجاد نمی‌کند. کلیدهای احراز هویت و پاسخ‌های خام به هیچ‌وجه در لاگ‌ها، خطاها و خروجی‌ها نشت نخواهند کرد.
+
+## ADR-028 — آداپتور دوم ارائه‌دهنده هوش مصنوعی (deepseek)
+
+- **Status:** Accepted
+- **Context:** پیاده‌سازی دومین ارائه‌دهنده هوش مصنوعی (deepseek) برای هم‌زیستی با ارائه‌دهنده اول و ارائه مدل‌های جایگزین برای تسک‌های تشخیص تبلیغات، تشابه معنایی، دسته‌بندی و امتیازدهی به صورت کاملاً مستقل و ایزوله.
+- **Decision:**
+  - نام ارائه‌دهنده: `deepseek`
+  - مدل‌های مورد استفاده: `deepseek-v4-flash` (مدل پیش‌فرض) و `deepseek-v4-pro` (مدل جایگزین)
+  - آدرس رسمی پایگاه: `https://api.deepseek.com`
+  - قرارداد رسمی API: درخواست `POST /chat/completions` مطابق مستند رسمی Chat Completions؛ redirect و هر میزبان production دیگر رد می‌شود.
+  - روش احراز هویت: HTTP Bearer Token
+  - متغیر محیطی Secret: `TAB_DEEPSEEK_API_KEY`
+  - بدون قابلیت Streaming
+  - غیرفعال‌سازی صریح حالت تفکر (Thinking mode) با ارسال فیلد `"thinking": {"type": "disabled"}` در ریشه درخواست
+  - فرمت خروجی صریح با ارسال `"response_format": {"type": "json_object"}`
+  - تسک‌های پشتیبانی شده برای هر دو مدل: `advertisement_detection` ،`semantic_duplicate` ،`categorization` ،`scoring`
+  - سیاست Timeout: پیش‌فرض ۳۰ ثانیه
+  - سیاست Quota: مقدار ثابت محلی حدس زده نمی‌شود؛ پاسخ `429` و مقدار عددی امن `Retry-After` فقط طبقه‌بندی و به policy آینده T039 تحویل می‌شود و Adapter هیچ Retry انجام نمی‌دهد.
+  - سیاست اندازه پاسخ (Response Size Protection): محدودیت حداکثر پاسخ به ۱ مگابایت (1,048,576 بایت)
+  - Fixture قرارداد: پاسخ‌های sanitized محلی برای هر دو Model و حالت‌های success/error؛ تماس live بخشی از Suite یا شرط Done نیست.
+  - مدیریت استثناءها: دسته‌بندی و نگاشت دقیق تمام حالت‌های شکست به خطاهای بومی (transient, timeout, rate_limit, permanent, authorization) بدون اعمال هرگونه تلاش مجدد (Retry) یا Fallback داخلی در آداپتور.
+- **Reason:** ارائه دهنده قدرتمند و اقتصادی DeepSeek با مدل‌های flash و pro برای ارائه جایگزین با کارایی بالا در پایپ‌لاین تحلیل هوشمند.
+- **Consequences:** آداپتور به صورت مستقل تحت ماژول جدا پیاده‌سازی می‌شود، کلاینت و ساختار درخواست‌های آن تفکیک شده است و هیچ وابستگی متقابلی بین آداپتور z-ai و deepseek وجود ندارد. اطلاعات حساس و احراز هویت به صورت کامل در خروجی‌ها و استثناها فیلتر و ردکت می‌شوند.
+
+## ADR-029 — عدم نگهداری Prompt و پاسخ خام در Cache و Audit AI
+
+- **Status:** Accepted
+- **Decision:** T041 فقط `AIResult` استاندارد و metadata امن را در Cache، Audit و
+  Metrics ذخیره می‌کند. نگهداری Prompt، ورودی یا پاسخ خام غیرفعال است و Configuration
+  فعلی فقط مقدار `false` را می‌پذیرد. فعال‌سازی آینده به ADR، قرارداد Sanitization و
+  Retention مستقل نیاز دارد.
+- **Consequences:** Cache و Audit برای کاهش مصرف سهمیه و مشاهده‌پذیری قابل استفاده‌اند،
+  اما برای بازسازی payload خام Provider طراحی نشده‌اند. hash ورودی مجوز ذخیره متن
+  اصلی نیست و failureهای persistence نیز فقط با reason code امن گزارش می‌شوند.
+
+## ADR-030 — سیاست صریح شکست تشخیص تبلیغ و handoff بررسی دستی
+
+- **Status:** Accepted
+- **Decision:** تشخیص تبلیغ فقط چهار policy صریح `continue_processing`،
+  `stop_processing`، `retry_later` و `manual_review` را می‌پذیرد و هیچ default ضمنی
+  ندارد. وقتی قابلیت با flag سراسری و per-source مؤثر است، policy معتبر باید در
+  Configuration وجود داشته باشد؛ در حالت غیرفعال configuration قدیمی بدون آن معتبر
+  می‌ماند. `continue_processing` شکست را نگه می‌دارد و مرحلهٔ بعد را مجاز می‌کند؛
+  `stop_processing` پردازش خودکار را متوقف می‌کند؛ `retry_later` فقط زمان‌بندی موجود
+  AIJob را مصرف می‌کند؛ و `manual_review` حالت
+  `AdvertisementManualReviewRequired` با reason ثابت
+  `advertisement_check_failed` را برای handoff Application تأیید ثبت می‌کند.
+- **Consequences:** شکست همه Providerها هرگز به نتیجهٔ «غیرتبلیغاتی» یا AIResult
+  ساختگی تبدیل نمی‌شود. مسیر دستی در T042 فقط state/contract است و Telegram UX یا
+  Runtime wiring ندارد. تغییر این چهار policy یا افزودن threshold confidence به
+  تصمیم مستقل آینده نیاز دارد.
+
+## ADR-031 — آستانه، schema و policy تشخیص Duplicate معنایی
+
+- **Status:** Accepted
+- **Decision:** Semantic Duplicate فقط با threshold صریح typed فعال می‌شود؛ مقدار
+  اولیهٔ مصوب `0.88` است و مرز `similarity >= threshold` Duplicate محسوب می‌شود.
+  نبود threshold یا policy هنگام فعال‌بودن مؤثر feature خطای Configuration است و
+  مقدارهای example default پنهان نیستند. خروجی Semantic به prompt `2.0.0` و schema
+  `2` ارتقا یافته و `similarity` و `confidence` دو مقدار مستقل‌اند؛ ناسازگاری Boolean
+  و similarity نتیجهٔ Provider را نامعتبر می‌کند. policy نتیجه فقط یکی از `reject`،
+  `manual_review` یا `continue_processing` است. نامزد را Application از query قطعی
+  ۱۴روزه انتخاب می‌کند و Provider اجازهٔ انتخاب Post داخلی ندارد.
+- **Consequences:** exact duplicate T016 مقدم و دست‌نخورده است. reject پردازش بعدی
+  را متوقف می‌کند، manual review فقط handoff تایپ‌شدهٔ Application می‌سازد و
+  continue_processing نتیجهٔ Duplicate را حفظ ولی مرحلهٔ بعد را مجاز می‌کند. هیچ
+  Vector DB، embedding، Telegram UX، Worker یا Runtime wiring در T043 اضافه نشده است.
+
+## ADR-032 — ترتیب روش‌ها، هویت Category و تقدم override دستی
+
+- **Status:** Accepted
+- **Decision:** دسته‌بندی T044 فقط با ترتیب typed و صریح از روش‌های `ai`، `keyword`
+  و `source_default` اجرا می‌شود. روش `source_default` دقیقاً یک‌بار و آخر است؛ روش
+  تکراری رد می‌شود و هیچ ترتیب یا fallback پیش‌فرض پنهانی وجود ندارد. شکست AI یا
+  Category نامعتبر طبق policy صریح `fallback_baseline` فقط روش‌های بعد از AI را
+  اجرا می‌کند. هویت پایدار نتیجه `category_id` است؛ فقط ID فعال یا alias دقیق
+  پیکربندی پذیرفته می‌شود و display name هویت persistence نیست. prompt دسته‌بندی
+  نسخهٔ `2.0.0` و schema نسخهٔ `2` است. override دستی موجود یا هم‌زمان همیشه بر
+  نتیجهٔ AI مقدم می‌ماند.
+- **Consequences:** keyword پیش از AI هیچ AIJob، Cache، Guard یا Provider activity
+  ایجاد نمی‌کند. نتیجهٔ fallback با method واقعی T018 ذخیره می‌شود و AI نامیده
+  نمی‌شود. تغییر IDهای فعال یا aliasها fingerprint و در نتیجه cache identity را
+  تغییر می‌دهد. پیکربندی قدیمی در حالت غیرفعال معتبر است، اما فعال‌سازی AI بدون
+  ترتیب و fallback صریح خطای Configuration است. T044 تا task تثبیت pipeline به
+  Runtime یا Worker متصل نیست.
+
+## ADR-033 — تأخیر، schema، شکست و نبود gate در امتیازدهی AI
+
+- **Status:** Accepted
+- **Decision:** امتیازدهی فقط با `ai_scoring_enabled` فعال می‌شود. در حالت فعال،
+  `delay_seconds` صریح با حداقل `1200` و یکی از policyهای صریح `retry_later` یا
+  `mark_unavailable` الزامی است و هیچ default پنهانی وجود ندارد. `due_at` فقط از
+  `source_published_at + delay_seconds` در UTC محاسبه می‌شود. قرارداد scoring به prompt
+  `2.0.0` و schema `2` ارتقا یافته و score صحیح ۰ تا ۱۰۰، confidence، reason و
+  componentهای واقعاً برگشتی را می‌پذیرد؛ component غایب ساخته یا overall score از
+  آن‌ها محاسبه نمی‌شود.
+- **Consequences:** `retry_later` همان AIJob و سیاست retry صف را مصرف می‌کند و پس از
+  exhaustion به unavailable ختم می‌شود؛ `mark_unavailable` score یا AIResult ساختگی
+  نمی‌سازد. score هیچ gate تأیید، انتشار فوری، زمان‌بندی، لغو، اولویت یا انتخاب مقصد
+  ایجاد نمی‌کند. fan-out فقط پیام کنترل Approval را best-effort از state تازه بازسازی
+  می‌کند و keyboard، callback و DestinationSelection را حفظ می‌کند. wiring عملیاتی
+  Worker و startup به T046 واگذار شده است.
+
+## ADR-034 — مدل و اعتبارسنجی پیکربندی Campaignهای تبلیغاتی فاز دوم
+
+- **Status:** Accepted
+- **Decision:** شناسهٔ `campaign_id` هویت پایدار ماشین به‌صورت slug کاراکترهای ASCII (`^[a-zA-Z0-9_-]+$`) با حداکثر طول ۶۴ است. `name` نام نمایشی UTF-8 انسان‌خوانا با حفظ حروف فارسی، ZWNJ و Emoji است. آدرس منبع `source_post_url` فقط به فرم کانونی عمومی HTTPS به‌صورت `https://t.me/<username>/<message_id>` پذیرفته می‌شود و `source_channel_username` باید با segment نام کاربری URL یکسان باشد. مرجع مقصدهای campaign باید در کل مقاصد پیکربندی‌شده موجود باشد و در صورتی که campaign فعال است، مقاصد مربوطه نیز باید فعال باشند. تمام فیلدهای عددی و زمان/روز/تاریخ به‌صورت صریح بدون coercion بولین اعتبارسنجی می‌شوند. عدم حضور کلید `campaigns` یا لیست خالی به‌معنای غیرفعال بودن تبلیغات زمان‌بندی‌شده است.
+- **Consequences:** پیکربندی در زمان startup به‌صورت snapshot غیرقابل‌تغییر (Immutable) بارگذاری می‌شود و fail-fast تجمعی پیش از هرگونه اتصال خارجی رخ می‌دهد. هیچ سند MongoDB، Job، Worker یا تماس شبکه/تلگرام در فاز پیکربندی ساخته نمی‌شود. خطاهای اعتبارسنجی آدرس‌های نامعتبر را کامل فاش نمی‌کنند.
+
+## ADR-035 — سیاست دریافت، نسخه‌بندی و نگهداری منبع تبلیغ
+
+- **Status:** Accepted
+- **Decision:** هر Campaign فعال باید policy دریافت را صریحاً از میان `latest`، `cached` یا
+  `periodic_refresh` انتخاب کند. حالت periodic بازهٔ صریح ۶۰ تا ۸۶۴۰۰ ثانیه می‌خواهد. سیاست عدم
+  دسترسی فقط `use_last_valid_snapshot` یا `fail_closed` است و retention تاریخچه باید صریحاً بین ۱ تا
+  ۳۶۵ روز باشد. تنظیم سراسری fetch نیز timeout، حداکثر تلاش و backoff اولیهٔ صریح دارد؛ مقادیر نمونهٔ
+  ۲۰، ۳ و ۲ default کد نیستند. محتوای یکسان نسخهٔ تازه نمی‌سازد؛ edit واقعی snapshot immutable جدید
+  با hash قطعی SHA-256 canonical UTF-8 می‌سازد. حذف منبع با reason پایدار `source_deleted` ثبت می‌شود
+  و snapshot سالم قبلی را از بین نمی‌برد. تغییر URL یا username پس از restart هویت منبع تازه می‌سازد.
+- **Consequences:** snapshot جاری صرفاً به‌علت سن حذف نمی‌شود و TTL تنها تاریخچه را مطابق retention
+  پاک می‌کند. `cached` پس از cache اولیه تماس تازه ندارد، `latest` در هر resolve refresh می‌کند و
+  `periodic_refresh` فقط در سررسید refresh می‌کند. پیکربندی ناقص Campaign فعال پیش از تماس Telegram
+  fail-fast است؛ Campaign غیرفعال با پیکربندی legacy همچنان بارگذاری می‌شود.
+
+## ADR-036 — مرز زمانی، DST و reconciliation برای Slot تبلیغ
+
+- **Status:** Accepted
+- **Decision:** برای هر ترکیب Campaign، مقصد و زمان محلی configured در بازهٔ تاریخ inclusive دقیقاً یک
+  Slot پایدار ساخته می‌شود. instant در UTC ذخیره و timezone و مقدار محلی نیز حفظ می‌شوند. زمان محلی
+  ناموجود DST با audit امن `nonexistent_local_time` رد می‌شود؛ زمان ambiguous فقط occurrence نخست
+  (`fold=0`) را می‌سازد. expansion کل بازهٔ finite Campaign را پوشش می‌دهد و اجرای دوباره/restart با
+  هویت SHA-256 و unique index idempotent است. تغییر Config پس از restart فقط Slotهای آیندهٔ اجرا‌نشده را
+  reconcile می‌کند.
+- **Consequences:** Slotهای `completed` هرگز حذف، عقب‌برده یا بازتفسیر نمی‌شوند. زمان‌های گذشتهٔ بازه
+  هویت اصلی خود را حفظ می‌کنند و اجرای آینده می‌تواند آن‌ها را طبق صف durable claim کند. این تصمیم هیچ
+  publication یا collision resolution را در T050 فعال نمی‌کند.
+
+## ADR-037 — انتشار یکتا و نتیجهٔ مبهم تبلیغ
+
+- **Status:** Accepted
+- **Decision:** انتشار تبلیغ از Telegram User API و Publication یکتای action=`scheduled` با هویت
+  Slot و مقصد استفاده می‌کند. `max_retries` Campaign تعداد Retryهای پس از تلاش نخست است؛ فقط خطای
+  موقت قطعی طبق backoff محدود زیرساخت Publication تکرار می‌شود. اگر درخواست ممکن است به Telegram
+  رسیده باشد، نتیجه `outcome_unknown` و terminal است و ارسال کور تکرار نمی‌شود. Audit شامل due time،
+  زمان واقعی، مقصد، message IDs، تعداد تلاش، execution delay و طبقه‌بندی امن شکست است.
+- **Consequences:** رقابت Worker، تحویل تکراری و Restart حداکثر یک اثر Publication برای Slot/مقصد
+  دارند. شکست مبهم نیازمند بررسی عملیاتی است و success جعلی تولید نمی‌کند. Worker T051 فقط seam
+  ایزوله است؛ Runtime و سیاست Collision صف عادی را فعال یا تغییر نمی‌دهد.
+
+## ADR-038 — اولویت تبلیغ و فاصله با صف عادی
+
+- **Status:** Accepted
+- **Decision:** Advertisement Slot بر محتوای عادی اولویت دارد و زمان اصلی تبلیغ برنده تغییر نمی‌کند.
+  محتوای عادی با فاصلهٔ کمتر از `minimum_gap_seconds` به نخستین زمان آزاد پس از تبلیغ منتقل می‌شود و
+  ترتیب و فاصلهٔ نسبی صف عادی حفظ می‌گردد. بین دو تبلیغ، priority عددی بیشتر و سپس
+  `campaign_id` واژگانی برنده است؛ بازنده به نخستین زمان معتبر آزاد می‌رود. مرز برابر gap معتبر است.
+  سند executing یا published جابه‌جا نمی‌شود. زمان مؤثر از هویت/زمان اصلی Slot جدا و تمام تغییرها با
+  CAS و audit نسخهٔ policy انجام می‌شوند. هیچ سقف زمانی مصنوعی یا missed-window discard افزوده نمی‌شود؛
+  «نخستین زمان معتبر» نتیجهٔ قطعی مجموعهٔ finite موجود است.
+- **Consequences:** T051 فقط Slot حل‌شده را بر اساس `effective_due_at` claim می‌کند. overlap با اجرای
+  غیرقابل‌جابه‌جایی به‌صورت metadata امن و صریح ثبت می‌شود و وضعیت آن سند دست‌نخورده می‌ماند. Resolver
+  تماس Telegram، تغییر Content یا Runtime wiring ندارد و تعارض CAS فقط با تعداد تلاش صریح و bounded
+  تکرار می‌شود.
+
+## ADR-039 — قرارداد محدود و مجاز گزارش تبلیغات
+
+- **Status:** Accepted
+- **Decision:** سه Command ثابت `/ads_today`، `/ads_upcoming` و `/ads_failures` فقط در
+  private Bot chat، برای مدیر فعال دارای `approval.view` و فقط روی مقصدهای مجاز او
+  داده برمی‌گردانند. Configuration گزارش اختیاری است؛ نبود آن یا `enabled=false`
+  Commandها را غیرفعال می‌کند و حالت فعال timezone، افق آینده ۱ تا ۳۱ روز، افق شکست
+  ۱ تا ۹۰ روز، سقف ۱ تا ۵۰ و policy یکتای `truncate` را صریح می‌خواهد. Today روز
+  تقویمی نیمه‌باز timezone گزارش، Upcoming بازهٔ نیمه‌باز و Failures بازهٔ inclusive
+  مصوب را به UTC Query می‌کند.
+- **Consequences:** Repository حداکثر `max_items + 1` Projection حداقلی می‌خواند؛
+  Pagination/Callback state وجود ندارد و Footer فارسی فقط در صورت overflow افزوده
+  می‌شود. گزارش‌ها read-only هستند، موفقیت دارای شکست قدیمی در failures دیده نمی‌شود،
+  جزئیات خام خطا/Secret/Admin ID/URL/Media path نمایش داده نمی‌شود و Config نمونه هیچ
+  default پنهان ایجاد نمی‌کند.

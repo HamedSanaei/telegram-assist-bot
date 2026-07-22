@@ -1610,3 +1610,20 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 1. نتیجه تمام انتشارهای تبلیغاتی ثبت شود.
 1. خطاها دارای Retry محدود باشند.
 1. مدیر بتواند گزارش تبلیغات اجراشده و آینده را مشاهده کند.
+
+### ماتریس پذیرش فاز دوم
+
+| شناسه | خلاصه | مالک پیاده‌سازی | فایل و تابع آزمون دقیق | وضعیت | محدودیت صادقانه |
+|---|---|---|---|---|---|
+| `17.1` | دریافت منبع از URL عمومی Telegram | T049، `FetchAdvertisementSource` و Gateway مستقل از SDK | `tests/integration/advertisements/test_advertisement_source_cache.py::test_initial_text_fetch_persists_to_mongodb` | PASS | Telegram با Fake محلی آزموده می‌شود؛ تماس زنده عمداً خارج از Suite است. |
+| `17.2` | حفظ متن، Media، Album، Entity و Premium/Custom Emoji | T049 و T051، Snapshot immutable و payload انتشار | `tests/integration/advertisements/test_phase_two_end_to_end.py::test_phase_two_configuration_to_authorized_report_end_to_end` | PASS | فایل‌های Media fixtureهای sanitized هستند و binary واقعی دانلود نمی‌شود. |
+| `17.3` | چند زمان روزانه برای Campaign | T050، `ExpandAdvertisementSlots` | `tests/unit/application/advertisements/test_expand_advertisement_slots.py::test_expands_inclusive_dates_times_and_destinations_idempotently` | PASS | تغییر Config با reconciliation انجام می‌شود و reload داغ Runtime خارج از فاز دوم است. |
+| `17.4` | انتخاب روزهای انتشار و رفتار DST | T050، تبدیل `ZoneInfo` و audit DST | `tests/unit/application/advertisements/test_expand_advertisement_slots.py::test_nonexistent_dst_time_is_skipped_with_sanitized_audit` | PASS | زمان ناموجود DST طبق policy ثبت و skip می‌شود؛ زمان مبهم fold نخست را دارد. |
+| `17.5` | چند مقصد مستقل و قطعی | T050، هویت Slot شامل مقصد | `tests/unit/application/advertisements/test_expand_advertisement_slots.py::test_expands_inclusive_dates_times_and_destinations_idempotently` | PASS | فقط مقصدهای resolve‌شده و مجاز وارد expansion می‌شوند. |
+| `17.6` | ذخیرهٔ durable Slotها در MongoDB | T050، `MongoAdvertisementSlotRepository` | `tests/integration/mongodb/test_advertisement_slots.py::test_concurrent_expansion_restart_and_indexes_are_idempotent` | PASS | MongoDB محلی واقعی با database یکتا استفاده می‌شود. |
+| `17.7` | حفظ Snapshot، Slot و Lease پس از Restart | T049–T051، repositoryهای durable و lease recovery | `tests/integration/advertisements/test_phase_two_restart.py::test_phase_two_restart_preserves_jobs_and_recovers_expired_lease` | PASS | Restart در مرز repository شبیه‌سازی شده و process manager خارج از آزمون است. |
+| `17.8` | اجرای حداکثر یک‌بارهٔ Slot تحت رقابت | T051، claim و Publication idempotency | `tests/integration/advertisements/test_phase_two_concurrency.py::test_phase_two_concurrent_reconcile_resolve_and_claim_are_single_winner` | PASS | تضمین اثر خارجی بر قرارداد idempotent Publication و Fake Gateway متکی است. |
+| `17.9` | حل تداخل با صف عادی طبق اولویت و minimum gap | T052، planner قطعی و CAS | `tests/integration/advertisements/test_advertisement_queue_collision.py::test_concurrent_resolution_restart_and_claim_boundary` | PASS | Job عادی claimed/running جابه‌جا نمی‌شود و conflict immutable ثبت می‌گردد. |
+| `17.10` | ثبت نتیجه و audit تمام تلاش‌های انتشار | T051، Publication و Slot audit | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_competing_workers_restart_and_audit` | PASS | دادهٔ خام خطا و payload حساس عمداً persist نمی‌شود. |
+| `17.11` | Retry محدود و نتیجهٔ مبهم بدون ارسال کور | T051، backoff محدود و terminal outcome | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_ambiguous_timeout_is_persisted_without_second_send` | PASS | Retry فقط برای شکست قطعی transient مجاز است. |
+| `17.12` | گزارش مجاز امروز، آینده و خطاها | T053، query محدود، renderer فارسی و Handler مجاز | `tests/integration/advertisements/test_advertisement_admin_reports.py::test_all_commands_ranges_order_filtering_and_zero_mutation` | PASS | فقط policy `truncate` پشتیبانی می‌شود؛ pagination عمداً وجود ندارد. |

@@ -1,5 +1,23 @@
 """Public exact-duplicate domain contracts."""
 
-from .models import DuplicateCheckResult
+from .models import (
+    SEMANTIC_DUPLICATE_MANUAL_REVIEW_REASON,
+    DuplicateCheckResult,
+    InvalidSemanticDuplicateTransitionError,
+    SemanticDuplicateFailure,
+    SemanticDuplicateFailurePolicy,
+    SemanticDuplicatePolicy,
+    SemanticDuplicateResult,
+    SemanticDuplicateState,
+)
 
-__all__ = ("DuplicateCheckResult",)
+__all__ = (
+    "SEMANTIC_DUPLICATE_MANUAL_REVIEW_REASON",
+    "DuplicateCheckResult",
+    "InvalidSemanticDuplicateTransitionError",
+    "SemanticDuplicateFailure",
+    "SemanticDuplicateFailurePolicy",
+    "SemanticDuplicatePolicy",
+    "SemanticDuplicateResult",
+    "SemanticDuplicateState",
+)

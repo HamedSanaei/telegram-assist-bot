@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -114,3 +114,13 @@ git diff --check
 - زمان‌بندی، restart، idempotency و fan-out با تست‌های الزامی اثبات شده‌اند.
 - Keyboard/selection و محتوای مقصد دست‌نخورده‌اند.
 - ابهام score gate بی‌صدا حل نشده و همه Quality Gateها و بازبینی Persian پاس شده‌اند.
+
+## نتایج راستی‌آزمایی نهایی
+
+- تست‌های متمرکز unit و integration: `11 passed`.
+- رگرسیون‌های AI، Config، Approval، Mapper/Repository و Cache/Audit/Metrics: پاس.
+- suite کامل `pytest -m "not live"`: `1229 passed`.
+- `uv lock --check`، Ruff، Ruff format، MyPy، هر دو اسکن text integrity و
+  `git diff --check`: پاس.
+- MongoDB محلی واقعی با database یکتای هر تست استفاده شد؛ هیچ live Provider یا
+  Telegram request و هیچ Runtime/Worker wiring اضافه نشد.

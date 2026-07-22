@@ -37,7 +37,6 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.application.prepare_post_pipeline import (
     DestinationSpec,
     PreparePostPipeline,
-    validate_unimplemented_ai_flags,
 )
 from telegram_assist_bot.application.publication import (
     PublishImmediately,
@@ -91,6 +90,7 @@ if TYPE_CHECKING:
     from pymongo import AsyncMongoClient
 
     from telegram_assist_bot.application.ports import TelegramNativeSchedulerGateway
+    from telegram_assist_bot.application.ports.ai_provider import AIProvider
     from telegram_assist_bot.domain import ScheduledPublication
     from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
         MongoDocument,
@@ -822,13 +822,7 @@ async def _create_runtime_ingestor(
     foundation: FoundationLifecycle,
     clock: Clock,
 ) -> RuntimeMessageIngestor:
-    """Wire existing Milestone 2 components over owned runtime resources."""
     settings = loaded.settings
-    validate_unimplemented_ai_flags(
-        advertisement_enabled=settings.features.advertisement_detection_enabled,
-        semantic_duplicate_enabled=False,
-        ai_categorization_enabled=settings.features.ai_scoring_enabled,
-    )
     owned_foundation = cast("FullFoundationLifecycle", foundation)
     media_gateway = cast("FullTextIngestionGateway", gateway)
     database = owned_foundation.mongodb_client[settings.mongodb.database_name]
@@ -1149,6 +1143,259 @@ async def _create_publication_worker(
         await native.execute_once()
         await native.reconcile_once()
 
+    features = getattr(settings, "features", None)
+    features_advertisement_detection_enabled = (
+        getattr(features, "advertisement_detection_enabled", False)
+        if features
+        else False
+    )
+    features_duplicate_detection_enabled = (
+        getattr(features, "duplicate_detection_enabled", False) if features else False
+    )
+    features_ai_scoring_enabled = (
+        getattr(features, "ai_scoring_enabled", False) if features else False
+    )
+    features_ai_categorization_enabled = (
+        getattr(features, "ai_categorization_enabled", False) if features else False
+    )
+
+    is_ai_enabled = (
+        features_ai_categorization_enabled
+        or features_ai_scoring_enabled
+        or features_advertisement_detection_enabled
+        or features_duplicate_detection_enabled
+    )
+
+    ai_session = None
+
+    if is_ai_enabled:
+        from telegram_assist_bot.application.ai.contracts import AITaskType
+        from telegram_assist_bot.shared.errors import ConfigurationError
+
+        clock = SystemClock()
+
+        enabled_tasks = set()
+        if features_advertisement_detection_enabled:
+            enabled_tasks.add(AITaskType.ADVERTISEMENT_DETECTION)
+        if features_duplicate_detection_enabled:
+            enabled_tasks.add(AITaskType.SEMANTIC_DUPLICATE)
+        if features_ai_scoring_enabled:
+            enabled_tasks.add(AITaskType.SCORING)
+        if features_ai_categorization_enabled:
+            enabled_tasks.add(AITaskType.CATEGORIZATION)
+
+        referenced_providers = set()
+        for route in settings.ai.routes:
+            if route.task in enabled_tasks:
+                for cand in route.candidates:
+                    referenced_providers.add(cand.provider_name)
+
+        provider_keys = {}
+        for p_cfg in settings.ai.providers:
+            if p_cfg.name in referenced_providers and p_cfg.enabled:
+                if not p_cfg.api_key:
+                    raise ConfigurationError(
+                        cause=ValueError(
+                            f"Provider {p_cfg.name} is in use but has no API key configured."  # noqa: E501
+                        )
+                    )
+                try:
+                    secret_str = loaded.secrets.get(p_cfg.api_key)
+                    api_key = secret_str.get_secret_value()
+                except KeyError as key_err:
+                    raise ConfigurationError(
+                        cause=ValueError(
+                            f"Missing API key secret for provider {p_cfg.name} "
+                            f"(env: {p_cfg.api_key.environment_variable})"
+                        )
+                    ) from key_err
+                if not api_key or not api_key.strip():
+                    raise ConfigurationError(
+                        cause=ValueError(f"API key for provider {p_cfg.name} is blank.")
+                    )
+                provider_keys[p_cfg.name] = api_key
+
+        from telegram_assist_bot.infrastructure.mongodb.ai_audit_repository import (
+            initialize_ai_audit_indexes,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.ai_cache_repository import (
+            initialize_ai_cache_indexes,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.ai_job_repository import (
+            initialize_ai_job_indexes,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.provider_metrics_repository import (  # noqa: E501
+            initialize_provider_metrics_indexes,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.provider_state_repository import (  # noqa: E501
+            initialize_provider_state_indexes,
+        )
+
+        jobs_col = database["ai_jobs"]
+        cache_col = database["ai_cache"]
+        audit_col = database["ai_audit"]
+        state_col = database["provider_states"]
+        metrics_col = database["provider_metrics"]
+
+        await initialize_ai_job_indexes(jobs_col)
+        await initialize_ai_cache_indexes(cache_col)
+        await initialize_ai_audit_indexes(audit_col)
+        await initialize_provider_state_indexes(state_col)
+        await initialize_provider_metrics_indexes(metrics_col)
+
+        import aiohttp
+
+        ai_session = aiohttp.ClientSession(trust_env=False)
+
+        from telegram_assist_bot.infrastructure.ai.deepseek import DeepSeekProvider
+        from telegram_assist_bot.infrastructure.ai.z_ai import ZAIProvider
+
+        providers_by_name: dict[str, AIProvider] = {}
+        for p_cfg in settings.ai.providers:
+            if p_cfg.name in provider_keys and p_cfg.enabled:
+                if p_cfg.name == "z-ai":
+                    providers_by_name["z-ai"] = ZAIProvider(
+                        api_key=provider_keys["z-ai"],
+                        base_url=str(p_cfg.base_url) if p_cfg.base_url else None,
+                        session=ai_session,
+                    )
+                elif p_cfg.name == "deepseek":
+                    providers_by_name["deepseek"] = DeepSeekProvider(
+                        api_key=provider_keys["deepseek"],
+                        base_url=str(p_cfg.base_url) if p_cfg.base_url else None,
+                        session=ai_session,
+                    )
+
+        from telegram_assist_bot.application.ai.prompt_registry import PromptRegistry
+        from telegram_assist_bot.application.ai.provider_guard import ProviderGuard
+        from telegram_assist_bot.application.ai.use_cases.execute_ai_with_fallback import (  # noqa: E501
+            ExecuteAIWithFallback,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.ai_audit_repository import (
+            MongoAIAuditRepository,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.ai_cache_repository import (
+            MongoAICacheRepository,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.ai_job_repository import (
+            MongoAIJobRepository,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.provider_metrics_repository import (  # noqa: E501
+            MongoProviderMetricsRepository,
+        )
+        from telegram_assist_bot.infrastructure.mongodb.provider_state_repository import (  # noqa: E501
+            MongoProviderStateRepository,
+        )
+
+        ai_jobs = MongoAIJobRepository(jobs_col)
+        cache_repo = MongoAICacheRepository(cache_col)
+        audit_repo = (
+            MongoAIAuditRepository(audit_col) if settings.ai.audit.enabled else None
+        )
+        metrics_repo = MongoProviderMetricsRepository(metrics_col)
+        provider_guard = ProviderGuard(MongoProviderStateRepository(state_col), clock)
+
+        import random
+
+        execute_ai_with_fallback = ExecuteAIWithFallback(
+            config=settings.ai,
+            providers_by_name=providers_by_name,
+            ai_job_repository=ai_jobs,
+            clock=clock,
+            sleeper=asyncio.sleep,
+            jitter_source=random.random,
+            provider_guard=provider_guard,
+            cache_repository=cache_repo,
+            audit_repository=audit_repo,
+            metrics_repository=metrics_repo,
+        )
+
+        prompt_registry = PromptRegistry()
+
+        from telegram_assist_bot.application.ai.task_handlers.advertisement_detection import (  # noqa: E501
+            AdvertisementDetectionHandler,
+        )
+        from telegram_assist_bot.application.ai.task_handlers.categorization import (
+            CategorizationHandler,
+        )
+        from telegram_assist_bot.application.ai.task_handlers.scoring import (
+            ScoringHandler,
+        )
+        from telegram_assist_bot.application.ai.task_handlers.semantic_duplicate import (  # noqa: E501
+            SemanticDuplicateHandler,
+        )
+        from telegram_assist_bot.application.use_cases.apply_ai_score import (
+            ApplyAIScore,
+        )
+        from telegram_assist_bot.infrastructure.persistence.mongodb import (
+            MongoPostRepository,
+        )
+        from telegram_assist_bot.infrastructure.persistence.mongodb.semantic_duplicate_candidates import (  # noqa: E501
+            MongoSemanticDuplicateCandidateRepository,
+        )
+
+        posts_col = database["posts"]
+        posts = cast("MongoPostRepository", owned_foundation.repository)
+        semantic_candidates = MongoSemanticDuplicateCandidateRepository(posts_col)
+
+        advertisement_handler = AdvertisementDetectionHandler(
+            posts=posts,
+            ai_jobs=ai_jobs,
+            clock=clock,
+            audit=audit_repo,
+        )
+        semantic_handler = SemanticDuplicateHandler(
+            posts=posts,
+            ai_jobs=ai_jobs,
+            candidates=semantic_candidates,
+            clock=clock,
+            audit=audit_repo,
+        )
+        categorization_handler = CategorizationHandler(
+            posts=posts,
+            ai_jobs=ai_jobs,
+            content_preparations=content_repository,
+            clock=clock,
+            config=settings,
+            audit=audit_repo,
+        )
+        apply_score = ApplyAIScore(
+            posts=posts,
+            jobs=ai_jobs,
+            clock=clock,
+            config=settings,
+            fanout=None,
+        )
+        scoring_handler = ScoringHandler(
+            posts=posts,
+            jobs=ai_jobs,
+            clock=clock,
+            apply_score=apply_score,
+        )
+
+        task_handlers = {
+            AITaskType.ADVERTISEMENT_DETECTION: advertisement_handler,
+            AITaskType.SEMANTIC_DUPLICATE: semantic_handler,
+            AITaskType.CATEGORIZATION: categorization_handler,
+            AITaskType.SCORING: scoring_handler,
+        }
+
+        from telegram_assist_bot.workers.ai_worker import AIWorker
+
+        ai_worker = AIWorker(
+            owner=f"ai-worker-{owner}",
+            ai_job_repository=ai_jobs,
+            post_repository=posts,
+            execute_ai_with_fallback=execute_ai_with_fallback,
+            prompt_registry=prompt_registry,
+            clock=clock,
+            config=settings,
+            task_handlers=task_handlers,
+            semantic_candidates=semantic_candidates,
+            poll_seconds=float(settings.ai.queue.worker_poll_seconds),
+            logger=owned_foundation.logger,
+        )
+
     publication_poll_seconds = min(1.0, float(publishing.worker_poll_seconds))
     native_poll_seconds = min(1.0, float(publishing.native_schedule_poll_seconds))
     publication_worker = ScheduledPublicationWorker(
@@ -1218,6 +1465,16 @@ async def _create_publication_worker(
             )
             heartbeat_task = asyncio.create_task(pulse(), name="runtime-heartbeat")
 
+            ai_worker_tasks = []
+            if is_ai_enabled:
+
+                async def run_ai() -> None:
+                    await ai_worker.run()
+
+                ai_worker_tasks.append(
+                    asyncio.create_task(run_ai(), name="runtime-ai-worker")
+                )
+
             async def await_readiness() -> None:
                 await asyncio.gather(heartbeat_ready.wait(), publication_ready.wait())
 
@@ -1235,7 +1492,7 @@ async def _create_publication_worker(
                     mark_ready(), name="runtime-readiness-marker"
                 )
                 done, _pending = await asyncio.wait(
-                    (publication_task, native_task, heartbeat_task),
+                    (publication_task, native_task, heartbeat_task, *ai_worker_tasks),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 completed = next(iter(done))
@@ -1254,12 +1511,15 @@ async def _create_publication_worker(
                     native_task,
                     heartbeat_task,
                 ]
+                tasks.extend(ai_worker_tasks)
                 if readiness_marker is not None:
                     tasks.append(readiness_marker)
                 for task in tasks:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                if ai_session is not None:
+                    await ai_session.close()
                 try:
                     await heartbeat.beat(
                         owner,

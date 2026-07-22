@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -109,3 +109,10 @@ Diff فارسی و خروجی‌های State/خطا باید دستی بازبی
 - Reservation و Circuit در چند Worker اتمیک‌اند و Timeout/Clock قطعی دارند.
 - هیچ Quota یا Provider واقعی بدون تصمیم مستند فرض نشده و Secret در State/Log نیست.
 - Scope به Cache/Metrics یا Featureهای AI گسترش نیافته است.
+
+## نتیجهٔ راستی‌آزمایی
+
+- focused unit/integration با MongoDB واقعی: `20 passed`.
+- suite کامل non-live روی Python 3.12: `1111 passed`.
+- Ruff، format check، Mypy، text integrity و `git diff --check` با موفقیت اجرا شدند.
+- Provider guard به Runtime، Worker، CLI، Telegram، approval، publication یا scheduling متصل نشده است.

@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -102,3 +102,10 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decisionهای زمانی ثبت، expansion چندزمانه/چندمقصدی و Restart با MongoDB واقعی آزمایشی اثبات، UTC/DST درست، Quality Gateها موفق و اجرای Publication خارج از Scope باشد.
+
+## نتیجهٔ نهایی راستی‌آزمایی
+
+- تست‌های متمرکز expansion و MongoDB واقعی: ۷ آزمون موفق.
+- مجموعهٔ کامل non-live: ۱۳۰۴ آزمون موفق.
+- Lock، Ruff، Ruff format، MyPy، یکپارچگی متن و diff check: موفق.
+- هیچ Slotی claim یا منتشر نشد و Runtime انتشار تغییر نکرد.

@@ -1,5 +1,17 @@
-"""Public baseline-category contracts."""
+"""Domain models and rules for post categorization."""
 
-from .models import CategorizationMethod, CategorizationResult, Category
+from .models import (
+    CategorizationCheckFailure,
+    CategorizationMethod,
+    CategorizationResult,
+    CategorizationState,
+    Category,
+)
 
-__all__ = ("CategorizationMethod", "CategorizationResult", "Category")
+__all__ = (
+    "CategorizationCheckFailure",
+    "CategorizationMethod",
+    "CategorizationResult",
+    "CategorizationState",
+    "Category",
+)

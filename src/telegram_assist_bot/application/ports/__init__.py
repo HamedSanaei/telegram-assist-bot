@@ -20,6 +20,44 @@ from telegram_assist_bot.application.ports.admin import (
     InlineButton,
     InlineKeyboard,
 )
+from telegram_assist_bot.application.ports.advertisement_repository import (
+    AdvertisementReportKind,
+    AdvertisementReportQuery,
+    AdvertisementReportRecord,
+    AdvertisementReportRepository,
+    AdvertisementRepository,
+    AdvertisementSlotRepository,
+)
+from telegram_assist_bot.application.ports.advertisement_source_gateway import (
+    AdvertisementSourceError,
+    AdvertisementSourceGroupDTO,
+    AdvertisementSourceMessageDTO,
+    AdvertisementSourceNotFoundError,
+    AdvertisementSourcePermissionError,
+    AdvertisementSourceTransientError,
+    TelegramAdvertisementSourceGateway,
+)
+from telegram_assist_bot.application.ports.ai_audit_repository import (
+    AIAuditEvent,
+    AIAuditEventType,
+    AIAuditRepository,
+    AIAuditRepositoryError,
+)
+from telegram_assist_bot.application.ports.ai_cache_repository import (
+    AICacheEntry,
+    AICacheRepository,
+    AICacheRepositoryError,
+    AICacheWriteResult,
+)
+from telegram_assist_bot.application.ports.ai_job_repository import (
+    AIJobConcurrencyConflictError,
+    AIJobNotFoundError,
+    AIJobRepository,
+    AIJobRepositoryError,
+    EnqueueJobOutcome,
+    EnqueueJobResult,
+)
+from telegram_assist_bot.application.ports.ai_provider import AIProvider
 from telegram_assist_bot.application.ports.clock import Clock
 from telegram_assist_bot.application.ports.media import (
     AlbumFinalizationStatus,
@@ -55,6 +93,10 @@ from telegram_assist_bot.application.ports.operational_approval import (
     OperationalApprovalRepository,
 )
 from telegram_assist_bot.application.ports.post_repository import (
+    AdvertisementPostRepository,
+    AdvertisementPostUpdateRequest,
+    CategorizationPostRepository,
+    CategorizationPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -68,6 +110,21 @@ from telegram_assist_bot.application.ports.post_repository import (
     PostRepositoryError,
     PostRepositoryUnavailableError,
     PostTransitionRequest,
+    ScoringPostRepository,
+    ScoringPostUpdateRequest,
+    SemanticDuplicatePostRepository,
+    SemanticDuplicatePostUpdateRequest,
+)
+from telegram_assist_bot.application.ports.provider_metrics_repository import (
+    ProviderMetricDelta,
+    ProviderMetrics,
+    ProviderMetricsRepository,
+    ProviderMetricsRepositoryError,
+)
+from telegram_assist_bot.application.ports.provider_state_repository import (
+    ProviderReservationResult,
+    ProviderStateRepository,
+    ProviderStateRepositoryError,
 )
 from telegram_assist_bot.application.ports.publication import (
     PublicationClaimOutcome,
@@ -79,9 +136,18 @@ from telegram_assist_bot.application.ports.publication import (
     PublisherError,
     TelegramPublisherGateway,
 )
+from telegram_assist_bot.application.ports.publication_collision import (
+    CollisionApplyOutcome,
+    PublicationCollisionRepository,
+    PublicationCollisionSnapshot,
+)
 from telegram_assist_bot.application.ports.scheduling import (
     ScheduleRepository,
     ScheduleReservation,
+)
+from telegram_assist_bot.application.ports.semantic_duplicate_candidates import (
+    SemanticDuplicateCandidate,
+    SemanticDuplicateCandidateRepository,
 )
 from telegram_assist_bot.application.ports.telegram_source_gateway import (
     ResolvedTelegramChannel,
@@ -114,7 +180,34 @@ from telegram_assist_bot.application.ports.telegram_source_gateway import (
 )
 
 __all__ = (
+    "AIAuditEvent",
+    "AIAuditEventType",
+    "AIAuditRepository",
+    "AIAuditRepositoryError",
+    "AICacheEntry",
+    "AICacheRepository",
+    "AICacheRepositoryError",
+    "AICacheWriteResult",
+    "AIJobConcurrencyConflictError",
+    "AIJobNotFoundError",
+    "AIJobRepository",
+    "AIJobRepositoryError",
+    "AIProvider",
     "AdminMessagingGateway",
+    "AdvertisementPostRepository",
+    "AdvertisementPostUpdateRequest",
+    "AdvertisementReportKind",
+    "AdvertisementReportQuery",
+    "AdvertisementReportRecord",
+    "AdvertisementReportRepository",
+    "AdvertisementRepository",
+    "AdvertisementSlotRepository",
+    "AdvertisementSourceError",
+    "AdvertisementSourceGroupDTO",
+    "AdvertisementSourceMessageDTO",
+    "AdvertisementSourceNotFoundError",
+    "AdvertisementSourcePermissionError",
+    "AdvertisementSourceTransientError",
     "AlbumFinalizationStatus",
     "ApprovalAdministratorDeliveryState",
     "ApprovalContent",
@@ -136,10 +229,15 @@ __all__ = (
     "ApprovalSyncClaim",
     "BotEditOutcome",
     "BotUpdate",
+    "CategorizationPostRepository",
+    "CategorizationPostUpdateRequest",
     "Clock",
+    "CollisionApplyOutcome",
     "ContentPreparationRepository",
     "DestinationArtifact",
     "DestinationPublicationState",
+    "EnqueueJobOutcome",
+    "EnqueueJobResult",
     "InlineButton",
     "InlineKeyboard",
     "InsertPostOutcome",
@@ -172,8 +270,17 @@ __all__ = (
     "PostRepositoryError",
     "PostRepositoryUnavailableError",
     "PostTransitionRequest",
+    "ProviderMetricDelta",
+    "ProviderMetrics",
+    "ProviderMetricsRepository",
+    "ProviderMetricsRepositoryError",
+    "ProviderReservationResult",
+    "ProviderStateRepository",
+    "ProviderStateRepositoryError",
     "PublicationClaimOutcome",
     "PublicationClaimResult",
+    "PublicationCollisionRepository",
+    "PublicationCollisionSnapshot",
     "PublicationMedia",
     "PublicationPayload",
     "PublicationPayloadLoader",
@@ -182,7 +289,14 @@ __all__ = (
     "ResolvedTelegramChannel",
     "ScheduleRepository",
     "ScheduleReservation",
+    "ScoringPostRepository",
+    "ScoringPostUpdateRequest",
+    "SemanticDuplicateCandidate",
+    "SemanticDuplicateCandidateRepository",
+    "SemanticDuplicatePostRepository",
+    "SemanticDuplicatePostUpdateRequest",
     "TelegramAccount",
+    "TelegramAdvertisementSourceGateway",
     "TelegramAuthenticationGateway",
     "TelegramChannelNotFoundError",
     "TelegramChannelPermissionError",

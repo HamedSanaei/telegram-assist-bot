@@ -111,6 +111,7 @@ class Foundation:
                 destination_channels=(destination,),
                 publishing=publishing,
                 timezone=ZoneInfo("Asia/Tehran"),
+                categorization=SimpleNamespace(categories=()),
             )
         )
         self.mongodb_client = {"test": Database()}

@@ -702,11 +702,16 @@ def test_runtime_poll_claims_new_immediate_job_within_one_second_and_restart_is_
                 now=datetime.now(UTC),
             )
             await asyncio.wait_for(published.wait(), timeout=1)
+            stored = await repository.get(identity)
+            while stored is not None and stored.status is not ScheduleStatus.COMPLETED:
+                if asyncio.get_running_loop().time() - started >= 1:
+                    break
+                await asyncio.sleep(0.01)
+                stored = await repository.get(identity)
             elapsed = asyncio.get_running_loop().time() - started
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-            stored = await repository.get(identity)
             assert elapsed < 1
             assert publication_count == 1
             assert stored is not None

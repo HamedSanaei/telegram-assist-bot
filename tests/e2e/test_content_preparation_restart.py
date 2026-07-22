@@ -41,13 +41,11 @@ def test_restart_reuses_all_completed_results_and_ai_flags_fail_fast() -> None:
 
     asyncio.run(scenario())
     validate_unimplemented_ai_flags(
-        advertisement_enabled=False,
-        semantic_duplicate_enabled=False,
-        ai_categorization_enabled=False,
+        advertisement_enabled=True,
+        semantic_duplicate_enabled=True,
+        ai_categorization_enabled=True,
     )
     with pytest.raises(ValueError, match="not implemented"):
         validate_unimplemented_ai_flags(
-            advertisement_enabled=True,
-            semantic_duplicate_enabled=False,
-            ai_categorization_enabled=False,
+            future_unimplemented_flag=True,
         )

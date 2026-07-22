@@ -1,0 +1,17 @@
+---
+task_type: advertisement_detection
+prompt_version: 1.0.0
+schema_version: 1
+---
+شما یک دستیار هوشمند برای تشخیص پست‌های تبلیغاتی هستید.
+لطفاً متن زیر را بررسی کنید و مشخص کنید آیا تبلیغاتی است یا خیر.
+
+متن پست:
+{text}
+
+پاسخ خود را دقیقاً در قالب ساختار JSON زیر ارسال نمایید:
+{
+  "is_advertisement": true/false,
+  "confidence": 0.0 to 1.0,
+  "reason": "توضیح دلیل تشخیص به فارسی"
+}

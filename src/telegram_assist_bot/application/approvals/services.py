@@ -500,11 +500,15 @@ class SynchronizeApprovalMessages:
         version: int,
         render: Callable[[ApprovalReference], Awaitable[tuple[str, InlineKeyboard]]],
         now: datetime,
+        force: bool = False,
     ) -> None:
         """Continue after per-reference failure and persist only safe categories."""
         for reference in await self._repository.list_active_references(post_id):
-            if reference.rendered_version > version:
+            if not force and reference.rendered_version > version:
                 continue
+            target_version = (
+                max(version, reference.rendered_version + 1) if force else version
+            )
             header, keyboard = await render(reference)
             try:
                 outcome = await self._gateway.edit_header(
@@ -516,7 +520,7 @@ class SynchronizeApprovalMessages:
             except TimeoutError:
                 await self._repository.mark_sync_failure(
                     reference.reference_id,
-                    version,
+                    target_version,
                     category="timeout",
                     next_retry_at=now.astimezone(UTC) + timedelta(seconds=1),
                     inactive=False,
@@ -525,12 +529,12 @@ class SynchronizeApprovalMessages:
             if outcome is BotEditOutcome.DELETED:
                 await self._repository.mark_sync_failure(
                     reference.reference_id,
-                    version,
+                    target_version,
                     category="permanent",
                     next_retry_at=None,
                     inactive=True,
                 )
             else:
                 await self._repository.mark_sync_success(
-                    reference.reference_id, version
+                    reference.reference_id, target_version
                 )

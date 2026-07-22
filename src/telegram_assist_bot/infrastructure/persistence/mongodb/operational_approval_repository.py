@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
     from pymongo.asynchronous.collection import AsyncCollection
 
+    from telegram_assist_bot.domain.categories import Category
+
 type Document = dict[str, Any]
 
 
@@ -445,6 +447,7 @@ class MongoApprovalPostLoader:
         groups: AsyncCollection[Document],
         *,
         destination_names: tuple[str, ...],
+        categories: tuple[Category, ...] = (),
     ) -> None:
         """Store source and preparation collections plus destination order."""
         self._posts = posts
@@ -452,6 +455,7 @@ class MongoApprovalPostLoader:
         self._media = media
         self._groups = groups
         self._destination_names = destination_names
+        self._categories = categories
 
     async def load(self, post_id: str) -> ApprovalPost:
         """Load exact prepared text, entities, and ordered media for approval."""
@@ -522,11 +526,73 @@ class MongoApprovalPostLoader:
             )
             paths = tuple(item.storage_path for item in approval_media)
             content_type = "album"
-        category = preparation.get("category_result", {}).get("category_id")
+        category_result = preparation.get("category_result")
+        if category_result is not None:
+            category_id = category_result.get("category_id")
+            method_str = category_result.get("method")
+            confidence = category_result.get("confidence")
+            provider_name = category_result.get("provider_name")
+            model_name = category_result.get("model_name")
+
+            category_display = category_id
+            for cat in self._categories:
+                if cat.category_id == category_id:
+                    category_display = cat.display_name
+                    break
+
+            state = post.get("categorization_processing", {}).get(
+                "state", "NotRequested"
+            )
+
+            parts = [category_display]
+            if method_str == "Manual":
+                parts.append("(دستی)")
+            elif method_str == "Keyword":
+                if state == "KeywordFallback":
+                    parts.append("(کلمه کلیدی - پشتیبان هوش مصنوعی)")
+                else:
+                    parts.append("(کلمه کلیدی)")
+            elif method_str == "SourceDefault":
+                if state == "SourceDefaultFallback":
+                    parts.append("(پیش‌فرض منبع - پشتیبان هوش مصنوعی)")
+                else:
+                    parts.append("(پیش‌فرض منبع)")
+            elif method_str == "AI":
+                ai_details = []
+                if confidence is not None:
+                    ai_details.append(f"{int(confidence * 100)}%")
+                if provider_name and model_name:
+                    ai_details.append(f"{provider_name}/{model_name}")
+                elif provider_name:
+                    ai_details.append(provider_name)
+
+                if ai_details:
+                    parts.append(f"(هوش مصنوعی: {' - '.join(ai_details)})")
+                else:
+                    parts.append("(هوش مصنوعی)")
+            category = " ".join(parts)
+        else:
+            category = None
         duplicate_value = preparation.get("duplicate_result", {}).get("is_duplicate")
         duplicate = (
             None if duplicate_value is None else ("بله" if duplicate_value else "خیر")
         )
+        scoring = post.get("scoring_processing", {})
+        scoring_state = scoring.get("state", "NotRequested")
+        scoring_result = scoring.get("result")
+        if scoring_state == "ScoringCompleted" and isinstance(scoring_result, dict):
+            raw_score = scoring_result.get("score")
+            score = str(raw_score) if type(raw_score) is int else "در دسترس نیست"
+        elif scoring_state in {
+            "ScoringScheduled",
+            "ScoringPending",
+            "ScoringRetryPending",
+        }:
+            score = "در انتظار بررسی"
+        elif scoring_state in {"ScoringUnavailable", "ScoringStaleOrExpired"}:
+            score = "در دسترس نیست"
+        else:
+            score = None
         return ApprovalPost(
             post_id,
             post["source_channel_display_name"],
@@ -542,6 +608,7 @@ class MongoApprovalPostLoader:
             ),
             category=category,
             duplicate=duplicate,
+            score=score,
             source_message_id=post.get("source_message_id"),
             source_published_at=post.get("source_published_at"),
             content_type=content_type,

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Protocol
 
-from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.errors import classify_error
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
+    from telegram_assist_bot.shared.config import LogLevel
     from telegram_assist_bot.shared.retry.policy import RetryPolicy
 
 
@@ -89,6 +89,8 @@ async def execute_with_retry[T](
     jitter_source: JitterSource,
 ) -> T:
     """Run an async operation with bounded, classified, observable retries."""
+    from telegram_assist_bot.shared.config import LogLevel
+
     if operation_is_safe_to_retry is not True:
         raise ValueError("operation must be explicitly safe to retry")
     if (

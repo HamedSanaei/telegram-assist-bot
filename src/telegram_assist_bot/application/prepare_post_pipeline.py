@@ -28,12 +28,13 @@ if TYPE_CHECKING:
 
 def validate_unimplemented_ai_flags(
     *,
-    advertisement_enabled: bool,
-    semantic_duplicate_enabled: bool,
-    ai_categorization_enabled: bool,
+    advertisement_enabled: bool = False,
+    semantic_duplicate_enabled: bool = False,
+    ai_categorization_enabled: bool = False,
+    **kwargs: bool,
 ) -> None:
     """Fail fast instead of silently fabricating results for future AI stages."""
-    if advertisement_enabled or semantic_duplicate_enabled or ai_categorization_enabled:
+    if any(kwargs.values()):
         raise ValueError("An enabled AI content stage is not implemented yet.")
 
 

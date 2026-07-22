@@ -697,6 +697,15 @@ class MongoContentPreparationRepository:
             "assigned_at": result.assigned_at,
             "rule_id": result.rule_id,
             "reason": result.reason,
+            "confidence": result.confidence,
+            "provider_name": result.provider_name,
+            "model_name": result.model_name,
+            "prompt_version": result.prompt_version,
+            "schema_version": result.schema_version,
+            "cache_hit": result.cache_hit,
+            "cache_age": result.cache_age,
+            "attempt_number": result.attempt_number,
+            "fallback_count": result.fallback_count,
         }
         query: Document = {"_id": post_id.value}
         if result.method is not CategorizationMethod.MANUAL:
@@ -710,12 +719,21 @@ class MongoContentPreparationRepository:
         )
         current = document["category_result"]
         return CategorizationResult(
-            current["category_id"],
-            CategorizationMethod(current["method"]),
-            current["policy_version"],
-            current["assigned_at"],
-            current.get("rule_id"),
-            current.get("reason"),
+            category_id=current["category_id"],
+            method=CategorizationMethod(current["method"]),
+            policy_version=current["policy_version"],
+            assigned_at=current["assigned_at"],
+            rule_id=current.get("rule_id"),
+            reason=current.get("reason"),
+            confidence=current.get("confidence"),
+            provider_name=current.get("provider_name"),
+            model_name=current.get("model_name"),
+            prompt_version=current.get("prompt_version"),
+            schema_version=current.get("schema_version"),
+            cache_hit=current.get("cache_hit"),
+            cache_age=current.get("cache_age"),
+            attempt_number=current.get("attempt_number"),
+            fallback_count=current.get("fallback_count"),
         )
 
     async def get_category_result(self, post_id: PostId) -> CategorizationResult | None:
@@ -727,12 +745,21 @@ class MongoContentPreparationRepository:
             return None
         current = document["category_result"]
         return CategorizationResult(
-            current["category_id"],
-            CategorizationMethod(current["method"]),
-            current["policy_version"],
-            current["assigned_at"],
-            current.get("rule_id"),
-            current.get("reason"),
+            category_id=current["category_id"],
+            method=CategorizationMethod(current["method"]),
+            policy_version=current["policy_version"],
+            assigned_at=current["assigned_at"],
+            rule_id=current.get("rule_id"),
+            reason=current.get("reason"),
+            confidence=current.get("confidence"),
+            provider_name=current.get("provider_name"),
+            model_name=current.get("model_name"),
+            prompt_version=current.get("prompt_version"),
+            schema_version=current.get("schema_version"),
+            cache_hit=current.get("cache_hit"),
+            cache_age=current.get("cache_age"),
+            attempt_number=current.get("attempt_number"),
+            fallback_count=current.get("fallback_count"),
         )
 
     async def save_destination_artifact(

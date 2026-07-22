@@ -1,0 +1,31 @@
+{
+  "campaign": {
+    "campaign_id": "phase-two-ad",
+    "name": "آگهی‌ فاز دوم ✨",
+    "enabled": true,
+    "source_post_url": "https://t.me/advertisement_example/123",
+    "source_channel_username": "advertisement_example",
+    "destination_names": ["destination-fa"],
+    "weekdays": ["wednesday"],
+    "times": ["11:30"],
+    "start_date": "2026-07-22",
+    "end_date": "2026-07-22",
+    "timezone": "Asia/Tehran",
+    "publication_mode": "copy",
+    "priority": 100,
+    "minimum_gap_seconds": 300,
+    "error_policy": "retry_then_fail",
+    "max_retries": 2,
+    "source_cache_policy": "cached",
+    "source_unavailable_policy": "fail_closed",
+    "snapshot_retention_days": 30,
+    "refresh_interval_seconds": null
+  },
+  "destination_id": -100700,
+  "caption": "تبلیغ پایدار با نیم‌فاصله و ایموجی ✨",
+  "custom_emoji_id": "900000000000001",
+  "media": [
+    {"type": "Photo", "path": "sanitized-cache/one.jpg", "index": 0},
+    {"type": "Video", "path": "sanitized-cache/two.mp4", "index": 1}
+  ]
+}

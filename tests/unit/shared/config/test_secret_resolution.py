@@ -56,15 +56,19 @@ def _secret_references(payload: JsonObject) -> dict[str, str]:
     telegram_user = _as_object(telegram["user"])
     telegram_bot = _as_object(telegram["bot"])
     ai = _as_object(payload["ai"])
-    provider = _as_object(_as_list(ai["providers"])[0])
-    return {
+    providers = _as_list(ai["providers"])
+    res = {
         "mongodb.uri": _environment_name(mongodb["uri"]),
         "telegram.user.api_id": _environment_name(telegram_user["api_id"]),
         "telegram.user.api_hash": _environment_name(telegram_user["api_hash"]),
         "telegram.user.phone_number": _environment_name(telegram_user["phone_number"]),
         "telegram.bot.token": _environment_name(telegram_bot["token"]),
-        "ai.providers[0].api_key": _environment_name(provider["api_key"]),
     }
+    for idx, provider_val in enumerate(providers):
+        provider = _as_object(provider_val)
+        if "api_key" in provider and provider["api_key"] is not None:
+            res[f"ai.providers[{idx}].api_key"] = _environment_name(provider["api_key"])
+    return res
 
 
 def _environment_name(value: object) -> str:
@@ -106,29 +110,40 @@ def _replace_with_inline_secrets(payload: JsonObject) -> tuple[str, ...]:
     telegram = _as_object(payload["telegram"])
     telegram_user = _as_object(telegram["user"])
     telegram_bot = _as_object(telegram["bot"])
-    provider = _as_object(_as_list(_as_object(payload["ai"])["providers"])[0])
+    providers = _as_list(_as_object(payload["ai"])["providers"])
+    provider0 = _as_object(providers[0])
+    provider1 = _as_object(providers[1])
+    provider2 = _as_object(providers[2])
     mongodb_value = "mongodb://inline.example.invalid:27017"
     api_id_value = "123456"
     hash_value = "fixture-one"
     phone_value = "+989120000000"
     bot_value = "inline-bot-credential"
-    provider_value = "fixture-two"
+    provider0_value = "fixture-two"
+    provider1_value = "fixture-three"
+    provider2_value = "fixture-four"
     hash_field = next(name for name in telegram_user if name.endswith("hash"))
     bot_field = next(name for name in telegram_bot if name.endswith("ken"))
-    provider_field = next(name for name in provider if name.endswith("_key"))
+    provider0_field = next(name for name in provider0 if name.endswith("_key"))
+    provider1_field = next(name for name in provider1 if name.endswith("_key"))
+    provider2_field = next(name for name in provider2 if name.endswith("_key"))
     mongodb["uri"] = mongodb_value
     telegram_user["api_id"] = int(api_id_value)
     telegram_user[hash_field] = hash_value
     telegram_user["phone_number"] = phone_value
     telegram_bot[bot_field] = bot_value
-    provider[provider_field] = provider_value
+    provider0[provider0_field] = provider0_value
+    provider1[provider1_field] = provider1_value
+    provider2[provider2_field] = provider2_value
     return (
         mongodb_value,
         api_id_value,
         hash_value,
         phone_value,
         bot_value,
-        provider_value,
+        provider0_value,
+        provider1_value,
+        provider2_value,
     )
 
 
@@ -171,15 +186,21 @@ def test_local_configuration_resolves_direct_secrets_without_environment(
         environ={},
     )
     settings = loaded.settings
-    provider = settings.ai.providers[0]
-    assert provider.api_key is not None
+    provider0 = settings.ai.providers[0]
+    provider1 = settings.ai.providers[1]
+    provider2 = settings.ai.providers[2]
+    assert provider0.api_key is not None
+    assert provider1.api_key is not None
+    assert provider2.api_key is not None
     resolved = (
         loaded.secrets.get(settings.mongodb.uri).get_secret_value(),
         loaded.secrets.get(settings.telegram.user.api_id).get_secret_value(),
         loaded.secrets.get(settings.telegram.user.api_hash).get_secret_value(),
         loaded.secrets.get(settings.telegram.user.phone_number).get_secret_value(),
         loaded.secrets.get(settings.telegram.bot.token).get_secret_value(),
-        loaded.secrets.get(provider.api_key).get_secret_value(),
+        loaded.secrets.get(provider0.api_key).get_secret_value(),
+        loaded.secrets.get(provider1.api_key).get_secret_value(),
+        loaded.secrets.get(provider2.api_key).get_secret_value(),
     )
 
     assert resolved == values

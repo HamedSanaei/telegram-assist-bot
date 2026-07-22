@@ -3,7 +3,7 @@
 ## قواعد
 
 - منبع حقیقت نیازمندی‌ها `docs/REQUIREMENTS.md` است.
-- تنها یک Task می‌تواند `Active` باشد؛ اکنون فقط T034 فعال است.
+- تنها یک Task می‌تواند `Active` باشد؛ پس از تکمیل T047 فعلاً Task فعالی وجود ندارد و T048 (آغاز فاز دوم) اقدام پیشنهادی بعدی است.
 - وضعیت‌ها: `Active`، `Planned`، `Blocked`، `Completed`.
 - هر Task باید در یک Session قابل پیاده‌سازی و راستی‌آزمایی باشد.
 - Taskهای Stabilization رفتار جدید گسترده نمی‌سازند؛ سناریوهای بین‌لایه‌ای مشخص را تست و اشکال‌های همان Milestone را رفع می‌کنند.
@@ -83,34 +83,34 @@
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Active |
-| [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Planned |
-| [T036](tasks/T036-first-ai-provider-adapter.md) | Adapter اولین Provider منتخب | T005، T034 | `11.2–11.5` | Planned |
-| [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Planned |
-| [T038](tasks/T038-ai-response-normalization.md) | Validation، Repair و Normalization | T034، T036، T037 | `11.4`، `11.5`، `11.11` | Planned |
-| [T039](tasks/T039-ai-routing-retry-fallback.md) | Routing، Retry، Fallback و شکست نهایی | T035، T038 | `11.3`، `11.6`، `11.9`، `11.10`، `11.12` | Planned |
-| [T040](tasks/T040-ai-rate-limit-circuit-breaker.md) | Rate limit، Cooldown و Circuit Breaker | T035، T039 | `11.7`، `11.8`، `11.18` | Planned |
-| [T041](tasks/T041-ai-cache-audit-metrics.md) | Cache، Audit و آمار Provider | T004، T039، T040 | `11.15–11.17` | Planned |
-| [T042](tasks/T042-advertisement-detection.md) | تشخیص تبلیغ و سیاست شکست | T019، T035، T039، T041 | `5.8` | Planned |
-| [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Planned |
-| [T044](tasks/T044-ai-categorization.md) | دسته‌بندی AI با Fallback پایه | T018، T035، T039 | `5.11`، `11.12` | Planned |
-| [T045](tasks/T045-delayed-ai-scoring.md) | امتیازدهی تأخیری و ویرایش هدر | T022، T025، T035، T039 | `5.20` | Planned |
-| [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Planned |
-| [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Planned |
+| [T034](tasks/T034-ai-contracts-schemas-prompts.md) | قرارداد AI، Schema و Prompt version | T002، T003 | `11.1–11.5`، `11.11`، `11.16` | Completed |
+| [T035](tasks/T035-durable-ai-job-queue.md) | صف AI پایدار، اولویت و Lease | T004، T034 | `11.13`، `11.14`، `11.18` | Completed |
+| [T036](tasks/T036-first-ai-provider-adapter.md) | Adapter اولین Provider منتخب | T005، T034 | `11.2–11.5` | Completed |
+| [T037](tasks/T037-second-ai-provider-adapter.md) | Adapter Provider دوم و Model جایگزین | T036 | `11.1`، `11.2`، `11.10` | Completed |
+| [T038](tasks/T038-ai-response-normalization.md) | Validation، Repair و Normalization | T034، T036، T037 | `11.4`، `11.5`، `11.11` | Completed |
+| [T039](tasks/T039-ai-routing-retry-fallback.md) | Routing، Retry، Fallback و شکست نهایی | T035، T038 | `11.3`، `11.6`، `11.9`، `11.10`، `11.12` | Completed |
+| [T040](tasks/T040-ai-rate-limit-circuit-breaker.md) | Rate limit، Cooldown و Circuit Breaker | T035، T039 | `11.7`، `11.8`، `11.18` | Completed |
+| [T041](tasks/T041-ai-cache-audit-metrics.md) | Cache، Audit و آمار Provider | T004، T039، T040 | `11.15–11.17` | Completed |
+| [T042](tasks/T042-advertisement-detection.md) | تشخیص تبلیغ و سیاست شکست | T019، T035، T039، T041 | `5.8` | Completed |
+| [T043](tasks/T043-semantic-duplicate-detection.md) | Duplicate معنایی ۱۴روزه | T016، T035، T039، T041 | `5.9` | Completed |
+| [T044](tasks/T044-ai-categorization.md) | دسته‌بندی AI با Fallback پایه | T018، T035، T039 | `5.11`، `11.12` | Completed |
+| [T045](tasks/T045-delayed-ai-scoring.md) | امتیازدهی تأخیری و ویرایش هدر | T022، T025، T035، T039 | `5.20` | Completed |
+| [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Completed |
+| [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Completed |
 
-## Milestone 6 — تبلیغات زمان‌بندی‌شده
+## Milestone 6 — تبلیغات زمان‌بندی‌شده — Completed
 
 هدف: Campaignهای Config-driven با Slot پایدار، انتشار یکتا و گزارش مدیریتی.
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T048](tasks/T048-advertisement-configuration.md) | مدل و Validation تنظیم تبلیغات | T002، T047 | `6`، `6.2` | Planned |
-| [T049](tasks/T049-fetch-cache-advertisement-post.md) | دریافت/Cache پست تبلیغ از URL | T008، T013، T015، T048 | `6.1` | Planned |
-| [T050](tasks/T050-advertisement-slot-scheduling.md) | ساخت Slotهای چندزمانه و پایدار | T031، T048، T049 | `6.2`، `6.3` | Planned |
-| [T051](tasks/T051-idempotent-advertisement-publication.md) | انتشار یکتا، Retry و Audit تبلیغ | T029، T050 | `6.3`، `6.5` | Planned |
-| [T052](tasks/T052-advertisement-queue-collision.md) | سیاست تداخل تبلیغ و صف عادی | T033، T051 | `6.4` | Planned |
-| [T053](tasks/T053-advertisement-admin-reports.md) | گزارش امروز، آینده و خطاها | T020، T051 | `6.5` | Planned |
-| [T054](tasks/T054-phase-two-end-to-end.md) | پذیرش End-to-end فاز دوم | T052، T053 | `17` | Planned |
+| [T048](tasks/T048-advertisement-configuration.md) | مدل و Validation تنظیم تبلیغات | T002، T047 | `6`، `6.2` | Completed |
+| [T049](tasks/T049-fetch-cache-advertisement-post.md) | دریافت/Cache پست تبلیغ از URL | T008، T013، T015، T048 | `6.1` | Completed |
+| [T050](tasks/T050-advertisement-slot-scheduling.md) | ساخت Slotهای چندزمانه و پایدار | T031، T048، T049 | `6.2`، `6.3` | Completed |
+| [T051](tasks/T051-idempotent-advertisement-publication.md) | انتشار یکتا، Retry و Audit تبلیغ | T029، T050 | `6.3`، `6.5` | Completed |
+| [T052](tasks/T052-advertisement-queue-collision.md) | سیاست تداخل تبلیغ و صف عادی | T033، T051 | `6.4` | Completed |
+| [T053](tasks/T053-advertisement-admin-reports.md) | گزارش امروز، آینده و خطاها | T020، T051 | `6.5` | Completed |
+| [T054](tasks/T054-phase-two-end-to-end.md) | پذیرش End-to-end فاز دوم | T052، T053 | `17` | Completed |
 
 ## Milestone 7 — Gateهای قابلیت‌های پیشنهادی
 

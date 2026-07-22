@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -102,3 +102,13 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که پاسخ هر دو Adapter واقعی با Fixture به `AIResult` یکسان Normalize، همه حالت‌های نامعتبر و Repair محدود تست، Unicode سالم، هیچ نتیجه جعلی تولید نشود، همه Quality Gateها موفق و Routing/Fallback خارج از Scope بماند.
+
+## نتایج راستی‌آزمایی
+- آزمون‌های متمرکز T038: `13 passed`
+- کل آزمون‌های non-live: `1072 passed`
+- `ruff check src tests scripts`: بدون خطا
+- `ruff format --check src tests scripts`: مرتب
+- `mypy src tests scripts`: بدون خطا
+- `scripts/check_text_integrity.py --changed`: موفق
+- `git diff --check`: بدون خطا
+- کدهای جدید ResponseParser و ResponseValidator و ResponseNormalizer کاملاً مجزا و بدون ارتباط به flowهای Telegram یا runtime هستند.

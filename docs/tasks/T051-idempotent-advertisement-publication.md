@@ -2,7 +2,10 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
+
+نتیجهٔ نهایی: انتشار Slot با claim اتمیک، lease/version، Publication یکتای T029،
+Retry محدود، بازیابی پس از Restart و Audit امن پیاده‌سازی و با MongoDB واقعی اثبات شد.
 
 ## هدف
 
@@ -100,3 +103,12 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که انتشار یکتا و Audit با رقابت/Crash/Restart اثبات، Retry bounded و Secret/metadata safety رعایت، همه Quality Gateها موفق و Collision/Report خارج از Scope باشد.
+
+## نتیجهٔ راستی‌آزمایی نهایی
+
+- تست واحد T051: ۷ آزمون موفق.
+- تست یکپارچه MongoDB T051: ۳ آزمون موفق.
+- رگرسیون متمرکز Publication/Slot: ۴۱ آزمون موفق.
+- مجموعهٔ کامل non-live: ۱۳۱۴ آزمون موفق.
+- `uv lock --check`، Ruff، Ruff format، MyPy، بررسی یکپارچگی متن و
+  `git diff --check`: موفق.

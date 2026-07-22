@@ -89,7 +89,7 @@ class PublishImmediately:
         if (
             timeout_seconds <= 0
             or lease_seconds < timeout_seconds
-            or not 1 <= max_attempts <= 10
+            or not 1 <= max_attempts <= 11
             or initial_delay_seconds <= 0
             or maximum_delay_seconds < initial_delay_seconds
             or not 0 <= jitter_ratio <= 1

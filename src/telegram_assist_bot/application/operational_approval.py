@@ -805,7 +805,15 @@ class ApprovalCallbackExecutor:
         ]
         await self._sync(post_id, max(versions, default=0), now)
 
-    async def _sync(self, post_id: str, version: int, now: datetime) -> None:
+    async def synchronize_scoring_header(
+        self, *, post_id: str, version: int, now: datetime
+    ) -> None:
+        """Refresh scoring metadata from fresh Post and selection state."""
+        await self._sync(post_id, version, now, force=True)
+
+    async def _sync(
+        self, post_id: str, version: int, now: datetime, *, force: bool = False
+    ) -> None:
         statuses = await self._operational.destination_statuses(post_id)
         state_loader = getattr(self._operational, "destination_states", None)
         states = await state_loader(post_id) if state_loader is not None else {}
@@ -891,7 +899,11 @@ class ApprovalCallbackExecutor:
             return header, keyboard
 
         await self._synchronize.execute(
-            post_id=post_id, version=version, render=render, now=now
+            post_id=post_id,
+            version=version,
+            render=render,
+            now=now,
+            force=force,
         )
         self._emit("approval_messages_synchronized", approval_post_id=post_id)
 

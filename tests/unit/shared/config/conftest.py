@@ -44,6 +44,8 @@ def synthetic_environ() -> dict[str, str]:
         "TAB_TELEGRAM_PHONE_NUMBER": "synthetic-phone-number",
         "TAB_TELEGRAM_BOT_TOKEN": _synthetic_value("telegram-bot-token"),
         "TAB_AI_PROVIDER_KEY": _synthetic_value("ai-provider-key"),
+        "TAB_ZAI_API_KEY": _synthetic_value("zai-api-key"),
+        "TAB_DEEPSEEK_API_KEY": _synthetic_value("deepseek-api-key"),
     }
 
 

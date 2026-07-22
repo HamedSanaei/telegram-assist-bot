@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Active`
+`Completed`
 
 ## هدف
 
