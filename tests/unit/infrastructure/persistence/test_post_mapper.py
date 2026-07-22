@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 from bson.int64 import Int64
 
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -85,6 +86,13 @@ def _assert_post_fields_equal(actual: Post, expected: Post) -> None:
     assert actual.status is expected.status
     assert actual.version == expected.version
     assert actual.transition_history == expected.transition_history
+    assert actual.advertisement_state is expected.advertisement_state
+    assert (
+        actual.advertisement_processing_version
+        == expected.advertisement_processing_version
+    )
+    assert actual.advertisement_result == expected.advertisement_result
+    assert actual.advertisement_failure == expected.advertisement_failure
 
 
 def test_post_round_trip_preserves_every_current_domain_field_exactly() -> None:
@@ -97,6 +105,19 @@ def test_post_round_trip_preserves_every_current_domain_field_exactly() -> None:
     assert restored.original_caption == post.original_caption
     assert restored.original_text_entities == post.original_text_entities
     assert restored.original_caption_entities == post.original_caption_entities
+
+
+def test_legacy_post_without_advertisement_processing_uses_safe_defaults() -> None:
+    """Pre-T042 documents remain readable without inventing a classification."""
+    document = post_to_document(_make_post())
+    del document["advertisement_processing"]
+
+    restored = post_from_document(document)
+
+    assert restored.advertisement_state is AdvertisementProcessingState.NOT_REQUESTED
+    assert restored.advertisement_processing_version == 0
+    assert restored.advertisement_result is None
+    assert restored.advertisement_failure is None
 
 
 def test_document_uses_stable_version_one_schema_and_indexable_identity_fields() -> (

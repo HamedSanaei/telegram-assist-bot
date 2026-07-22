@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -104,3 +104,10 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که گزارش‌های bounded و read-only با Authorization/Redaction و Mongo+Bot fake اثبات، فارسی دستی بازبینی، همه Quality Gateها موفق و هیچ mutation/Feature analytics افزوده نشده باشد.
+
+## نتیجهٔ راستی‌آزمایی نهایی
+
+- تست‌های متمرکز و Regression مرتبط: ۹۰ آزمون موفق.
+- مجموعهٔ کامل non-live: ۱۳۴۹ آزمون موفق.
+- Lock، Ruff، Ruff format، MyPy، یکپارچگی متن changed/all و `git diff --check`: موفق.
+- هر سه Command فقط در private chat مدیر فعال دارای `approval.view` داده ارسال می‌کنند؛ Queryها bounded و read-only هستند.

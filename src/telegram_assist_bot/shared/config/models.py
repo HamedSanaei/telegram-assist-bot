@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Final, Literal, Self
@@ -15,11 +16,15 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictFloat,
     StrictInt,
     StrictStr,
     StringConstraints,
+    field_validator,
     model_validator,
 )
+
+from telegram_assist_bot.domain.ai_task import AITaskType
 
 SUPPORTED_CONFIGURATION_SCHEMA_VERSION: Final[int] = 1
 """The only configuration schema version supported by this release."""
@@ -126,13 +131,27 @@ class AiTask(StrEnum):
     ADVERTISEMENT_DETECTION = "advertisement_detection"
     DUPLICATE_DETECTION = "duplicate_detection"
     CONTENT_SCORING = "content_scoring"
+    CATEGORIZATION = "categorization"
+
+
+def _map_ai_task_alias(value: object) -> object:
+    if isinstance(value, str):
+        if value == "duplicate_detection":
+            return "semantic_duplicate"
+        if value == "content_scoring":
+            return "scoring"
+    return value
 
 
 StrictLogLevel = Annotated[LogLevel, BeforeValidator(_require_string_input)]
 """A logging enum parsed only from an exact string scalar."""
 
-StrictAiTask = Annotated[AiTask, BeforeValidator(_require_string_input)]
-"""An AI task enum parsed only from an exact string scalar."""
+StrictAiTask = Annotated[
+    AITaskType,
+    BeforeValidator(_map_ai_task_alias),
+    BeforeValidator(_require_string_input),
+]
+"""A strict AI task enum that maps the two supported legacy aliases."""
 
 
 class _FrozenConfigModel(BaseModel):
@@ -276,6 +295,20 @@ class SourceChannelConfig(_FrozenConfigModel):
     enabled: StrictBool = Field(
         description="Whether collection from this source channel is enabled."
     )
+    advertisement_detection_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Per-source advertisement check flag; required for enabled sources "
+            "when the global feature is enabled."
+        ),
+    )
+    duplicate_detection_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Per-source semantic duplicate flag; required for enabled sources "
+            "when the global duplicate feature is enabled."
+        ),
+    )
     allowed_destination_names: Annotated[
         tuple[NonBlankString, ...], Field(min_length=1)
     ] = Field(description="Destination names permitted for collected posts.")
@@ -310,7 +343,10 @@ class FeatureFlags(_FrozenConfigModel):
         description="Whether duplicate-content detection is enabled."
     )
     ai_scoring_enabled: StrictBool = Field(
-        description="Whether AI content scoring is enabled."
+        default=False, description="Whether AI content scoring is enabled."
+    )
+    ai_categorization_enabled: StrictBool = Field(
+        default=False, description="Whether AI categorization is enabled."
     )
 
 
@@ -374,6 +410,7 @@ class CategoryConfig(_FrozenConfigModel):
 
     category_id: NonBlankString
     display_name: NonBlankString
+    active: StrictBool = Field(default=True)
 
 
 class CategoryKeywordRuleConfig(_FrozenConfigModel):
@@ -390,6 +427,11 @@ class CategorizationConfig(_FrozenConfigModel):
 
     categories: tuple[CategoryConfig, ...] = ()
     keyword_rules: tuple[CategoryKeywordRuleConfig, ...] = ()
+    method_order: tuple[Literal["ai", "keyword", "source_default"], ...] | None = Field(
+        default=None
+    )
+    fallback_policy: Literal["fallback_baseline"] | None = Field(default=None)
+    aliases: dict[str, str] | None = Field(default=None)
 
 
 class AiProviderConfig(_FrozenConfigModel):
@@ -405,6 +447,48 @@ class AiProviderConfig(_FrozenConfigModel):
         default=None,
         description="Optional HTTP or HTTPS base URL for a provider adapter.",
     )
+
+
+class AiProviderGuardConfig(_FrozenConfigModel):
+    """Explicit request-capacity and circuit policy for one route candidate."""
+
+    concurrency_limit: Annotated[StrictInt, Field(ge=1, le=1000)]
+    request_limit: Annotated[StrictInt, Field(ge=1, le=1_000_000)]
+    request_window_seconds: Annotated[StrictInt, Field(ge=1, le=86400)]
+    reservation_seconds: Annotated[StrictInt, Field(ge=1, le=3600)]
+    failure_threshold: Annotated[StrictInt, Field(ge=1, le=1000)]
+    open_seconds: Annotated[StrictInt, Field(ge=1, le=86400)]
+    rate_limit_cooldown_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] | None
+
+
+class AiCachePolicyConfig(_FrozenConfigModel):
+    """Explicit cache enablement and bounded TTL for one canonical AI task."""
+
+    task: StrictAiTask
+    enabled: StrictBool = False
+    ttl_seconds: Annotated[StrictInt, Field(ge=1, le=31_536_000)] | None = None
+
+    @model_validator(mode="after")
+    def validate_enabled_ttl(self) -> Self:
+        """Require an explicit TTL only when caching is enabled."""
+        if self.enabled and self.ttl_seconds is None:
+            raise ValueError("enabled AI cache policy requires ttl_seconds")
+        return self
+
+
+class AiAuditConfig(_FrozenConfigModel):
+    """Disabled-by-default sanitized audit retention policy."""
+
+    enabled: StrictBool = False
+    retention_seconds: Annotated[StrictInt, Field(ge=1, le=31_536_000)] | None = None
+    raw_storage_enabled: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_enabled_retention(self) -> Self:
+        """Require explicit bounded retention before audit persistence is enabled."""
+        if self.enabled and self.retention_seconds is None:
+            raise ValueError("enabled AI audit requires retention_seconds")
+        return self
 
 
 class AiRouteCandidateConfig(_FrozenConfigModel):
@@ -423,6 +507,12 @@ class AiRouteCandidateConfig(_FrozenConfigModel):
     max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = Field(
         description="Bounded total attempts, including the initial attempt."
     )
+    guard_policy: AiProviderGuardConfig | None = Field(
+        default=None,
+        description=(
+            "Explicit T040 guard policy; required before an enabled candidate executes."
+        ),
+    )
 
 
 class AiTaskRouteConfig(_FrozenConfigModel):
@@ -434,15 +524,116 @@ class AiTaskRouteConfig(_FrozenConfigModel):
     )
 
 
+class AiQueueConfig(_FrozenConfigModel):
+    """Hold AI Job queue parameters."""
+
+    lease_duration_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=86400,
+        description="Lease duration in seconds for claimed jobs.",
+    )
+    max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        description="Maximum attempts to process a job across fallbacks.",
+    )
+    next_run_delay_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=86400,
+        description="Delay in seconds before retrying a failed job attempt.",
+    )
+    worker_poll_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=3600,
+        description="Polling interval in seconds for workers.",
+    )
+
+
+class AiTaskFailureAction(StrEnum):
+    """Actions to take on final all-providers failure."""
+
+    CONTINUE_PROCESSING = "continue_processing"
+    STOP_PROCESSING = "stop_processing"
+    RETRY_LATER = "retry_later"
+    MANUAL_REVIEW = "manual_review"
+
+
+class AiTaskFailurePolicyConfig(_FrozenConfigModel):
+    """Define failure policy for a task."""
+
+    task: StrictAiTask = Field(description="AI task this failure policy applies to.")
+    action: AiTaskFailureAction = Field(
+        description="Action to take when all providers fail."
+    )
+
+
+class SemanticDuplicatePolicy(StrEnum):
+    """Approved actions for a valid semantic duplicate result."""
+
+    REJECT = "reject"
+    MANUAL_REVIEW = "manual_review"
+    CONTINUE_PROCESSING = "continue_processing"
+
+
+class SemanticDuplicateConfig(_FrozenConfigModel):
+    """Hold explicit semantic threshold and valid-duplicate policy."""
+
+    threshold: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    duplicate_policy: SemanticDuplicatePolicy
+
+
+class ScoringFailurePolicy(StrEnum):
+    """Approved delayed-scoring failure actions."""
+
+    RETRY_LATER = "retry_later"
+    MARK_UNAVAILABLE = "mark_unavailable"
+
+
+class ScoringConfig(_FrozenConfigModel):
+    """Hold explicit delayed-scoring timing and terminal failure behavior."""
+
+    delay_seconds: Annotated[StrictInt, Field(ge=1200, le=2_592_000)]
+    failure_policy: ScoringFailurePolicy
+
+
 class AiConfig(_FrozenConfigModel):
     """Hold provider declarations and task-routing skeletons."""
 
+    queue: AiQueueConfig = Field(
+        default_factory=AiQueueConfig,
+        description="Optional AI job queue configuration.",
+    )
     providers: tuple[AiProviderConfig, ...] = Field(
         description="Declared AI providers; may be empty when AI features are off."
     )
     routes: tuple[AiTaskRouteConfig, ...] = Field(
         description="Configured AI task routes."
     )
+    failure_policies: tuple[AiTaskFailurePolicyConfig, ...] = Field(
+        default=(), description="Configured AI task failure policies."
+    )
+    cache_policies: tuple[AiCachePolicyConfig, ...] = Field(
+        default=(), description="Explicit per-task result-cache policies."
+    )
+    audit: AiAuditConfig = Field(
+        default_factory=AiAuditConfig,
+        description="Sanitized audit retention; raw storage remains disabled.",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_task_policies(self) -> Self:
+        """Reject ambiguous duplicate task policies after alias canonicalization."""
+        tasks = [policy.task for policy in self.cache_policies]
+        if len(tasks) != len(set(tasks)):
+            raise ValueError("AI cache policy tasks must be unique")
+        failure_tasks = [policy.task for policy in self.failure_policies]
+        if len(failure_tasks) != len(set(failure_tasks)):
+            raise ValueError("AI failure policy tasks must be unique")
+        return self
 
 
 class AdvertisementRouteConfig(_FrozenConfigModel):
@@ -454,11 +645,376 @@ class AdvertisementRouteConfig(_FrozenConfigModel):
     )
 
 
+class AdvertisementCampaignConfig(_FrozenConfigModel):
+    """Describe one scheduled advertisement campaign configuration."""
+
+    campaign_id: NonBlankString = Field(
+        description="Unique stable machine identity (ASCII slug)."
+    )
+    name: NonBlankString = Field(description="Human-readable display name.")
+    enabled: StrictBool = Field(description="Whether the campaign is active.")
+    source_post_url: NonBlankString = Field(
+        description="Public Telegram source post URL."
+    )
+    source_channel_username: NonBlankString = Field(
+        description="Source channel username."
+    )
+    destination_names: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = (
+        Field(description="Referenced destination channel names.")
+    )
+    weekdays: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = Field(
+        description="Target weekdays in campaign timezone."
+    )
+    times: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = Field(
+        description="Target daily times in 24-hour HH:MM format."
+    )
+    start_date: NonBlankString = Field(description="ISO start date (YYYY-MM-DD).")
+    end_date: NonBlankString = Field(description="ISO end date (YYYY-MM-DD).")
+    timezone: NonBlankString = Field(description="IANA timezone string.")
+    publication_mode: NonBlankString = Field(description="Publication mode (copy).")
+    priority: int = Field(description="Non-negative priority integer.")
+    minimum_gap_seconds: int = Field(
+        description="Strict positive minimum gap in seconds."
+    )
+    error_policy: NonBlankString = Field(
+        description="Execution error policy (retry_then_fail)."
+    )
+    max_retries: int = Field(description="Max retries from 0 to 10.")
+    source_cache_policy: NonBlankString | None = Field(
+        default=None,
+        description="Source cache policy (latest, cached, periodic_refresh).",
+    )
+    source_unavailable_policy: NonBlankString | None = Field(
+        default=None,
+        description="Source unavailable policy (use_last_valid_snapshot, fail_closed).",
+    )
+    snapshot_retention_days: int | None = Field(
+        default=None, description="Snapshot retention in days (1 to 365)."
+    )
+    refresh_interval_seconds: int | None = Field(
+        default=None, description="Refresh interval in seconds (60 to 86400)."
+    )
+
+    @field_validator(
+        "priority",
+        "minimum_gap_seconds",
+        "max_retries",
+        "snapshot_retention_days",
+        "refresh_interval_seconds",
+        mode="before",
+    )
+    @classmethod
+    def validate_strict_int(cls, v: object) -> object:
+        """Reject boolean values passed to integer fields."""
+        if type(v) is bool:
+            raise ValueError("Boolean values are not accepted as integers")
+        return v
+
+    @field_validator("campaign_id")
+    @classmethod
+    def validate_campaign_id_slug(cls, v: str) -> str:
+        """Validate campaign_id is a valid ASCII slug."""
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v) or len(v) > 64:
+            raise ValueError(
+                "campaign_id must be a valid non-empty ASCII slug "
+                "(letters, digits, _, -)"
+            )
+        return v
+
+    @field_validator("source_post_url")
+    @classmethod
+    def validate_source_post_url_format(cls, v: str) -> str:
+        """Validate source_post_url is a public HTTPS t.me post URL."""
+        if (
+            not re.match(r"^https://t\.me/([a-zA-Z0-9_]{5,32})/([1-9]\d*)$", v)
+            or "?" in v
+            or "#" in v
+            or "@" in v.split("://")[-1].split("/")[0]
+            or "/c/" in v
+        ):
+            raise ValueError(
+                "source_post_url must be a valid public HTTPS t.me post URL"
+            )
+        return v
+
+    @field_validator("weekdays")
+    @classmethod
+    def validate_weekdays_list(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate weekdays are canonical lowercase weekday strings and unique."""
+        valid_set = {
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        }
+        for item in v:
+            if item not in valid_set:
+                raise ValueError("weekday must be a canonical lowercase weekday name")
+        if len(v) != len(set(v)):
+            raise ValueError("weekdays must be unique")
+        return v
+
+    @field_validator("times")
+    @classmethod
+    def validate_times_list(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate times are 24-hour HH:MM strings and unique."""
+        time_pat = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+        for item in v:
+            if not time_pat.match(item):
+                raise ValueError("time must be in strict 24-hour HH:MM format")
+        if len(v) != len(set(v)):
+            raise ValueError("times must be unique")
+        return v
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date_format(cls, v: str) -> str:
+        """Validate ISO date format."""
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("date must be in ISO YYYY-MM-DD format")
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_tz(cls, v: str) -> str:
+        """Validate IANA timezone."""
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, KeyError, ValueError) as err:
+            raise ValueError("timezone must be a valid IANA timezone string") from err
+        return v
+
+    @field_validator("publication_mode")
+    @classmethod
+    def validate_pub_mode(cls, v: str) -> str:
+        """Validate publication mode."""
+        if v != "copy":
+            raise ValueError("publication_mode must be 'copy'")
+        return v
+
+    @field_validator("error_policy")
+    @classmethod
+    def validate_err_policy(cls, v: str) -> str:
+        """Validate error policy."""
+        if v != "retry_then_fail":
+            raise ValueError("error_policy must be 'retry_then_fail'")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority_val(cls, v: int) -> int:
+        """Validate priority is non-negative."""
+        if v < 0:
+            raise ValueError("priority must be a non-negative integer")
+        return v
+
+    @field_validator("minimum_gap_seconds")
+    @classmethod
+    def validate_gap_val(cls, v: int) -> int:
+        """Validate minimum gap is positive."""
+        if v <= 0:
+            raise ValueError("minimum_gap_seconds must be a positive integer")
+        return v
+
+    @field_validator("max_retries")
+    @classmethod
+    def validate_retries_val(cls, v: int) -> int:
+        """Validate max retries is 0 to 10."""
+        if not (0 <= v <= 10):
+            raise ValueError("max_retries must be between 0 and 10")
+        return v
+
+    @field_validator("source_cache_policy")
+    @classmethod
+    def validate_cache_policy(cls, v: str | None) -> str | None:
+        """Validate source_cache_policy choices."""
+        if v is not None and v not in ("latest", "cached", "periodic_refresh"):
+            raise ValueError(
+                "source_cache_policy must be 'latest', 'cached', or 'periodic_refresh'"
+            )
+        return v
+
+    @field_validator("source_unavailable_policy")
+    @classmethod
+    def validate_unavailable_policy(cls, v: str | None) -> str | None:
+        """Validate source_unavailable_policy choices."""
+        if v is not None and v not in ("use_last_valid_snapshot", "fail_closed"):
+            raise ValueError(
+                "source_unavailable_policy must be 'use_last_valid_snapshot' "
+                "or 'fail_closed'"
+            )
+        return v
+
+    @field_validator("snapshot_retention_days")
+    @classmethod
+    def validate_retention_days(cls, v: int | None) -> int | None:
+        """Validate snapshot_retention_days range 1 to 365."""
+        if v is not None and not (1 <= v <= 365):
+            raise ValueError("snapshot_retention_days must be between 1 and 365")
+        return v
+
+    @field_validator("refresh_interval_seconds")
+    @classmethod
+    def validate_refresh_interval(cls, v: int | None) -> int | None:
+        """Validate refresh_interval_seconds range 60 to 86400."""
+        if v is not None and not (60 <= v <= 86400):
+            raise ValueError("refresh_interval_seconds must be between 60 and 86400")
+        return v
+
+
+class AdvertisementSourceFetchConfig(_FrozenConfigModel):
+    """Bound source-fetch timeout and retry behavior without hidden defaults."""
+
+    timeout_seconds: int = Field(
+        description="Per-attempt timeout from 1 to 120 seconds."
+    )
+    max_attempts: int = Field(description="Total source-fetch attempts from 1 to 10.")
+    initial_backoff_seconds: int = Field(
+        description="Initial retry backoff from 0 to 300 seconds."
+    )
+
+    @field_validator(
+        "timeout_seconds", "max_attempts", "initial_backoff_seconds", mode="before"
+    )
+    @classmethod
+    def validate_strict_integer(cls, value: object) -> object:
+        """Reject booleans where an explicit integer is required."""
+        if type(value) is bool:
+            raise ValueError("Boolean values are not accepted as integers")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout(cls, value: int) -> int:
+        """Keep each Telegram source attempt bounded."""
+        if not 1 <= value <= 120:
+            raise ValueError("timeout_seconds must be between 1 and 120")
+        return value
+
+    @field_validator("max_attempts")
+    @classmethod
+    def validate_attempts(cls, value: int) -> int:
+        """Keep source fetch retries bounded."""
+        if not 1 <= value <= 10:
+            raise ValueError("max_attempts must be between 1 and 10")
+        return value
+
+    @field_validator("initial_backoff_seconds")
+    @classmethod
+    def validate_backoff(cls, value: int) -> int:
+        """Validate the explicit initial retry delay."""
+        if not 0 <= value <= 300:
+            raise ValueError("initial_backoff_seconds must be between 0 and 300")
+        return value
+
+
+class AdvertisementReportsConfig(_FrozenConfigModel):
+    """Configure bounded read-only administrator advertisement reports."""
+
+    enabled: StrictBool = Field(description="Enable advertisement report commands.")
+    timezone: NonBlankString | None = Field(
+        default=None, description="Explicit IANA timezone used by report boundaries."
+    )
+    upcoming_horizon_days: StrictInt | None = Field(
+        default=None, description="Upcoming report horizon from 1 to 31 days."
+    )
+    failure_horizon_days: StrictInt | None = Field(
+        default=None, description="Failure report horizon from 1 to 90 days."
+    )
+    max_items: StrictInt | None = Field(
+        default=None, description="Maximum rendered report items from 1 to 50."
+    )
+    overflow_policy: NonBlankString | None = Field(
+        default=None, description="Explicit report overflow policy (truncate)."
+    )
+
+    @model_validator(mode="after")
+    def validate_enabled_contract(self) -> Self:
+        """Require every approved report policy only when reports are enabled."""
+        if not self.enabled:
+            return self
+        missing = tuple(
+            name
+            for name in (
+                "timezone",
+                "upcoming_horizon_days",
+                "failure_horizon_days",
+                "max_items",
+                "overflow_policy",
+            )
+            if getattr(self, name) is None
+        )
+        if missing:
+            raise ValueError(
+                "enabled advertisement reports require every report policy"
+            )
+        return self
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        """Validate an explicitly configured IANA timezone without fallback."""
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, KeyError, ValueError) as error:
+            raise ValueError("timezone must be a valid IANA timezone string") from error
+        return value
+
+    @field_validator("upcoming_horizon_days")
+    @classmethod
+    def validate_upcoming_horizon(cls, value: int | None) -> int | None:
+        """Keep the upcoming query horizon bounded."""
+        if value is not None and not 1 <= value <= 31:
+            raise ValueError("upcoming_horizon_days must be between 1 and 31")
+        return value
+
+    @field_validator("failure_horizon_days")
+    @classmethod
+    def validate_failure_horizon(cls, value: int | None) -> int | None:
+        """Keep the failure query horizon bounded."""
+        if value is not None and not 1 <= value <= 90:
+            raise ValueError("failure_horizon_days must be between 1 and 90")
+        return value
+
+    @field_validator("max_items")
+    @classmethod
+    def validate_max_items(cls, value: int | None) -> int | None:
+        """Keep every report below the approved item limit."""
+        if value is not None and not 1 <= value <= 50:
+            raise ValueError("max_items must be between 1 and 50")
+        return value
+
+    @field_validator("overflow_policy")
+    @classmethod
+    def validate_overflow_policy(cls, value: str | None) -> str | None:
+        """Accept only the approved non-stateful truncation behavior."""
+        if value is not None and value != "truncate":
+            raise ValueError("overflow_policy must be 'truncate'")
+        return value
+
+
 class AdvertisementConfig(_FrozenConfigModel):
-    """Hold the initial advertisement-routing skeleton only."""
+    """Hold advertisement routing and scheduled campaign configurations."""
+
+    source_fetch: AdvertisementSourceFetchConfig | None = Field(
+        default=None,
+        description="Explicit source-fetch execution policy for enabled campaigns.",
+    )
+    reports: AdvertisementReportsConfig | None = Field(
+        default=None,
+        description="Optional explicit administrator report configuration.",
+    )
 
     routes: tuple[AdvertisementRouteConfig, ...] = Field(
-        description="Configured advertisement routes."
+        default=(), description="Configured advertisement routes."
+    )
+    campaigns: tuple[AdvertisementCampaignConfig, ...] = Field(
+        default=(), description="Configured scheduled advertisement campaigns."
     )
 
 
@@ -489,9 +1045,18 @@ class ApplicationConfig(_FrozenConfigModel):
     logging: LoggingConfig = Field(description="Application logging configuration.")
     media: MediaStorageConfig = Field(default_factory=MediaStorageConfig)
     categorization: CategorizationConfig = Field(default_factory=CategorizationConfig)
+    semantic_duplicate: SemanticDuplicateConfig | None = Field(
+        default=None,
+        description="Explicit semantic policy; required only when effectively enabled.",
+    )
+    scoring: ScoringConfig | None = Field(
+        default=None,
+        description="Explicit delayed scoring policy; required only when enabled.",
+    )
     ai: AiConfig = Field(description="AI provider and routing configuration.")
     advertisements: AdvertisementConfig = Field(
-        description="Advertisement routing configuration."
+        default_factory=AdvertisementConfig,
+        description="Advertisement routing configuration.",
     )
 
     @model_validator(mode="after")
@@ -519,6 +1084,72 @@ class ApplicationConfig(_FrozenConfigModel):
             raise ValueError(
                 "source default_category_id references an unknown category"
             )
+        enabled_sources = [source for source in self.source_channels if source.enabled]
+        if self.features.advertisement_detection_enabled:
+            if any(
+                source.advertisement_detection_enabled is None
+                for source in enabled_sources
+            ):
+                raise ValueError(
+                    "enabled advertisement detection requires an explicit "
+                    "per-source flag"
+                )
+            advertisement_effectively_enabled = any(
+                source.advertisement_detection_enabled is True
+                for source in enabled_sources
+            )
+            if advertisement_effectively_enabled and not any(
+                policy.task is AITaskType.ADVERTISEMENT_DETECTION
+                for policy in self.ai.failure_policies
+            ):
+                raise ValueError(
+                    "enabled advertisement detection requires an explicit "
+                    "failure policy"
+                )
+        if self.features.duplicate_detection_enabled:
+            if any(
+                source.duplicate_detection_enabled is None for source in enabled_sources
+            ):
+                raise ValueError(
+                    "enabled semantic duplicate detection requires an explicit "
+                    "per-source flag"
+                )
+            semantic_effectively_enabled = any(
+                source.duplicate_detection_enabled is True for source in enabled_sources
+            )
+            if semantic_effectively_enabled:
+                if self.semantic_duplicate is None:
+                    raise ValueError(
+                        "enabled semantic duplicate detection requires explicit "
+                        "threshold and duplicate policy"
+                    )
+                if not any(
+                    policy.task is AITaskType.SEMANTIC_DUPLICATE
+                    for policy in self.ai.failure_policies
+                ):
+                    raise ValueError(
+                        "enabled semantic duplicate detection requires an explicit "
+                        "AI failure policy"
+                    )
+        if self.features.ai_scoring_enabled:
+            if self.scoring is None:
+                raise ValueError(
+                    "enabled AI scoring requires explicit delay and failure policy"
+                )
+            scoring_routes = [
+                route for route in self.ai.routes if route.task is AITaskType.SCORING
+            ]
+            if len(scoring_routes) != 1:
+                raise ValueError(
+                    "enabled AI scoring requires exactly one scoring route"
+                )
+            if any(
+                candidate.guard_policy is None
+                for candidate in scoring_routes[0].candidates
+            ):
+                raise ValueError(
+                    "enabled AI scoring requires explicit provider guard policies"
+                )
         destination_ids = {
             item.telegram_channel_id for item in self.destination_channels
         }
@@ -546,10 +1177,16 @@ class ApplicationConfig(_FrozenConfigModel):
 __all__ = [
     "SUPPORTED_CONFIGURATION_SCHEMA_VERSION",
     "AdminConfig",
+    "AdvertisementCampaignConfig",
     "AdvertisementConfig",
+    "AdvertisementReportsConfig",
     "AdvertisementRouteConfig",
+    "AdvertisementSourceFetchConfig",
+    "AiAuditConfig",
+    "AiCachePolicyConfig",
     "AiConfig",
     "AiProviderConfig",
+    "AiProviderGuardConfig",
     "AiRouteCandidateConfig",
     "AiTask",
     "AiTaskRouteConfig",
@@ -560,6 +1197,8 @@ __all__ = [
     "LoggingConfig",
     "MongoConfig",
     "PublishingConfig",
+    "ScoringConfig",
+    "ScoringFailurePolicy",
     "SecretReference",
     "SourceChannelConfig",
     "TelegramBotConfig",

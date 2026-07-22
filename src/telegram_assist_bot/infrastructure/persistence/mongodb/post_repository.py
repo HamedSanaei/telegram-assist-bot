@@ -12,6 +12,8 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from telegram_assist_bot.application.ports import (
+    AdvertisementPostUpdateRequest,
+    CategorizationPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
@@ -23,15 +25,25 @@ from telegram_assist_bot.application.ports import (
     PostRepositoryDataError,
     PostRepositoryUnavailableError,
     PostTransitionRequest,
+    ScoringPostUpdateRequest,
+    SemanticDuplicatePostUpdateRequest,
 )
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
+from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import Post, PostId, SourceMessageIdentity
+from telegram_assist_bot.domain.scoring import ScoringState
 from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
     InvalidPostDocumentError,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
     POST_DOCUMENT_SCHEMA_VERSION,
+    advertisement_processing_to_document,
+    categorization_processing_to_document,
     post_from_document,
     post_to_document,
+    scoring_processing_to_document,
+    semantic_duplicate_processing_to_document,
     status_transition_to_document,
 )
 
@@ -409,6 +421,318 @@ class MongoPostRepository:
         ):
             raise PostRepositoryDataError
         return persisted
+
+    async def update_advertisement(
+        self,
+        request: AdvertisementPostUpdateRequest,
+    ) -> Post:
+        """Persist result/failure and processing state with one atomic CAS."""
+        if type(request) is not AdvertisementPostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        state_filter: MongoDocument
+        if (
+            request.expected_processing_state
+            is AdvertisementProcessingState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter = {
+                "$or": [
+                    {"advertisement_processing": {"$exists": False}},
+                    {
+                        "advertisement_processing.state": (
+                            AdvertisementProcessingState.NOT_REQUESTED.value
+                        ),
+                        "advertisement_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "advertisement_processing.state": (
+                    request.expected_processing_state.value
+                ),
+                "advertisement_processing.version": (
+                    request.expected_processing_version
+                ),
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        updated: MongoDocument | None = None
+        current: MongoDocument | None = None
+        unavailable = False
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "advertisement_processing": (
+                                advertisement_processing_to_document(target)
+                            )
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                if updated is None:
+                    current = await self._collection.find_one(
+                        {"_id": target.post_id.value}
+                    )
+        except (PyMongoError, TimeoutError):
+            unavailable = True
+        if unavailable:
+            raise PostRepositoryUnavailableError
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.post_id != target.post_id
+            or persisted.advertisement_state is not target.advertisement_state
+            or persisted.advertisement_processing_version
+            != target.advertisement_processing_version
+            or persisted.advertisement_result != target.advertisement_result
+            or persisted.advertisement_failure != target.advertisement_failure
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def update_semantic_duplicate(
+        self, request: SemanticDuplicatePostUpdateRequest
+    ) -> Post:
+        """Persist one semantic state/result with an atomic processing CAS."""
+        if type(request) is not SemanticDuplicatePostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        if (
+            request.expected_processing_state is SemanticDuplicateState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter: MongoDocument = {
+                "$or": [
+                    {"semantic_duplicate_processing": {"$exists": False}},
+                    {
+                        "semantic_duplicate_processing.state": (
+                            SemanticDuplicateState.NOT_REQUESTED.value
+                        ),
+                        "semantic_duplicate_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "semantic_duplicate_processing.state": (
+                    request.expected_processing_state.value
+                ),
+                "semantic_duplicate_processing.version": (
+                    request.expected_processing_version
+                ),
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "semantic_duplicate_processing": (
+                                semantic_duplicate_processing_to_document(target)
+                            )
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                current = (
+                    None
+                    if updated is not None
+                    else await self._collection.find_one({"_id": target.post_id.value})
+                )
+        except (PyMongoError, TimeoutError):
+            raise PostRepositoryUnavailableError from None
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.semantic_duplicate_state is not target.semantic_duplicate_state
+            or persisted.semantic_duplicate_version != target.semantic_duplicate_version
+            or persisted.semantic_duplicate_result != target.semantic_duplicate_result
+            or persisted.semantic_duplicate_failure != target.semantic_duplicate_failure
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def update_categorization(
+        self, request: CategorizationPostUpdateRequest
+    ) -> Post:
+        """Persist one categorization state/result with an atomic processing CAS."""
+        if type(request) is not CategorizationPostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        if (
+            request.expected_processing_state is CategorizationState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter: MongoDocument = {
+                "$or": [
+                    {"categorization_processing": {"$exists": False}},
+                    {
+                        "categorization_processing.state": (
+                            CategorizationState.NOT_REQUESTED.value
+                        ),
+                        "categorization_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "categorization_processing.state": (
+                    request.expected_processing_state.value
+                ),
+                "categorization_processing.version": (
+                    request.expected_processing_version
+                ),
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "categorization_processing": (
+                                categorization_processing_to_document(target)
+                            )
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                current = (
+                    None
+                    if updated is not None
+                    else await self._collection.find_one({"_id": target.post_id.value})
+                )
+        except (PyMongoError, TimeoutError):
+            raise PostRepositoryUnavailableError from None
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.categorization_state is not target.categorization_state
+            or persisted.categorization_processing_version
+            != target.categorization_processing_version
+            or persisted.categorization_result != target.categorization_result
+            or persisted.categorization_failure != target.categorization_failure
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def update_scoring(self, request: ScoringPostUpdateRequest) -> Post:
+        """Persist one scoring state/result with an atomic processing CAS."""
+        if type(request) is not ScoringPostUpdateRequest:
+            raise InvalidPostRepositoryRequestError
+        target = request.post
+        if (
+            request.expected_processing_state is ScoringState.NOT_REQUESTED
+            and request.expected_processing_version == 0
+        ):
+            state_filter: MongoDocument = {
+                "$or": [
+                    {"scoring_processing": {"$exists": False}},
+                    {
+                        "scoring_processing.state": ScoringState.NOT_REQUESTED.value,
+                        "scoring_processing.version": 0,
+                    },
+                ]
+            }
+        else:
+            state_filter = {
+                "scoring_processing.state": request.expected_processing_state.value,
+                "scoring_processing.version": request.expected_processing_version,
+            }
+        query: MongoDocument = {
+            "_id": target.post_id.value,
+            "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+            "status": target.status.value,
+            "version": target.version,
+            **state_filter,
+        }
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                updated = await self._collection.find_one_and_update(
+                    query,
+                    {
+                        "$set": {
+                            "scoring_processing": scoring_processing_to_document(target)
+                        }
+                    },
+                    upsert=False,
+                    return_document=ReturnDocument.AFTER,
+                )
+                current = (
+                    None
+                    if updated is not None
+                    else await self._collection.find_one({"_id": target.post_id.value})
+                )
+        except (PyMongoError, TimeoutError):
+            raise PostRepositoryUnavailableError from None
+        if updated is None:
+            if current is None:
+                raise PostNotFoundError
+            _restore_post(current)
+            raise PostConcurrencyConflictError
+        persisted = _restore_post(updated)
+        if (
+            persisted.scoring_state is not target.scoring_state
+            or persisted.scoring_processing_version != target.scoring_processing_version
+            or persisted.scoring_result != target.scoring_result
+            or persisted.scoring_failure != target.scoring_failure
+        ):
+            raise PostRepositoryDataError
+        return persisted
+
+    async def get_for_scoring_completion(self, post_id: PostId) -> Post | None:
+        """Load an existing scoring target solely to resolve an expired request."""
+        if type(post_id) is not PostId:
+            raise InvalidPostRepositoryRequestError
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                document = await self._collection.find_one(
+                    {
+                        "_id": post_id.value,
+                        "schema_version": POST_DOCUMENT_SCHEMA_VERSION,
+                    }
+                )
+        except (PyMongoError, TimeoutError):
+            raise PostRepositoryUnavailableError from None
+        return None if document is None else _restore_post(document)
 
 
 __all__ = ("MongoPostRepository",)

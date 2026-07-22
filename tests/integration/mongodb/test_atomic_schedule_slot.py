@@ -15,9 +15,8 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.publication_reposito
 )
 
 if TYPE_CHECKING:
-    from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
-
     from telegram_assist_bot.application.ports import ScheduleReservation
+    from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
 
 
 def test_concurrent_slots_are_unique_ordered_and_destination_independent(

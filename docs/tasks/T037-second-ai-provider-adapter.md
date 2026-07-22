@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -100,6 +100,20 @@ git diff --check
 - ثبت Provider دوم و Modelهای مصوب در `docs/DECISIONS.md` بدون Secret.
 - افزودن Adapter/Config/Fixtureها به `docs/CODE_MAP.md` و همگام‌سازی معماری چندمدلی.
 - به‌روزرسانی example Config، `docs/ROADMAP.md`، `docs/STATUS.md` و نتایج همین فایل.
+
+## نتایج راستی‌آزمایی جاری
+
+- آزمون‌های متمرکز Provider دوم: `41 passed`.
+- suite کامل non-live با MongoDB محلی: `1059 passed`، بدون failure یا skip.
+- `mypy src tests scripts`: موفق.
+- `ruff format --check src tests scripts`: موفق.
+- `scripts/check_text_integrity.py --changed`: موفق.
+- `git diff --check`: موفق.
+- `ruff check src tests scripts`: موفق پس از اصلاح import-only دو فایل مجاور T036، بدون تغییر رفتار.
+- `ruff format --check src tests scripts`: موفق؛ `259 files already formatted`.
+- suite کامل non-live نهایی با MongoDB محلی: `1059 passed`.
+- baseline تأییدشدهٔ پیاده‌سازی پیش از اصلاح import-only: commit فعلی `736da7c`.
+- Adapterهای AI همچنان از Runtime، Worker، CLI و جریان‌های Telegram جدا هستند.
 
 ## تعریف Done
 

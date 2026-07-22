@@ -1,0 +1,23 @@
+{
+  "source_channel_id": -1001999888,
+  "source_message_id": 42,
+  "text": "📢 پست نمونه کانال @source_channel با خطوط متناوب.\nاین متن شامل نیم‌فاصله می‌گردد و لینک https://t.me/some_other_channel حذف می‌شود.\nکانال رسمی ما: @dest_channel ✨",
+  "entities": [
+    {
+      "type": "mention",
+      "offset": 18,
+      "length": 15
+    },
+    {
+      "type": "url",
+      "offset": 87,
+      "length": 31
+    },
+    {
+      "type": "custom_emoji",
+      "offset": 146,
+      "length": 2,
+      "custom_emoji_id": "54321"
+    }
+  ]
+}

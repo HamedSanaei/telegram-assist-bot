@@ -71,6 +71,104 @@ def _assign_attribute(target: object, name: str, value: object) -> None:
     setattr(target, name, value)
 
 
+def _enable_scoring(document: JsonObject) -> None:
+    """Turn the example route into one fully guarded scoring route."""
+    _set_at(document, ("features", "ai_scoring_enabled"), True)
+    _set_at(document, ("ai", "routes", 0, "task"), "content_scoring")
+    _set_at(
+        document,
+        ("ai", "routes", 0, "candidates", 0, "guard_policy"),
+        {
+            "concurrency_limit": 1,
+            "request_limit": 10,
+            "request_window_seconds": 60,
+            "reservation_seconds": 30,
+            "failure_threshold": 3,
+            "open_seconds": 60,
+            "rate_limit_cooldown_seconds": 60,
+        },
+    )
+
+
+def test_missing_legacy_scoring_flag_safely_disables_scoring(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Keep pre-T045 configurations loadable without enabling scoring."""
+    _as_object(valid_payload["features"]).pop("ai_scoring_enabled")
+    _as_object(valid_payload).pop("scoring")
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert not loaded.settings.features.ai_scoring_enabled
+    assert loaded.settings.scoring is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_path"),
+    [
+        (lambda value: _as_object(value).pop("scoring"), "<root>"),
+        (
+            lambda value: _as_object(_as_object(value)["scoring"]).pop("delay_seconds"),
+            "scoring.delay_seconds",
+        ),
+        (
+            lambda value: _set_at(value, ("scoring", "delay_seconds"), 1199),
+            "scoring.delay_seconds",
+        ),
+        (
+            lambda value: _as_object(_as_object(value)["scoring"]).pop(
+                "failure_policy"
+            ),
+            "scoring.failure_policy",
+        ),
+        (
+            lambda value: _set_at(
+                value, ("scoring", "failure_policy"), "continue_processing"
+            ),
+            "scoring.failure_policy",
+        ),
+    ],
+)
+def test_enabled_scoring_requires_explicit_valid_policy_and_delay(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    mutation: Callable[[JsonObject], object],
+    expected_path: str,
+) -> None:
+    """Reject missing, invalid, or sub-20-minute scoring configuration."""
+    _enable_scoring(valid_payload)
+    mutation(valid_payload)
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload), environ=synthetic_environ
+        )
+
+    assert expected_path in _paths(captured.value)
+
+
+def test_enabled_scoring_accepts_exact_minimum_without_score_gate(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Accept 1200 seconds and expose no minimum-score configuration."""
+    _enable_scoring(valid_payload)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.scoring is not None
+    assert loaded.settings.scoring.delay_seconds == 1200
+    assert not hasattr(loaded.settings.scoring, "minimum_ai_score")
+
+
 def test_structural_errors_are_aggregated_with_exact_paths(
     valid_payload: JsonObject,
     synthetic_environ: dict[str, str],
@@ -182,7 +280,7 @@ def test_semantic_and_secret_errors_are_aggregated_together(
         "advertisements.routes[1].name",
         "advertisements.routes[0].destination_names[1]",
         "advertisements.routes[0].destination_names[2]",
-        "ai.providers[1].name",
+        "ai.providers[3].name",
         "ai.routes[1].task",
         "ai.routes[0].candidates[1].priority",
         "ai.routes[0].candidates[1].model_name",
@@ -358,6 +456,7 @@ _FEATURE_BY_AI_TASK = {
     AiTask.ADVERTISEMENT_DETECTION: "advertisement_detection_enabled",
     AiTask.DUPLICATE_DETECTION: "duplicate_detection_enabled",
     AiTask.CONTENT_SCORING: "ai_scoring_enabled",
+    AiTask.CATEGORIZATION: "ai_categorization_enabled",
 }
 
 
@@ -369,10 +468,40 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
     task: AiTask,
 ) -> None:
     """Every supported task parses and satisfies its matching enabled feature."""
+    from telegram_assist_bot.application.ai.contracts import AITaskType
+
+    canonical_map = {
+        AiTask.ADVERTISEMENT_DETECTION: AITaskType.ADVERTISEMENT_DETECTION,
+        AiTask.DUPLICATE_DETECTION: AITaskType.SEMANTIC_DUPLICATE,
+        AiTask.CONTENT_SCORING: AITaskType.SCORING,
+        AiTask.CATEGORIZATION: AITaskType.CATEGORIZATION,
+    }
+
     features = _as_object(valid_payload["features"])
     for feature_name in _FEATURE_BY_AI_TASK.values():
         features[feature_name] = False
     features[_FEATURE_BY_AI_TASK[task]] = True
+    if task is AiTask.CATEGORIZATION:
+        _set_at(
+            valid_payload, ("categorization", "method_order"), ["ai", "source_default"]
+        )
+        _set_at(
+            valid_payload, ("categorization", "fallback_policy"), "fallback_baseline"
+        )
+    if task is AiTask.CONTENT_SCORING:
+        _set_at(
+            valid_payload,
+            ("ai", "routes", 0, "candidates", 0, "guard_policy"),
+            {
+                "concurrency_limit": 1,
+                "request_limit": 10,
+                "request_window_seconds": 60,
+                "reservation_seconds": 30,
+                "failure_threshold": 3,
+                "open_seconds": 60,
+                "rate_limit_cooldown_seconds": 60,
+            },
+        )
     _set_at(valid_payload, ("ai", "routes", 0, "task"), task.value)
 
     loaded = load_configuration(
@@ -380,7 +509,85 @@ def test_every_ai_task_enum_member_is_typed_and_route_compatible(
         environ=synthetic_environ,
     )
 
-    assert loaded.settings.ai.routes[0].task is task
+    assert loaded.settings.ai.routes[0].task is canonical_map[task]
+
+
+def test_legacy_missing_ai_categorization_flag_is_disabled(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configurations remain valid without enabling T044 implicitly."""
+    _as_object(valid_payload["features"]).pop("ai_categorization_enabled", None)
+    categorization = _as_object(valid_payload["categorization"])
+    categorization.pop("method_order", None)
+    categorization.pop("fallback_policy", None)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.features.ai_categorization_enabled is False
+
+
+def test_enabled_ai_categorization_requires_explicit_order_and_fallback(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Enabled categorization has no hidden method-order or fallback default."""
+    _set_at(valid_payload, ("features", "ai_categorization_enabled"), True)
+    categorization = _as_object(valid_payload["categorization"])
+    categorization.pop("method_order", None)
+    categorization.pop("fallback_policy", None)
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_method_order" in _matching_issues(
+        captured.value, "categorization.method_order"
+    )
+    assert "missing_fallback_policy" in _matching_issues(
+        captured.value, "categorization.fallback_policy"
+    )
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ["ai", "source_default", "keyword"],
+        ["ai", "source_default", "source_default"],
+        ["keyword", "keyword", "source_default"],
+    ],
+)
+def test_categorization_method_order_rejects_invalid_precedence(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    order: list[str],
+) -> None:
+    """The explicit list is unique and source_default is exactly once and last."""
+    _set_at(valid_payload, ("features", "ai_categorization_enabled"), True)
+    _set_at(valid_payload, ("categorization", "method_order"), order)
+    _set_at(
+        valid_payload,
+        ("categorization", "fallback_policy"),
+        "fallback_baseline",
+    )
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "invalid_method_order" in _matching_issues(
+        captured.value, "categorization.method_order"
+    )
 
 
 @pytest.mark.parametrize(
@@ -631,7 +838,7 @@ def _introduce_duplicate(payload: JsonObject, duplicate_case: str) -> None:
             "destination_channels[0].name",
             "duplicate_value",
         ),
-        ("provider_name", "ai.providers[1].name", "duplicate_value"),
+        ("provider_name", "ai.providers[3].name", "duplicate_value"),
         ("ai_task", "ai.routes[1].task", "duplicate_value"),
         (
             "candidate_priority",
@@ -780,6 +987,18 @@ def test_enabled_ai_feature_requires_its_matching_route(
     for name in _FEATURE_BY_AI_TASK.values():
         features[name] = False
     features[feature_name] = True
+    if route_task is AiTask.ADVERTISEMENT_DETECTION:
+        _set_at(
+            valid_payload,
+            ("source_channels", 0, "advertisement_detection_enabled"),
+            True,
+        )
+    if route_task is AiTask.DUPLICATE_DETECTION:
+        _set_at(
+            valid_payload,
+            ("source_channels", 0, "duplicate_detection_enabled"),
+            True,
+        )
     ai = _as_object(valid_payload["ai"])
     routes = _as_list(ai["routes"])
     route = _as_object(routes[0])
@@ -795,6 +1014,237 @@ def test_enabled_ai_feature_requires_its_matching_route(
         captured.value,
         f"features.{feature_name}",
     )
+
+
+def test_disabled_advertisement_detection_needs_no_explicit_source_or_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configurations remain valid while advertisement AI is disabled."""
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("advertisement_detection_enabled")
+    ai = _as_object(valid_payload["ai"])
+    ai["failure_policies"] = []
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.features.advertisement_detection_enabled is False
+    assert loaded.settings.source_channels[0].advertisement_detection_enabled is None
+
+
+def test_enabled_advertisement_detection_requires_explicit_source_flag(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Global enablement cannot silently opt an enabled source into AI."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("advertisement_detection_enabled")
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_feature_policy" in _matching_issues(
+        captured.value,
+        "source_channels[0].advertisement_detection_enabled",
+    )
+
+
+def test_effective_advertisement_detection_requires_explicit_failure_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Effective advertisement detection has no implicit failure policy."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _as_object(valid_payload["ai"])["failure_policies"] = []
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "missing_failure_policy" in _matching_issues(
+        captured.value,
+        "ai.failure_policies",
+    )
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "continue_processing",
+        "stop_processing",
+        "retry_later",
+        "manual_review",
+    ],
+)
+def test_advertisement_failure_policy_accepts_only_approved_actions(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    action: str,
+) -> None:
+    """Every approved explicit policy value loads without becoming a default."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _set_at(valid_payload, ("ai", "failure_policies", 0, "action"), action)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload),
+        environ=synthetic_environ,
+    )
+
+    assert loaded.settings.ai.failure_policies[0].action.value == action
+
+
+def test_unknown_advertisement_failure_policy_is_rejected(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """An enabled route rejects values outside the approved policy set."""
+    _set_at(valid_payload, ("features", "advertisement_detection_enabled"), True)
+    _set_at(
+        valid_payload,
+        ("source_channels", 0, "advertisement_detection_enabled"),
+        True,
+    )
+    _set_at(
+        valid_payload,
+        ("ai", "failure_policies", 0, "action"),
+        "implicit_default",
+    )
+
+    with pytest.raises(ConfigurationValidationError) as captured:
+        load_configuration(
+            configuration_writer(valid_payload),
+            environ=synthetic_environ,
+        )
+
+    assert "ai.failure_policies[0].action" in _paths(captured.value)
+
+
+def _enable_semantic_duplicate(payload: JsonObject) -> None:
+    """Enable semantic checks using explicit route and final-failure policy."""
+    _set_at(payload, ("features", "duplicate_detection_enabled"), True)
+    _set_at(
+        payload,
+        ("source_channels", 0, "duplicate_detection_enabled"),
+        True,
+    )
+    ai = _as_object(payload["ai"])
+    route = dict(_as_object(_as_list(ai["routes"])[0]))
+    route["task"] = AiTask.DUPLICATE_DETECTION.value
+    _as_list(ai["routes"]).append(route)
+    policy = dict(_as_object(_as_list(ai["failure_policies"])[0]))
+    policy["task"] = AiTask.DUPLICATE_DETECTION.value
+    _as_list(ai["failure_policies"]).append(policy)
+
+
+def test_disabled_semantic_duplicate_needs_no_policy_or_threshold(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+) -> None:
+    """Legacy configuration remains valid while semantic detection is disabled."""
+    valid_payload.pop("semantic_duplicate")
+    source = _as_object(_as_list(valid_payload["source_channels"])[0])
+    source.pop("duplicate_detection_enabled")
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is None
+    assert loaded.settings.source_channels[0].duplicate_detection_enabled is None
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.88, 1.0])
+def test_enabled_semantic_duplicate_accepts_explicit_threshold_boundaries(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    threshold: float,
+) -> None:
+    """Only an explicit bounded threshold configures semantic consistency."""
+    _enable_semantic_duplicate(valid_payload)
+    _set_at(valid_payload, ("semantic_duplicate", "threshold"), threshold)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is not None
+    assert loaded.settings.semantic_duplicate.threshold == threshold
+
+
+@pytest.mark.parametrize("policy", ["reject", "manual_review", "continue_processing"])
+def test_enabled_semantic_duplicate_accepts_only_approved_result_policies(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    policy: str,
+) -> None:
+    """The three approved result policies are explicit configuration values."""
+    _enable_semantic_duplicate(valid_payload)
+    _set_at(valid_payload, ("semantic_duplicate", "duplicate_policy"), policy)
+
+    loaded = load_configuration(
+        configuration_writer(valid_payload), environ=synthetic_environ
+    )
+
+    assert loaded.settings.semantic_duplicate is not None
+    assert loaded.settings.semantic_duplicate.duplicate_policy.value == policy
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("threshold", None),
+        ("threshold", -0.01),
+        ("threshold", 1.01),
+        ("duplicate_policy", None),
+        ("duplicate_policy", "implicit_default"),
+    ],
+)
+def test_enabled_semantic_duplicate_rejects_missing_or_invalid_policy(
+    valid_payload: JsonObject,
+    synthetic_environ: dict[str, str],
+    configuration_writer: ConfigurationWriter,
+    field: str,
+    value: object,
+) -> None:
+    """No threshold or duplicate-result policy is inferred by code."""
+    _enable_semantic_duplicate(valid_payload)
+    semantic = _as_object(valid_payload["semantic_duplicate"])
+    if value is None:
+        semantic.pop(field)
+    else:
+        semantic[field] = value
+
+    with pytest.raises(ConfigurationValidationError):
+        load_configuration(
+            configuration_writer(valid_payload), environ=synthetic_environ
+        )
 
 
 def test_enabled_provider_requires_an_api_key_reference(

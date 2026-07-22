@@ -1,0 +1,28 @@
+{
+  "grouped_id": 999888,
+  "messages": [
+    {
+      "source_channel_id": -1001999888,
+      "source_message_id": 102,
+      "media_file_id": "file-media-2.jpg",
+      "mime_type": "image/jpeg",
+      "file_size": 2048
+    },
+    {
+      "source_channel_id": -1001999888,
+      "source_message_id": 101,
+      "caption": "آلبوم جدید همراه با عکس‌های اختصاصی.\nبرنامه‌ریزی دقیق با نیم‌فاصله 📸",
+      "entities": [
+        {
+          "type": "custom_emoji",
+          "offset": 62,
+          "length": 2,
+          "custom_emoji_id": "98765"
+        }
+      ],
+      "media_file_id": "file-media-1.jpg",
+      "mime_type": "image/jpeg",
+      "file_size": 1024
+    }
+  ]
+}

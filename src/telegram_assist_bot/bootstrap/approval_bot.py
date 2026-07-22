@@ -10,9 +10,13 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from aiogram import Dispatcher, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message  # noqa: TC002
 
+from telegram_assist_bot.application.advertisements.report_advertisement_runs import (
+    RenderAdvertisementReport,
+    ReportAdvertisementRuns,
+)
 from telegram_assist_bot.application.approvals import (
     BuildDestinationKeyboard,
     CallbackTokenService,
@@ -27,7 +31,7 @@ from telegram_assist_bot.application.operational_approval import (
     ApprovalDeliveryWorker,
     OperationalDestination,
 )
-from telegram_assist_bot.application.ports import BotUpdate
+from telegram_assist_bot.application.ports import AdvertisementReportKind, BotUpdate
 from telegram_assist_bot.application.scheduling import CancelScheduledPost, SchedulePost
 from telegram_assist_bot.bootstrap.admin_approval import (
     create_admin_approval_components,
@@ -42,7 +46,9 @@ from telegram_assist_bot.domain import (
     AdminPermission,
     CancellationPolicy,
 )
+from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
+    MongoAdvertisementSlotRepository,
     MongoApprovalPostLoader,
     MongoNativeScheduleRepository,
     MongoOperationalApprovalRepository,
@@ -51,6 +57,9 @@ from telegram_assist_bot.infrastructure.persistence.mongodb import (
     initialize_native_schedule_indexes,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
+)
+from telegram_assist_bot.presentation.bot.advertisement_reports import (
+    AdvertisementReportHandlers,
 )
 from telegram_assist_bot.presentation.bot.runtime_handlers import OperationalBotHandlers
 from telegram_assist_bot.shared.config import LogLevel
@@ -154,6 +163,10 @@ class ApprovalBotApplication:
                 destination_names=tuple(
                     item.name for item in settings.destination_channels
                 ),
+                categories=tuple(
+                    Category(c.category_id, c.display_name, c.active)
+                    for c in settings.categorization.categories
+                ),
             )
             schedule_repository = MongoScheduleRepository(schedules, queues)
             native_schedule_repository = MongoNativeScheduleRepository(
@@ -218,6 +231,58 @@ class ApprovalBotApplication:
                 await handlers.start(
                     BotUpdate(actor_id, message.chat.id, message.chat.type)
                 )
+
+            advertisement_config = getattr(settings, "advertisements", None)
+            report_config = (
+                None
+                if advertisement_config is None
+                else getattr(advertisement_config, "reports", None)
+            )
+            if report_config is not None and report_config.enabled:
+                if (
+                    report_config.timezone is None
+                    or report_config.upcoming_horizon_days is None
+                    or report_config.failure_horizon_days is None
+                    or report_config.max_items is None
+                ):
+                    raise ApprovalBotStartupError
+                advertisement_slots = MongoAdvertisementSlotRepository(
+                    database["advertisement_slots"]
+                )
+                await advertisement_slots.initialize_indexes()
+                report_handlers = AdvertisementReportHandlers(
+                    components.authorize,
+                    ReportAdvertisementRuns(
+                        advertisement_slots,
+                        timezone=report_config.timezone,
+                        upcoming_horizon_days=report_config.upcoming_horizon_days,
+                        failure_horizon_days=report_config.failure_horizon_days,
+                        max_items=report_config.max_items,
+                        clock=_utc_now,
+                    ),
+                    RenderAdvertisementReport(),
+                    components.gateway,
+                )
+
+                async def run_report(
+                    message: Message, kind: AdvertisementReportKind
+                ) -> None:
+                    actor_id = 0 if message.from_user is None else message.from_user.id
+                    await report_handlers.handle(
+                        BotUpdate(actor_id, message.chat.id, message.chat.type), kind
+                    )
+
+                @router.message(Command("ads_today"))
+                async def ads_today_handler(message: Message) -> None:
+                    await run_report(message, AdvertisementReportKind.TODAY)
+
+                @router.message(Command("ads_upcoming"))
+                async def ads_upcoming_handler(message: Message) -> None:
+                    await run_report(message, AdvertisementReportKind.UPCOMING)
+
+                @router.message(Command("ads_failures"))
+                async def ads_failures_handler(message: Message) -> None:
+                    await run_report(message, AdvertisementReportKind.FAILURES)
 
             @router.callback_query()
             async def callback_handler(query: CallbackQuery) -> None:

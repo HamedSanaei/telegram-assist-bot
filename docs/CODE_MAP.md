@@ -11,10 +11,9 @@ T006 نیز Composition Root، CLI و lifecycle واقعی Config/Logging/MongoD
 readiness و shutdown امن متصل کرده است. Milestone 1 (T007–T012) اکنون login و
 Session محافظت‌شده، validation حساب/کانال، crawl روز جاری، Listener زنده، مسیر
 واحد ingest/claim اتمیک و restart recovery را فراهم می‌کند. Milestone 2
-(T013–T019) نیز ذخیره و پاک‌سازی خصوصی Media، Album پایدار، duplicate دقیق،
-محتوای مستقل مقصد، دسته‌بندی پایه و pipeline قابل‌بازیابی را افزوده است. AI،
-هنوز پیاده نشده است. Milestone 3 تعامل Bot API/Approval و Milestone 4 انتشار
-User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompaction را کامل کرد.
+15: محتوای مستقل مقصد، دسته‌بندی پایه و pipeline قابل‌بازیابی را افزوده است.
+16: Milestone 3 تعامل Bot API/Approval و Milestone 4 انتشار User API را کامل نمودند.
+17: Milestone 5 (T034–T046) ساختار کامل AI، زیرساخت چند Provider/Model، Queue، Retry/Fallback، Cache/Metrics و ۴ Feature اصلی (تبلیغات، دپلیکیت سمانتیک، دسته‌بندی و scoring) را به همراه تست‌های Contract و Integration تثبیت کرد.
 
 ## ساختار فعلی
 
@@ -39,6 +38,10 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   ├── py.typed
 │   ├── domain/
 │   │   ├── __init__.py
+│   │   ├── ai_job.py
+│   │   ├── advertisements/
+│   │   │   ├── __init__.py
+│   │   │   └── campaign.py
 │   │   └── posts/
 │   │       ├── __init__.py
 │   │       ├── entities.py
@@ -46,7 +49,34 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │       ├── models.py
 │   │       └── status.py
 │   ├── application/
+│   │   ├── config/
+│   │   │   └── advertisements.py
+│   │   ├── ai/
+│   │   │   ├── __init__.py
+│   │   │   ├── claim_ai_job.py
+│   │   │   ├── contracts.py
+│   │   │   ├── enqueue_ai_job.py
+│   │   │   ├── exceptions.py
+│   │   │   ├── prompt_registry.py
+│   │   │   ├── response_normalizer.py
+│   │   │   ├── response_parser.py
+│   │   │   ├── response_validator.py
+│   │   │   ├── retry.py
+│   │   │   ├── routing.py
+│   │   │   ├── schemas.py
+│   │   │   ├── task_handlers/
+│   │   │   │   └── categorization.py
+│   │   │   ├── use_cases/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── execute_ai_with_fallback.py
+│   │   │   └── prompts/
+│   │   │       ├── advertisement_detection.txt
+│   │   │       ├── categorization.txt
+│   │   │       ├── scoring.txt
+│   │   │       └── semantic_duplicate.txt
 │   │   ├── authenticate_telegram_session.py
+│   │   ├── use_cases/
+│   │   │   └── categorize_with_ai.py
 │   │   ├── validate_telegram_session.py
 │   │   ├── crawl_today_text_posts.py
 │   │   ├── handle_live_message.py
@@ -54,11 +84,20 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 │   │   ├── text_ingestion.py
 │   │   └── ports/
 │   │       ├── __init__.py
+│   │       ├── ai_job_repository.py
+│   │       ├── ai_provider.py
 │   │       ├── clock.py
 │   │       ├── post_repository.py
 │   │       └── telegram_source_gateway.py
 │   ├── infrastructure/
 │   │   ├── __init__.py
+│   │   ├── ai/
+│   │   │   ├── __init__.py
+│   │   │   ├── deepseek.py
+│   │   │   └── z_ai.py
+│   │   ├── mongodb/
+│   │   │   ├── __init__.py
+│   │   │   └── ai_job_repository.py
 │   │   ├── persistence/
 │   │       ├── __init__.py
 │   │       └── mongodb/
@@ -170,15 +209,25 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `domain/posts/entities.py` | Entity مستقل از SDK با مختصات UTF-16 و metadata محدود Custom Emoji |
 | `domain/posts/status.py` | Enumها، جدول immutable Transition و history recordهای UTC |
 | `domain/posts/errors.py` | Exceptionهای Domain برای invariant، زمان، transition، version و تغییر محتوای اصلی |
+| `domain/ai_job.py` | مدل دامنه صف کارهای AI شامل وضعیت‌ها، مهلت اجاره (lease)، کنترل همروندی خوش‌بینانه و اعتبارسنجی |
+| `domain/advertisement.py` | نتیجهٔ استاندارد تشخیص تبلیغ، چهار سیاست شکست مصوب و state مستقل پردازش تبلیغات |
+| `domain/ai/provider_health.py` | وضعیت مستقل Provider/Model، Reservationهای چندگانه، پنجره ثابت درخواست و ماشین Closed/Open/HalfOpen |
 | `domain/posts/__init__.py` | API عمومی و مستند قرارداد Post Domain |
 | `domain/media/` | هویت و metadata immutable فایل Media بدون وابستگی به Filesystem/Telegram |
-| `domain/duplicates/` | نتیجهٔ نسخه‌دار duplicate دقیق و reference تطبیق‌یافته |
+| `domain/duplicates/` | نتیجهٔ exact سازگار و نتیجه/state/policy نسخه‌دار semantic با similarity و confidence مستقل |
 | `domain/categories/` | هویت دسته و نتیجهٔ auditپذیر دسته‌بندی پایه/دستی |
 | `domain/publication.py` و `domain/scheduling.py` | stateهای Publication/Schedule، identity نسخه‌دار، lease، failure و audit due |
 | `application/ports/post_repository.py` | insert یکتا با canonical ID/Conflict، claim اتمیک مرحلهٔ بعد، read/list و CAS مستقل از driver |
 | `application/ports/telegram_source_gateway.py` | DTO، Port، result و errorهای application-owned برای auth، validation، History و subscription |
 | `application/ports/media.py` | Portهای Stream/Storage/Persistence و DTOهای Media، Album، duplicate، category، artifact و readiness |
 | `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
+| `application/ports/ai_job_repository.py` | قرارداد درگاه پایدار صف کارهای هوش مصنوعی |
+| `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
+| `application/ports/provider_state_repository.py` | Port رزرو اتمیک ظرفیت و ثبت outcome تایپ‌شدهٔ Provider/Model |
+| `application/ports/ai_cache_repository.py` | قرارداد Cache نسخه‌دار، lookup معتبر و first-valid-write-wins مستقل از MongoDB |
+| `application/ports/ai_audit_repository.py` | قرارداد eventهای immutable، sanitized و idempotent اجرای AI |
+| `application/ports/post_repository.py` | Port و درخواست‌های CAS افزایشی نتیجه/شکست تبلیغات و Duplicate معنایی در کنار قراردادهای پایدار Post |
+| `application/ports/provider_metrics_repository.py` | delta و snapshot آمار تجمعی مستقل هر Provider/Model |
 | `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
@@ -194,11 +243,38 @@ User API، idempotency، صف مقصد، Worker leaseدار و لغو/recompacti
 | `application/categorize_post.py` | precedence دستی، keyword قطعی و default منبع؛ policy نسخه ۱ |
 | `application/prepare_post_pipeline.py` | resume مرحله‌ای از MongoDB، artifact مستقل مقصد و readiness اتمیک |
 | `application/runtime_ingestion.py` | مسیر مشترک History/Live؛ observation پیش‌دانلود، claim/lease و anchor canonical Album، isolation خطای هر گروه و preparation idempotent |
+| `application/ai/contracts.py` | قراردادهای عمومی AI شامل `AITaskType` و `AIResult` |
+| `application/ai/schemas.py` | انتیتی‌ها و اعتبارسنجی ورودی/خروجی‌های AI |
+| `application/ai/exceptions.py` | طبقه‌بندی و استثناهای پارس و اعتبارسنجی پاسخ هوش مصنوعی |
+| `application/ai/response_parser.py` | پارسر پاسخ ارائه‌دهنده‌های هوش مصنوعی با پشتیبانی از حداکثر یک دور اصلاح (Repair) قطعی و اعتبارسنجی عمق JSON |
+| `application/ai/response_validator.py` | اعتبارسنجی پاسخ هوش مصنوعی بر اساس Pydantic با حالت سخت‌گیرانه (Strict) و ممانعت از فیلدهای ناشناخته (extra=forbid) |
+| `application/ai/response_normalizer.py` | یکسان‌ساز نتایج ارائه‌دهنده‌های متفاوت تلقیح شده در AIResult استاندارد |
+| `application/ai/enqueue_ai_job.py` | Use Case برای درج idempotent کارها با کلید یکتا و سطح اولویت |
+| `application/ai/claim_ai_job.py` | Use Case برای دریافت و رزرو اتمیک کارهای due بر اساس اولویت و مهلت اجاره |
+| `application/ai/routing.py` | انتخاب و رتبه‌بندی قطعی کاندیداهای کارهای AI بر اساس نوع وظیفه و اولویت |
+| `application/ai/retry.py` | اجرای نامتقارن و بازآزمایی خطاهای گذرا با Backoff و Jitter روی مدل‌های هوش مصنوعی |
+| `application/ai/provider_guard.py` | Guard هر تلاش خارجی با policy صریح، Reservation پایدار، outcome امن و nearest eligibility |
+| `application/ai/cache_key.py` | canonical JSON UTF-8، hash رمزنگاری‌شده و هویت Cache نسخه‌دار بدون Provider/Model |
+| `application/ai/use_cases/execute_ai_with_fallback.py` | ارکستراتور انتخاب، Retry/Fallback و Guard با bypass کامل Provider روی Cache hit و side effectهای امن Audit/Metrics |
+| `application/detect_advertisement.py` | enqueue یکتای `advertisement_detection` با رعایت هم‌زمان flag سراسری/per-source و حفظ متن اصلی |
+| `application/ai/task_handlers/advertisement_detection.py` | اعمال idempotent نتیجه یا شکست نهایی AIJob روی Post با CAS، audit امن و handoff تایپ‌شده بررسی دستی |
+| `application/detect_semantic_duplicate.py` | short-circuit exact، query نامزد ۱۴روزه و enqueue یکتای یک AIJob semantic با context بدون شناسه داخلی |
+| `application/ports/semantic_duplicate_candidates.py` | projection application-owned نامزدها و Port query با Clock ثابت |
+| `application/ai/task_handlers/semantic_duplicate.py` | validation آستانه، انتخاب قطعی بیشترین similarity و اعمال result/failure با CAS و Audit امن |
+| `infrastructure/mongodb/ai_job_repository.py` | پیاده‌سازی مخزن کارهای هوش مصنوعی با به روزرسانی اتمیک و همروند دیتابیس و تعیین ایندکس‌ها |
+| `infrastructure/mongodb/provider_state_repository.py` | Adapter اتمیک MongoDB برای ظرفیت، پنجره درخواست، Cooldown، Circuit و Reservationهای بدون TTL |
+| `infrastructure/mongodb/ai_cache_repository.py` | Cache disposable با unique identity، TTL، expiry صریح و write اتمیک |
+| `infrastructure/mongodb/ai_audit_repository.py` | Audit append-only با event ID یکتا، indexهای query و retention اختیاری |
+| `infrastructure/mongodb/provider_metrics_repository.py` | increment اتمیک شمارنده‌ها، tokenها و مجموع/sample latency بدون average mutable |
+| `infrastructure/ai/z_ai.py` | آداپتور تک-Attempt ارائه‌دهنده z-ai با مدل glm-4.7-flash، رد هدایت مجدد و Base URL غیراستاندارد، و طبقه‌بندی و پاک‌سازی خطاها |
+| `infrastructure/ai/deepseek.py` | آداپتور تک-Attempt DeepSeek برای Modelهای allowlisted v4، با capability ثابت، host/redirect allowlist، سقف پاسخ و خطاهای redacted؛ بدون Retry/Fallback و بدون اتصال Runtime |
+| `application/ai/prompt_registry.py` | رجیستری پرامپت‌ها با محاسبه هش قطعی و بارگذاری قالب‌ها |
 | `application/ports/__init__.py` | API عمومی Port و قراردادهای Persistence پست |
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
-| `infrastructure/persistence/mongodb/indexes.py` | تعریف، ساخت تکرارشونده و Fail-fast دو Index دقیق `uq_posts_source_identity_v1` و `ttl_posts_expires_at_v1` |
-| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity و markerهای افزایشی claim با backward read |
-| `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim اتمیک، query غیرمنقضی و CAS |
+| `infrastructure/persistence/mongodb/indexes.py` | Indexهای source identity، TTL و scan قطعی پنجره semantic با validation تکرارشونده و fail-fast |
+| `infrastructure/persistence/mongodb/semantic_duplicate_candidates.py` | query حداقلی MongoDB برای نامزدهای معتبر ۱۴روزه با ترتیب قطعی |
+| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity و state/result تبلیغ و semantic با default امن legacy |
+| `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
 | `infrastructure/persistence/mongodb/content_repository.py` | Media و preparation به‌همراه mapper سازگار legacy و claim/lease/retry/permanent state برای Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
@@ -479,3 +555,97 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 `directConnection=true` نیاز دارد؛ هیچ تست Foundation به production، Telegram یا AI
 متصل نمی‌شود و نبود MongoDB باعث skip خاموش نمی‌شود. تست live Telegram اختیاری و
 از suite پیش‌فرض حذف است.
+
+## امتیازدهی تأخیری AI (T045)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/scoring.py` و `domain/posts/models.py` | state مستقل scoring، نتیجهٔ strict، failure metadata و transitionهای CAS |
+| `application/use_cases/schedule_ai_scoring.py` | boundary صریح approval، محاسبهٔ UTC due و enqueue قطعی Job یکتا |
+| `application/use_cases/apply_ai_score.py` | تبدیل AIResult استاندارد، persistence یک‌باره، retry/unavailable و fan-out منطقی |
+| `application/ai/task_handlers/scoring.py` | seam ایزولهٔ Worker برای claimed Job و stale check پیش از Provider |
+| `application/scoring_approval.py` و `application/approvals/services.py` | refresh هدر از state تازه با حفظ keyboard و DestinationSelection |
+| `infrastructure/persistence/mongodb/post_mapper.py` و `post_repository.py` | mapper افزایشی legacy-safe و update اتمی scoring با expected version/state |
+| `tests/unit/application/test_delayed_ai_scoring.py` و `test_apply_ai_score.py` | delay، boundary، idempotency، failure policy و stale execution |
+| `tests/integration/workflows/test_delayed_ai_scoring.py` | MongoDB واقعی، due claim، restart، score persistence و legacy Post |
+
+## دریافت و Cache منبع تبلیغ (T049)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_source.py` | هویت پایدار منبع، snapshot نسخه‌دار، مرجع Media ذخیره‌شده و hash محتوای canonical UTF-8 |
+| `application/advertisements/fetch_advertisement_source.py` | اجرای policyهای `latest`، `cached` و `periodic_refresh` با timeout/retry صریح و fallback مصوب |
+| `application/ports/advertisement_repository.py` | قرارداد snapshot جاری، CAS نسخه، ثبت شکست امن و indexهای retention |
+| `application/ports/advertisement_source_gateway.py` | DTO و خطاهای مستقل از SDK برای دریافت Post/Album از Telegram User API |
+| `infrastructure/telegram/user/advertisement_source_gateway.py` | resolve امن URL عمومی Telegram و نگاشت فوری Telethon به DTO داخلی |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | snapshot جاری یکتا، تاریخچهٔ immutable، CAS رقابتی و TTL فقط برای نسخه‌های تاریخی |
+| `tests/unit/application/advertisements/` و `tests/integration/advertisements/` | policy، URL، Entity/Media/Album، retry، restart و رقابت روی MongoDB واقعی |
+
+## Slotهای پایدار تبلیغات (T050)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_slot.py` | هویت قطعی campaign+destination+UTC، state پایه و audit امن DST |
+| `application/advertisements/expand_advertisement_slots.py` | expansion بازهٔ inclusive، تبدیل ZoneInfo، انتخاب fold اول و reconciliation |
+| `application/ports/advertisement_repository.py` | قرارداد مستقل repository برای upsert و reconciliation Slot |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | collection اختصاصی Slot، unique/due index و حفظ اجرای Completed |
+| `tests/unit/application/advertisements/test_expand_advertisement_slots.py` | تاریخ/زمان/مقصد چندگانه، DST و عدم فعالیت Campaign غیرفعال |
+| `tests/integration/mongodb/test_advertisement_slots.py` | رقابت، restart، index یکتا و reconciliation Config روی MongoDB واقعی |
+
+## انتشار یکتای تبلیغات (T051)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/advertisement_slot.py` | lifecycle اجرای Slot، مالک/Lease، Retry، نتیجهٔ terminal و Audit انتشار |
+| `application/advertisements/publish_advertisement_slot.py` | claim یک Slot due، ساخت payload وفادار از Snapshot و استفاده از Publication یکتای T029 |
+| `application/ports/advertisement_repository.py` | عملیات CAS برای claim، complete، defer و fail Slot |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | claim اتمیک قدیمی‌ترین Slot، بازیابی Lease و persistence امن نتیجه/تأخیر |
+| `workers/advertisement_publication_worker.py` | seam polling ایزوله و ثبت‌نشده در Runtime برای اجرای use case |
+| `tests/unit/application/advertisements/test_publish_advertisement_slot.py` | fidelity متن/Entity/Album، Retry، ambiguity، guard و CAS |
+| `tests/integration/advertisements/test_idempotent_advertisement_publication.py` | رقابت Worker، Restart/Lease، idempotency و Audit روی MongoDB واقعی |
+
+## حل تداخل صف تبلیغ (T052)
+
+| مسیر | مسئولیت |
+|---|---|
+| `domain/publication_collision.py` | projection و planner خالص اولویت، tie-break، فاصلهٔ دوطرفه و حفظ ترتیب |
+| `domain/advertisement_slot.py` | `effective_due_at`، state حل تداخل و audit امن بدون تغییر هویت Slot |
+| `application/advertisements/resolve_publication_collision.py` | orchestration مقصد و Retry محدود تعارض CAS |
+| `application/ports/publication_collision.py` | snapshot حداقلی و apply-plan مستقل از MongoDB |
+| `infrastructure/persistence/mongodb/publication_collision_repository.py` | CAS اسناد Slot/normal، همگام‌سازی queue و recovery idempotent |
+| `tests/unit/application/advertisements/test_resolve_publication_collision.py` | مرز gap، اولویت/lexical، ترتیب عادی و conflict تایپ‌شده |
+| `tests/integration/advertisements/test_advertisement_queue_collision.py` | رقابت، Restart، claim boundary و immutability روی MongoDB واقعی |
+
+## گزارش مدیریتی تبلیغات (T053)
+
+| مسیر | مسئولیت |
+|---|---|
+| `application/advertisements/report_advertisement_runs.py` | ساخت مرز UTC از timezone صریح، Query محدود و DTO/Renderer فارسی مستقل از SDK |
+| `application/ports/advertisement_repository.py` | `AdvertisementReportRepository` و Projection امن/حداقلی گزارش |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | Queryهای bounded، فیلتر مقصد، ترتیب قطعی و Indexهای schedule/failure |
+| `presentation/bot/advertisement_reports.py` | Handler نازک private/admin/`approval.view` پیش از دسترسی به داده |
+| `bootstrap/approval_bot.py` | ثبت مشروط `/ads_today`، `/ads_upcoming` و `/ads_failures` فقط هنگام فعال‌سازی صریح |
+| `tests/unit/application/advertisements/test_report_advertisement_runs.py` | مرز timezone، limit و overflow بدون Query نامحدود |
+| `tests/unit/presentation/bot/test_advertisement_report_renderer.py` | Empty، success/failure، فارسی/ZWNJ و truncation آیتم‌کامل |
+| `tests/integration/advertisements/test_advertisement_admin_reports.py` | MongoDB واقعی، Bot fake، Authorization، filtering، read-only و concurrency |
+
+## پذیرش End-to-end فاز دوم (T054)
+
+| مسیر | مسئولیت |
+|---|---|
+| `tests/fixtures/advertisements/phase_two_campaign.json` | Campaign، Caption فارسی/ZWNJ، Custom Emoji و Album sanitized بدون Secret |
+| `tests/integration/advertisements/test_phase_two_end_to_end.py` | Config، Snapshot، Slot، Collision، Publication یکتا و Report روی MongoDB واقعی |
+| `tests/integration/advertisements/test_phase_two_restart.py` | دوام Snapshot/Slot، Lease منقضی و reclaim تک‌برنده پس از بازسازی repository |
+| `tests/integration/advertisements/test_phase_two_concurrency.py` | reconcile، resolve و claim هم‌زمان با یک Slot قابل اجرا |
+| `docs/REQUIREMENTS.md`، ماتریس بخش ۱۷ | ردیابی دقیق هر ۱۲ معیار پذیرش به مالک و تابع آزمون |
+
+## پذیرش End-to-end فاز اول (T047)
+
+| مسیر | مسئولیت |
+|---|---|
+| `tests/fixtures/telegram/phase_one_post_fixture.json` | Fixture متنی Sanitized با ZWNJ، Emoji، Custom Emoji و URLهای منبع/مقصد |
+| `tests/fixtures/telegram/phase_one_album_fixture.json` | Fixture آلبوم out-of-order Sanitized با `grouped_id` و Caption فارسی |
+| `tests/fixtures/ai/phase_one_ai_responses.json` | Envelopeهای پاسخ Fake AI برای ۴ Task تشخیص تبلیغات، دپلیکیت سمانتیک، دسته‌بندی و scoring |
+| `tests/e2e/test_phase_one_text_flow.py` | سناریوی E2E ۱: دریافت یکتا، AI، Approval، انتشار فوری، User API Fake، و امتیازدهی تاخیری بدون دستکاری محتوای منتشرشده |
+| `tests/e2e/test_phase_one_media_schedule_flow.py` | سناریوی E2E ۲: آلبوم out-of-order، حفظ Caption/Entity، Toggle زمان‌بندی، restart/recovery و انتشار زمان‌بندی‌شده یکتا |
+| `tests/e2e/test_phase_one_restart_idempotency.py` | سناریوی E2E ۳: Idempotency دریافت، بازیابی Lease منقضی AI Job، هم‌زمانی خوش‌بینانه، امنیت Callback، توکن جعلی و Redaction |

@@ -70,6 +70,8 @@
       "name": "منبع فارسی 📣",
       "username": "source_example",
       "enabled": true,
+      "advertisement_detection_enabled": false,
+      "duplicate_detection_enabled": false,
       "default_category_id": "general",
       "allowed_destination_names": [
         "destination-fa"
@@ -87,7 +89,16 @@
   "features": {
     "advertisement_detection_enabled": false,
     "duplicate_detection_enabled": false,
-    "ai_scoring_enabled": false
+    "ai_scoring_enabled": false,
+    "ai_categorization_enabled": false
+  },
+  "semantic_duplicate": {
+    "threshold": 0.88,
+    "duplicate_policy": "manual_review"
+  },
+  "scoring": {
+    "delay_seconds": 1200,
+    "failure_policy": "retry_later"
   },
   "publishing": {
     "scheduled_publication_interval_seconds": 300,
@@ -135,9 +146,24 @@
         "keyword": "فناوری",
         "priority": 100
       }
-    ]
+    ],
+    "method_order": [
+      "keyword",
+      "ai",
+      "source_default"
+    ],
+    "fallback_policy": "fallback_baseline",
+    "aliases": {
+      "عمومی": "general"
+    }
   },
   "ai": {
+    "queue": {
+      "lease_duration_seconds": 60,
+      "max_attempts": 3,
+      "next_run_delay_seconds": 30,
+      "worker_poll_seconds": 5
+    },
     "providers": [
       {
         "name": "synthetic-provider",
@@ -146,6 +172,22 @@
           "environment_variable": "TAB_AI_PROVIDER_KEY"
         },
         "base_url": "https://provider.example.invalid/v1"
+      },
+      {
+        "name": "z-ai",
+        "enabled": false,
+        "api_key": {
+          "environment_variable": "TAB_ZAI_API_KEY"
+        },
+        "base_url": "https://api.z.ai/api/paas/v4"
+      },
+      {
+        "name": "deepseek",
+        "enabled": false,
+        "api_key": {
+          "environment_variable": "TAB_DEEPSEEK_API_KEY"
+        },
+        "base_url": "https://api.deepseek.com"
       }
     ],
     "routes": [
@@ -161,15 +203,74 @@
           }
         ]
       }
-    ]
+    ],
+    "failure_policies": [
+      {
+        "task": "advertisement_detection",
+        "action": "manual_review"
+      }
+    ],
+    "cache_policies": [],
+    "audit": {
+      "enabled": false,
+      "retention_seconds": null,
+      "raw_storage_enabled": false
+    }
   },
   "advertisements": {
+    "reports": {
+      "enabled": true,
+      "timezone": "Asia/Tehran",
+      "upcoming_horizon_days": 7,
+      "failure_horizon_days": 7,
+      "max_items": 20,
+      "overflow_policy": "truncate"
+    },
+    "source_fetch": {
+      "timeout_seconds": 20,
+      "max_attempts": 3,
+      "initial_backoff_seconds": 2
+    },
     "routes": [
       {
         "name": "آگهی‌نمونه ✨",
         "destination_names": [
           "destination-fa"
         ]
+      }
+    ],
+    "campaigns": [
+      {
+        "campaign_id": "daily-store-ad",
+        "name": "تبلیغ روزانه فروشگاه ✨",
+        "enabled": true,
+        "source_post_url": "https://t.me/advertisement_example/123",
+        "source_channel_username": "advertisement_example",
+        "destination_names": [
+          "destination-fa"
+        ],
+        "weekdays": [
+          "saturday",
+          "monday",
+          "wednesday"
+        ],
+        "times": [
+          "10:00",
+          "16:30",
+          "22:00"
+        ],
+        "start_date": "2026-08-01",
+        "end_date": "2026-12-31",
+        "timezone": "Asia/Tehran",
+        "publication_mode": "copy",
+        "priority": 100,
+        "minimum_gap_seconds": 300,
+        "error_policy": "retry_then_fail",
+        "max_retries": 3,
+        "source_cache_policy": "periodic_refresh",
+        "source_unavailable_policy": "use_last_valid_snapshot",
+        "snapshot_retention_days": 30,
+        "refresh_interval_seconds": 900
       }
     ]
   }

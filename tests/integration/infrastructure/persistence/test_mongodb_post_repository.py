@@ -36,6 +36,7 @@ from telegram_assist_bot.domain.posts import (
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     POST_EXPIRATION_INDEX_NAME,
+    POST_SEMANTIC_WINDOW_INDEX_NAME,
     POST_SOURCE_IDENTITY_INDEX_NAME,
     MongoConnectionError,
     MongoIndexInitializationError,
@@ -205,6 +206,7 @@ def test_index_initializer_is_repeatable_and_creates_exact_specs(
                 "_id_",
                 POST_SOURCE_IDENTITY_INDEX_NAME,
                 POST_EXPIRATION_INDEX_NAME,
+                POST_SEMANTIC_WINDOW_INDEX_NAME,
             }
             source = indexes[POST_SOURCE_IDENTITY_INDEX_NAME]
             assert tuple(cast("Mapping[str, int]", source["key"]).items()) == (
@@ -217,6 +219,12 @@ def test_index_initializer_is_repeatable_and_creates_exact_specs(
                 ("expires_at", ASCENDING),
             )
             assert expiration["expireAfterSeconds"] == 0
+            semantic = indexes[POST_SEMANTIC_WINDOW_INDEX_NAME]
+            assert tuple(cast("Mapping[str, int]", semantic["key"]).items()) == (
+                ("status", ASCENDING),
+                ("received_at", -1),
+                ("_id", ASCENDING),
+            )
 
     asyncio.run(scenario())
 

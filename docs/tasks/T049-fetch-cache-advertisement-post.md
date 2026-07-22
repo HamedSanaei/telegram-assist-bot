@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-`Planned`
+`Completed`
 
 ## هدف
 
@@ -105,3 +105,10 @@ git diff --check
 ## تعریف Done
 
 Task زمانی Done است که Decisionهای Cache ثبت، fetch/refresh و حفظ Album/Entity با تست رقابتی و Restart اثبات، SSRF/Secret safety و UTF-8 بازبینی، همه Quality Gateها موفق و Slot/Publication خارج از Scope باشد.
+
+## نتیجهٔ نهایی راستی‌آزمایی
+
+- تست‌های متمرکز واحد، پیکربندی و MongoDB واقعی: ۵۴ آزمون موفق.
+- مجموعهٔ کامل non-live: ۱۲۹۷ آزمون موفق.
+- `uv lock --check`، Ruff، Ruff format، MyPy، بررسی یکپارچگی متن و `git diff --check`: موفق.
+- تماس زندهٔ Telegram، ساخت Slot و Publication در این Task انجام نشد.
