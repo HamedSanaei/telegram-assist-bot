@@ -98,7 +98,7 @@
 | [T046](tasks/T046-ai-pipeline-stabilization.md) | Stabilization کامل Pipeline AI | T040–T045 | `11.19` | Completed |
 | [T047](tasks/T047-phase-one-end-to-end.md) | پذیرش End-to-end فاز اول | T012، T019، T026، T033، T046 | `5.21`، `16` | Completed |
 
-## Milestone 6 — تبلیغات زمان‌بندی‌شده
+## Milestone 6 — تبلیغات زمان‌بندی‌شده — Completed
 
 هدف: Campaignهای Config-driven با Slot پایدار، انتشار یکتا و گزارش مدیریتی.
 
@@ -109,8 +109,8 @@
 | [T050](tasks/T050-advertisement-slot-scheduling.md) | ساخت Slotهای چندزمانه و پایدار | T031، T048، T049 | `6.2`، `6.3` | Completed |
 | [T051](tasks/T051-idempotent-advertisement-publication.md) | انتشار یکتا، Retry و Audit تبلیغ | T029، T050 | `6.3`، `6.5` | Completed |
 | [T052](tasks/T052-advertisement-queue-collision.md) | سیاست تداخل تبلیغ و صف عادی | T033، T051 | `6.4` | Completed |
-| [T053](tasks/T053-advertisement-admin-reports.md) | گزارش امروز، آینده و خطاها | T020، T051 | `6.5` | Planned |
-| [T054](tasks/T054-phase-two-end-to-end.md) | پذیرش End-to-end فاز دوم | T052، T053 | `17` | Planned |
+| [T053](tasks/T053-advertisement-admin-reports.md) | گزارش امروز، آینده و خطاها | T020، T051 | `6.5` | Completed |
+| [T054](tasks/T054-phase-two-end-to-end.md) | پذیرش End-to-end فاز دوم | T052، T053 | `17` | Completed |
 
 ## Milestone 7 — Gateهای قابلیت‌های پیشنهادی
 

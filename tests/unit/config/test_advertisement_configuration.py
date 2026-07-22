@@ -23,6 +23,7 @@ from telegram_assist_bot.domain.advertisements import (
 from telegram_assist_bot.shared.config.models import (
     AdvertisementCampaignConfig,
     AdvertisementConfig,
+    AdvertisementReportsConfig,
 )
 
 
@@ -49,6 +50,69 @@ def _make_valid_campaign_dict() -> dict[str, object]:
         "snapshot_retention_days": 30,
         "refresh_interval_seconds": 900,
     }
+
+
+def _make_valid_reports_dict() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "timezone": "Asia/Tehran",
+        "upcoming_horizon_days": 7,
+        "failure_horizon_days": 7,
+        "max_items": 20,
+        "overflow_policy": "truncate",
+    }
+
+
+def test_legacy_missing_or_disabled_reports_are_valid() -> None:
+    assert AdvertisementConfig().reports is None
+    reports = AdvertisementReportsConfig.model_validate({"enabled": False})
+    assert reports.enabled is False
+    assert reports.timezone is None
+
+
+def test_enabled_reports_require_every_explicit_policy() -> None:
+    for field in (
+        "timezone",
+        "upcoming_horizon_days",
+        "failure_horizon_days",
+        "max_items",
+        "overflow_policy",
+    ):
+        value = _make_valid_reports_dict()
+        del value[field]
+        with pytest.raises(ValidationError):
+            AdvertisementReportsConfig.model_validate(value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timezone", "Invalid/Zone"),
+        ("upcoming_horizon_days", 0),
+        ("upcoming_horizon_days", 32),
+        ("failure_horizon_days", 0),
+        ("failure_horizon_days", 91),
+        ("max_items", 0),
+        ("max_items", 51),
+        ("overflow_policy", "paginate"),
+    ],
+)
+def test_invalid_report_policies_are_rejected(field: str, value: object) -> None:
+    report = _make_valid_reports_dict()
+    report[field] = value
+    with pytest.raises(ValidationError):
+        AdvertisementReportsConfig.model_validate(report)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["upcoming_horizon_days", "failure_horizon_days", "max_items"],
+)
+def test_report_integer_fields_reject_booleans(field: str) -> None:
+    report = _make_valid_reports_dict()
+    report[field] = True
+    with pytest.raises(ValidationError):
+        AdvertisementReportsConfig.model_validate(report)
 
 
 def test_valid_campaign_mapping_and_immutability() -> None:

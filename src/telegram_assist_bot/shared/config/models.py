@@ -911,12 +911,103 @@ class AdvertisementSourceFetchConfig(_FrozenConfigModel):
         return value
 
 
+class AdvertisementReportsConfig(_FrozenConfigModel):
+    """Configure bounded read-only administrator advertisement reports."""
+
+    enabled: StrictBool = Field(description="Enable advertisement report commands.")
+    timezone: NonBlankString | None = Field(
+        default=None, description="Explicit IANA timezone used by report boundaries."
+    )
+    upcoming_horizon_days: StrictInt | None = Field(
+        default=None, description="Upcoming report horizon from 1 to 31 days."
+    )
+    failure_horizon_days: StrictInt | None = Field(
+        default=None, description="Failure report horizon from 1 to 90 days."
+    )
+    max_items: StrictInt | None = Field(
+        default=None, description="Maximum rendered report items from 1 to 50."
+    )
+    overflow_policy: NonBlankString | None = Field(
+        default=None, description="Explicit report overflow policy (truncate)."
+    )
+
+    @model_validator(mode="after")
+    def validate_enabled_contract(self) -> Self:
+        """Require every approved report policy only when reports are enabled."""
+        if not self.enabled:
+            return self
+        missing = tuple(
+            name
+            for name in (
+                "timezone",
+                "upcoming_horizon_days",
+                "failure_horizon_days",
+                "max_items",
+                "overflow_policy",
+            )
+            if getattr(self, name) is None
+        )
+        if missing:
+            raise ValueError(
+                "enabled advertisement reports require every report policy"
+            )
+        return self
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        """Validate an explicitly configured IANA timezone without fallback."""
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, KeyError, ValueError) as error:
+            raise ValueError("timezone must be a valid IANA timezone string") from error
+        return value
+
+    @field_validator("upcoming_horizon_days")
+    @classmethod
+    def validate_upcoming_horizon(cls, value: int | None) -> int | None:
+        """Keep the upcoming query horizon bounded."""
+        if value is not None and not 1 <= value <= 31:
+            raise ValueError("upcoming_horizon_days must be between 1 and 31")
+        return value
+
+    @field_validator("failure_horizon_days")
+    @classmethod
+    def validate_failure_horizon(cls, value: int | None) -> int | None:
+        """Keep the failure query horizon bounded."""
+        if value is not None and not 1 <= value <= 90:
+            raise ValueError("failure_horizon_days must be between 1 and 90")
+        return value
+
+    @field_validator("max_items")
+    @classmethod
+    def validate_max_items(cls, value: int | None) -> int | None:
+        """Keep every report below the approved item limit."""
+        if value is not None and not 1 <= value <= 50:
+            raise ValueError("max_items must be between 1 and 50")
+        return value
+
+    @field_validator("overflow_policy")
+    @classmethod
+    def validate_overflow_policy(cls, value: str | None) -> str | None:
+        """Accept only the approved non-stateful truncation behavior."""
+        if value is not None and value != "truncate":
+            raise ValueError("overflow_policy must be 'truncate'")
+        return value
+
+
 class AdvertisementConfig(_FrozenConfigModel):
     """Hold advertisement routing and scheduled campaign configurations."""
 
     source_fetch: AdvertisementSourceFetchConfig | None = Field(
         default=None,
         description="Explicit source-fetch execution policy for enabled campaigns.",
+    )
+    reports: AdvertisementReportsConfig | None = Field(
+        default=None,
+        description="Optional explicit administrator report configuration.",
     )
 
     routes: tuple[AdvertisementRouteConfig, ...] = Field(
@@ -1088,6 +1179,7 @@ __all__ = [
     "AdminConfig",
     "AdvertisementCampaignConfig",
     "AdvertisementConfig",
+    "AdvertisementReportsConfig",
     "AdvertisementRouteConfig",
     "AdvertisementSourceFetchConfig",
     "AiAuditConfig",

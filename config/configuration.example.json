@@ -218,6 +218,14 @@
     }
   },
   "advertisements": {
+    "reports": {
+      "enabled": true,
+      "timezone": "Asia/Tehran",
+      "upcoming_horizon_days": 7,
+      "failure_horizon_days": 7,
+      "max_items": 20,
+      "overflow_policy": "truncate"
+    },
     "source_fetch": {
       "timeout_seconds": 20,
       "max_attempts": 3,

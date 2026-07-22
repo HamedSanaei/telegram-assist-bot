@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -14,6 +16,58 @@ if TYPE_CHECKING:
     from telegram_assist_bot.domain.advertisement_source import (
         AdvertisementSourceSnapshot,
     )
+
+
+class AdvertisementReportKind(StrEnum):
+    """Supported bounded advertisement report projections."""
+
+    TODAY = "today"
+    UPCOMING = "upcoming"
+    FAILURES = "failures"
+
+
+@dataclass(frozen=True, slots=True)
+class AdvertisementReportQuery:
+    """Describe one authorized, bounded UTC repository query."""
+
+    kind: AdvertisementReportKind
+    starts_at: datetime
+    ends_at: datetime
+    allowed_destination_ids: frozenset[int]
+    limit: int
+
+    def __post_init__(self) -> None:
+        """Reject unbounded, naive, empty-access, or reversed queries."""
+        if (
+            self.starts_at.tzinfo is None
+            or self.starts_at.utcoffset() is None
+            or self.ends_at.tzinfo is None
+            or self.ends_at.utcoffset() is None
+            or self.starts_at > self.ends_at
+            or not self.allowed_destination_ids
+            or type(self.limit) is not int
+            or not 1 <= self.limit <= 51
+        ):
+            raise ValueError("advertisement report query is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class AdvertisementReportRecord:
+    """Application-owned safe projection of one advertisement execution."""
+
+    record_id: str
+    campaign_id: str
+    destination_name: str
+    destination_id: int
+    status: str
+    scheduled_at: datetime
+    published_at: datetime | None
+    message_ids: tuple[int, ...]
+    retry_count: int
+    execution_delay_seconds: float | None
+    failure_category: str | None
+    failure_reason_code: str | None
+    latest_failure_at: datetime | None
 
 
 @runtime_checkable
@@ -150,4 +204,15 @@ class AdvertisementSlotRepository(Protocol):
         outcome_unknown: bool,
     ) -> AdvertisementSlot | None:
         """Persist a terminal safe failure without fabricating success."""
+        ...
+
+
+@runtime_checkable
+class AdvertisementReportRepository(Protocol):
+    """Read-only bounded projection port for administrator reports."""
+
+    async def list_report_records(
+        self, query: AdvertisementReportQuery
+    ) -> tuple[AdvertisementReportRecord, ...]:
+        """Return at most the explicitly bounded authorized projection."""
         ...

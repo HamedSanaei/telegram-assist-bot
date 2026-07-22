@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -14,6 +14,9 @@ from telegram_assist_bot.application.ports import (
     AdvertisementRepository,
 )
 from telegram_assist_bot.application.ports.advertisement_repository import (
+    AdvertisementReportKind,
+    AdvertisementReportQuery,
+    AdvertisementReportRecord,
     AdvertisementSlotRepository,
 )
 from telegram_assist_bot.domain.advertisement_slot import (
@@ -37,6 +40,11 @@ if TYPE_CHECKING:
     from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
         MongoDocument,
     )
+
+
+def _aware_utc(value: datetime) -> datetime:
+    """Normalize MongoDB's possibly naive UTC datetime to an aware instant."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _entity_to_dict(entity: TelegramEntity) -> dict[str, Any]:
@@ -477,6 +485,159 @@ class MongoAdvertisementSlotRepository(AdvertisementSlotRepository):
             [("campaign_id", 1), ("due_at", 1), ("destination_id", 1)],
             name="ix_advertisement_slot_campaign",
         )
+        await self._collection.create_index(
+            [
+                ("document_type", 1),
+                ("destination_id", 1),
+                ("effective_due_at", 1),
+                ("destination_name", 1),
+                ("campaign_id", 1),
+            ],
+            name="ix_advertisement_report_schedule",
+        )
+        await self._collection.create_index(
+            [
+                ("document_type", 1),
+                ("status", 1),
+                ("destination_id", 1),
+                ("updated_at", -1),
+                ("campaign_id", 1),
+            ],
+            name="ix_advertisement_report_failure",
+        )
+
+    async def list_report_records(
+        self, query: AdvertisementReportQuery
+    ) -> tuple[AdvertisementReportRecord, ...]:
+        """Return a minimal bounded projection for one authorized report."""
+        base: dict[str, Any] = {
+            "document_type": "advertisement_slot",
+            "destination_id": {"$in": sorted(query.allowed_destination_ids)},
+        }
+        if query.kind is AdvertisementReportKind.FAILURES:
+            base.update(
+                {
+                    "status": {
+                        "$in": [
+                            AdvertisementSlotStatus.WAITING_FOR_RETRY.value,
+                            AdvertisementSlotStatus.PERMANENT_FAILED.value,
+                            AdvertisementSlotStatus.OUTCOME_UNKNOWN.value,
+                        ]
+                    },
+                    "updated_at": {"$gte": query.starts_at, "$lte": query.ends_at},
+                }
+            )
+            sort = [
+                ("updated_at", -1),
+                ("campaign_id", 1),
+                ("destination_name", 1),
+                ("_id", 1),
+            ]
+        else:
+            base["effective_due_at"] = {
+                "$gte": query.starts_at,
+                "$lt": query.ends_at,
+            }
+            if query.kind is AdvertisementReportKind.UPCOMING:
+                base["status"] = {
+                    "$in": [
+                        AdvertisementSlotStatus.SCHEDULED.value,
+                        AdvertisementSlotStatus.CLAIMED.value,
+                        AdvertisementSlotStatus.WAITING_FOR_RETRY.value,
+                    ]
+                }
+            else:
+                base["status"] = {
+                    "$ne": AdvertisementSlotStatus.CANCELLED_BY_RECONCILIATION.value
+                }
+            sort = [
+                ("effective_due_at", 1),
+                ("destination_name", 1),
+                ("campaign_id", 1),
+                ("_id", 1),
+            ]
+        projection = {
+            "slot_id": 1,
+            "campaign_id": 1,
+            "destination_name": 1,
+            "destination_id": 1,
+            "status": 1,
+            "effective_due_at": 1,
+            "due_at": 1,
+            "published_at": 1,
+            "message_ids": 1,
+            "publication_attempt_count": 1,
+            "claim_count": 1,
+            "execution_delay_seconds": 1,
+            "last_error_category": 1,
+            "last_failure_reason_code": 1,
+            "updated_at": 1,
+        }
+        cursor = self._collection.find(base, projection).sort(sort).limit(query.limit)
+        records: list[AdvertisementReportRecord] = []
+        async for doc in cursor:
+            scheduled_at = doc.get("effective_due_at") or doc["due_at"]
+            published_at = doc.get("published_at")
+            updated_at = doc.get("updated_at")
+            record_id = doc["slot_id"]
+            campaign_id = doc["campaign_id"]
+            destination_name = doc["destination_name"]
+            destination_id = doc["destination_id"]
+            status = doc["status"]
+            message_ids = doc.get("message_ids", ())
+            attempt_count = doc.get("publication_attempt_count", 0)
+            claim_count = doc.get("claim_count", 0)
+            delay = doc.get("execution_delay_seconds")
+            failure_category = doc.get("last_error_category")
+            failure_reason = doc.get("last_failure_reason_code")
+            if not (
+                isinstance(record_id, str)
+                and isinstance(campaign_id, str)
+                and isinstance(destination_name, str)
+                and type(destination_id) is int
+                and isinstance(status, str)
+                and isinstance(scheduled_at, datetime)
+                and isinstance(message_ids, (list, tuple))
+                and all(type(value) is int for value in message_ids)
+                and type(attempt_count) is int
+                and type(claim_count) is int
+                and (delay is None or type(delay) in (int, float))
+                and (failure_category is None or isinstance(failure_category, str))
+                and (failure_reason is None or isinstance(failure_reason, str))
+            ):
+                raise ValueError("invalid advertisement report projection")
+            records.append(
+                AdvertisementReportRecord(
+                    record_id=record_id,
+                    campaign_id=campaign_id,
+                    destination_name=destination_name,
+                    destination_id=destination_id,
+                    status=status,
+                    scheduled_at=_aware_utc(scheduled_at),
+                    published_at=(
+                        _aware_utc(published_at)
+                        if isinstance(published_at, datetime)
+                        else None
+                    ),
+                    message_ids=tuple(cast("list[int] | tuple[int, ...]", message_ids)),
+                    retry_count=max(
+                        attempt_count,
+                        max(0, claim_count - 1),
+                    ),
+                    execution_delay_seconds=(
+                        float(cast("int | float", delay)) if delay is not None else None
+                    ),
+                    failure_category=failure_category,
+                    failure_reason_code=failure_reason,
+                    latest_failure_at=(
+                        _aware_utc(updated_at)
+                        if query.kind is AdvertisementReportKind.FAILURES
+                        and isinstance(updated_at, datetime)
+                        else None
+                    ),
+                )
+            )
+        return tuple(records)
 
     async def reconcile_campaign_slots(
         self,

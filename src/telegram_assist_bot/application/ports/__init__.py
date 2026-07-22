@@ -21,6 +21,10 @@ from telegram_assist_bot.application.ports.admin import (
     InlineKeyboard,
 )
 from telegram_assist_bot.application.ports.advertisement_repository import (
+    AdvertisementReportKind,
+    AdvertisementReportQuery,
+    AdvertisementReportRecord,
+    AdvertisementReportRepository,
     AdvertisementRepository,
     AdvertisementSlotRepository,
 )
@@ -192,6 +196,10 @@ __all__ = (
     "AdminMessagingGateway",
     "AdvertisementPostRepository",
     "AdvertisementPostUpdateRequest",
+    "AdvertisementReportKind",
+    "AdvertisementReportQuery",
+    "AdvertisementReportRecord",
+    "AdvertisementReportRepository",
     "AdvertisementRepository",
     "AdvertisementSlotRepository",
     "AdvertisementSourceError",

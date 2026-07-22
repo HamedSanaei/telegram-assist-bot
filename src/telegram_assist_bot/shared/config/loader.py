@@ -723,6 +723,7 @@ _ALLOWED_CAMPAIGN_KEYS: Final[set[str]] = {
 
 _ALLOWED_ADVERTISEMENT_KEYS: Final[set[str]] = {
     "source_fetch",
+    "reports",
     "routes",
     "campaigns",
 }

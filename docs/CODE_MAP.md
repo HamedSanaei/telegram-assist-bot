@@ -616,6 +616,29 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `tests/unit/application/advertisements/test_resolve_publication_collision.py` | مرز gap، اولویت/lexical، ترتیب عادی و conflict تایپ‌شده |
 | `tests/integration/advertisements/test_advertisement_queue_collision.py` | رقابت، Restart، claim boundary و immutability روی MongoDB واقعی |
 
+## گزارش مدیریتی تبلیغات (T053)
+
+| مسیر | مسئولیت |
+|---|---|
+| `application/advertisements/report_advertisement_runs.py` | ساخت مرز UTC از timezone صریح، Query محدود و DTO/Renderer فارسی مستقل از SDK |
+| `application/ports/advertisement_repository.py` | `AdvertisementReportRepository` و Projection امن/حداقلی گزارش |
+| `infrastructure/persistence/mongodb/advertisement_repository.py` | Queryهای bounded، فیلتر مقصد، ترتیب قطعی و Indexهای schedule/failure |
+| `presentation/bot/advertisement_reports.py` | Handler نازک private/admin/`approval.view` پیش از دسترسی به داده |
+| `bootstrap/approval_bot.py` | ثبت مشروط `/ads_today`، `/ads_upcoming` و `/ads_failures` فقط هنگام فعال‌سازی صریح |
+| `tests/unit/application/advertisements/test_report_advertisement_runs.py` | مرز timezone، limit و overflow بدون Query نامحدود |
+| `tests/unit/presentation/bot/test_advertisement_report_renderer.py` | Empty، success/failure، فارسی/ZWNJ و truncation آیتم‌کامل |
+| `tests/integration/advertisements/test_advertisement_admin_reports.py` | MongoDB واقعی، Bot fake، Authorization، filtering، read-only و concurrency |
+
+## پذیرش End-to-end فاز دوم (T054)
+
+| مسیر | مسئولیت |
+|---|---|
+| `tests/fixtures/advertisements/phase_two_campaign.json` | Campaign، Caption فارسی/ZWNJ، Custom Emoji و Album sanitized بدون Secret |
+| `tests/integration/advertisements/test_phase_two_end_to_end.py` | Config، Snapshot، Slot، Collision، Publication یکتا و Report روی MongoDB واقعی |
+| `tests/integration/advertisements/test_phase_two_restart.py` | دوام Snapshot/Slot، Lease منقضی و reclaim تک‌برنده پس از بازسازی repository |
+| `tests/integration/advertisements/test_phase_two_concurrency.py` | reconcile، resolve و claim هم‌زمان با یک Slot قابل اجرا |
+| `docs/REQUIREMENTS.md`، ماتریس بخش ۱۷ | ردیابی دقیق هر ۱۲ معیار پذیرش به مالک و تابع آزمون |
+
 ## پذیرش End-to-end فاز اول (T047)
 
 | مسیر | مسئولیت |

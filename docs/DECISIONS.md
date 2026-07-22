@@ -556,3 +556,19 @@
   غیرقابل‌جابه‌جایی به‌صورت metadata امن و صریح ثبت می‌شود و وضعیت آن سند دست‌نخورده می‌ماند. Resolver
   تماس Telegram، تغییر Content یا Runtime wiring ندارد و تعارض CAS فقط با تعداد تلاش صریح و bounded
   تکرار می‌شود.
+
+## ADR-039 — قرارداد محدود و مجاز گزارش تبلیغات
+
+- **Status:** Accepted
+- **Decision:** سه Command ثابت `/ads_today`، `/ads_upcoming` و `/ads_failures` فقط در
+  private Bot chat، برای مدیر فعال دارای `approval.view` و فقط روی مقصدهای مجاز او
+  داده برمی‌گردانند. Configuration گزارش اختیاری است؛ نبود آن یا `enabled=false`
+  Commandها را غیرفعال می‌کند و حالت فعال timezone، افق آینده ۱ تا ۳۱ روز، افق شکست
+  ۱ تا ۹۰ روز، سقف ۱ تا ۵۰ و policy یکتای `truncate` را صریح می‌خواهد. Today روز
+  تقویمی نیمه‌باز timezone گزارش، Upcoming بازهٔ نیمه‌باز و Failures بازهٔ inclusive
+  مصوب را به UTC Query می‌کند.
+- **Consequences:** Repository حداکثر `max_items + 1` Projection حداقلی می‌خواند؛
+  Pagination/Callback state وجود ندارد و Footer فارسی فقط در صورت overflow افزوده
+  می‌شود. گزارش‌ها read-only هستند، موفقیت دارای شکست قدیمی در failures دیده نمی‌شود،
+  جزئیات خام خطا/Secret/Admin ID/URL/Media path نمایش داده نمی‌شود و Config نمونه هیچ
+  default پنهان ایجاد نمی‌کند.
