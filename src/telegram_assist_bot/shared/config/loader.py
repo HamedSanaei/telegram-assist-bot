@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import date
 from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, TypeAdapter, ValidationError
 
@@ -652,6 +655,12 @@ def _raw_semantic_issues(
         for _, destination in destination_channels
         if isinstance((name := _raw_non_blank_string(destination, "name")), str)
     }
+    enabled_destinations = {
+        name
+        for _, destination in destination_channels
+        if isinstance((name := _raw_non_blank_string(destination, "name")), str)
+        and destination.get("enabled") is True
+    }
     for index, admin in admins:
         issues.extend(
             _raw_reference_issues(
@@ -673,30 +682,9 @@ def _raw_semantic_issues(
             )
         )
 
-    advertisements = document.get("advertisements", _MISSING)
-    if isinstance(advertisements, dict):
-        routes = _indexed_objects(advertisements.get("routes", _MISSING))
-        issues.extend(
-            _raw_duplicate_field_issues(
-                routes,
-                path_prefix=("advertisements", "routes"),
-                field_name="name",
-                value=lambda route: _raw_non_blank_string(route, "name"),
-            )
-        )
-        for index, route in routes:
-            issues.extend(
-                _raw_reference_issues(
-                    route.get("destination_names", _MISSING),
-                    path_prefix=(
-                        "advertisements",
-                        "routes",
-                        index,
-                        "destination_names",
-                    ),
-                    known_destinations=known_destinations,
-                )
-            )
+    issues.extend(
+        _raw_advertisement_issues(document, known_destinations, enabled_destinations)
+    )
 
     issues.extend(
         _raw_ai_issues(
@@ -707,6 +695,549 @@ def _raw_semantic_issues(
         )
     )
     issues.extend(_raw_categorization_issues(document))
+    return issues
+
+
+_ALLOWED_CAMPAIGN_KEYS: Final[set[str]] = {
+    "campaign_id",
+    "name",
+    "enabled",
+    "source_post_url",
+    "source_channel_username",
+    "destination_names",
+    "weekdays",
+    "times",
+    "start_date",
+    "end_date",
+    "timezone",
+    "publication_mode",
+    "priority",
+    "minimum_gap_seconds",
+    "error_policy",
+    "max_retries",
+}
+
+_ALLOWED_ADVERTISEMENT_KEYS: Final[set[str]] = {
+    "routes",
+    "campaigns",
+}
+
+_VALID_WEEKDAYS: Final[set[str]] = {
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+}
+
+_CAMPAIGN_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_-]+$")
+_STRICT_TIME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(?:[01]\d|2[0-3]):[0-5]\d$"
+)
+_PUBLIC_POST_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^https://t\.me/([a-zA-Z0-9_]{5,32})/([1-9]\d*)$"
+)
+_DATE_FORMAT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _raw_advertisement_issues(
+    document: Mapping[str, object],
+    known_destinations: set[str],
+    enabled_destinations: set[str],
+) -> list[ConfigurationIssue]:
+    """Collect path-aware validation issues for advertisement routes and campaigns."""
+    issues: list[ConfigurationIssue] = []
+    advertisements = document.get("advertisements", _MISSING)
+    if advertisements is _MISSING or advertisements is None:
+        return issues
+    if not isinstance(advertisements, dict):
+        issues.append(
+            ConfigurationIssue(
+                path=("advertisements",),
+                code="invalid_type",
+                message="advertisements must be an object",
+            )
+        )
+        return issues
+
+    issues.extend(
+        ConfigurationIssue(
+            path=("advertisements", key),
+            code="unknown_field",
+            message=f"extra field '{key}' is not permitted",
+        )
+        for key in advertisements
+        if key not in _ALLOWED_ADVERTISEMENT_KEYS
+    )
+
+    if "routes" in advertisements and advertisements["routes"] is not _MISSING:
+        routes_val = advertisements["routes"]
+        if isinstance(routes_val, list):
+            routes = _indexed_objects(routes_val)
+            issues.extend(
+                _raw_duplicate_field_issues(
+                    routes,
+                    path_prefix=("advertisements", "routes"),
+                    field_name="name",
+                    value=lambda route: _raw_non_blank_string(route, "name"),
+                )
+            )
+            for index, route in routes:
+                issues.extend(
+                    _raw_reference_issues(
+                        route.get("destination_names", _MISSING),
+                        path_prefix=(
+                            "advertisements",
+                            "routes",
+                            index,
+                            "destination_names",
+                        ),
+                        known_destinations=known_destinations,
+                    )
+                )
+        elif routes_val is not None:
+            issues.append(
+                ConfigurationIssue(
+                    path=("advertisements", "routes"),
+                    code="invalid_type",
+                    message="routes must be a list",
+                )
+            )
+
+    if "campaigns" in advertisements and advertisements["campaigns"] is not _MISSING:
+        campaigns_val = advertisements["campaigns"]
+        if not isinstance(campaigns_val, list) and campaigns_val is not None:
+            issues.append(
+                ConfigurationIssue(
+                    path=("advertisements", "campaigns"),
+                    code="invalid_type",
+                    message="campaigns must be a list",
+                )
+            )
+            return issues
+
+        if isinstance(campaigns_val, list):
+            campaigns = _indexed_objects(campaigns_val)
+
+            seen_campaign_ids: set[str] = set()
+            for index, campaign in campaigns:
+                cid = campaign.get("campaign_id", _MISSING)
+                if (
+                    isinstance(cid, str)
+                    and _CAMPAIGN_ID_PATTERN.match(cid)
+                    and len(cid) <= 64
+                ):
+                    if cid in seen_campaign_ids:
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(
+                                    "advertisements",
+                                    "campaigns",
+                                    index,
+                                    "campaign_id",
+                                ),
+                                code="duplicate_value",
+                                message="campaign_id must be unique",
+                            )
+                        )
+                    else:
+                        seen_campaign_ids.add(cid)
+
+            for index, campaign in campaigns:
+                path_prefix = ("advertisements", "campaigns", index)
+
+                issues.extend(
+                    ConfigurationIssue(
+                        path=(*path_prefix, key),
+                        code="unknown_field",
+                        message=f"extra field '{key}' is not permitted",
+                    )
+                    for key in campaign
+                    if key not in _ALLOWED_CAMPAIGN_KEYS
+                )
+
+                cid = campaign.get("campaign_id", _MISSING)
+                if (
+                    not isinstance(cid, str)
+                    or not cid
+                    or cid.isspace()
+                    or not _CAMPAIGN_ID_PATTERN.match(cid)
+                    or len(cid) > 64
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "campaign_id"),
+                            code="invalid_campaign_id",
+                            message=(
+                                "campaign_id must be a valid non-empty ASCII slug "
+                                "(letters, digits, _, -)"
+                            ),
+                        )
+                    )
+
+                name_val = campaign.get("name", _MISSING)
+                if not isinstance(name_val, str) or not name_val or name_val.isspace():
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "name"),
+                            code="invalid_name",
+                            message="name must be a non-blank string",
+                        )
+                    )
+
+                enabled_val = campaign.get("enabled", _MISSING)
+                if type(enabled_val) is not bool:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "enabled"),
+                            code="invalid_enabled",
+                            message="enabled must be a boolean",
+                        )
+                    )
+                is_campaign_enabled = enabled_val is True
+
+                url_val = campaign.get("source_post_url", _MISSING)
+                url_username: str | None = None
+                if not isinstance(url_val, str) or not url_val:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "source_post_url"),
+                            code="invalid_source_post_url",
+                            message=(
+                                "source_post_url must be a valid public HTTPS"
+                                " t.me post URL"
+                            ),
+                        )
+                    )
+                else:
+                    match = _PUBLIC_POST_URL_PATTERN.match(url_val)
+                    if (
+                        not match
+                        or "?" in url_val
+                        or "#" in url_val
+                        or "@" in url_val.split("://")[-1].split("/")[0]
+                        or "/c/" in url_val
+                    ):
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(*path_prefix, "source_post_url"),
+                                code="invalid_source_post_url",
+                                message=(
+                                    "source_post_url must be a valid public HTTPS"
+                                    " t.me post URL"
+                                ),
+                            )
+                        )
+                    else:
+                        url_username = match.group(1)
+
+                src_user_val = campaign.get("source_channel_username", _MISSING)
+                if (
+                    not isinstance(src_user_val, str)
+                    or not src_user_val
+                    or src_user_val.isspace()
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "source_channel_username"),
+                            code="invalid_source_channel_username",
+                            message=(
+                                "source_channel_username must be a non-blank string"
+                            ),
+                        )
+                    )
+                elif (
+                    url_username is not None
+                    and src_user_val.strip().lower() != url_username.lower()
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "source_channel_username"),
+                            code="username_mismatch",
+                            message=(
+                                "source_channel_username does not match source_post_url"
+                            ),
+                        )
+                    )
+
+                dests_val = campaign.get("destination_names", _MISSING)
+                if not isinstance(dests_val, list) or not dests_val:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "destination_names"),
+                            code="invalid_destination_names",
+                            message=(
+                                "destination_names must be a non-empty list of"
+                                " destination names"
+                            ),
+                        )
+                    )
+                else:
+                    seen_dests: set[str] = set()
+                    for dest_idx, dest_ref in enumerate(dests_val):
+                        dest_path = (*path_prefix, "destination_names", dest_idx)
+                        if (
+                            not isinstance(dest_ref, str)
+                            or not dest_ref
+                            or dest_ref.isspace()
+                        ):
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=dest_path,
+                                    code="invalid_destination_name",
+                                    message=(
+                                        "destination reference must be a non-blank"
+                                        " string"
+                                    ),
+                                )
+                            )
+                            continue
+                        if dest_ref in seen_dests:
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=dest_path,
+                                    code="duplicate_reference",
+                                    message="destination reference must be unique",
+                                )
+                            )
+                        else:
+                            seen_dests.add(dest_ref)
+
+                        if dest_ref not in known_destinations:
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=dest_path,
+                                    code="unknown_destination",
+                                    message="destination reference does not exist",
+                                )
+                            )
+                        elif (
+                            is_campaign_enabled and dest_ref not in enabled_destinations
+                        ):
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=dest_path,
+                                    code="disabled_destination",
+                                    message=(
+                                        "enabled campaign cannot reference a disabled"
+                                        " destination"
+                                    ),
+                                )
+                            )
+
+                weekdays_val = campaign.get("weekdays", _MISSING)
+                if not isinstance(weekdays_val, list) or not weekdays_val:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "weekdays"),
+                            code="invalid_weekdays",
+                            message=(
+                                "weekdays must be a non-empty list of canonical"
+                                " weekday strings"
+                            ),
+                        )
+                    )
+                else:
+                    seen_weekdays: set[str] = set()
+                    for w_idx, w_val in enumerate(weekdays_val):
+                        w_path = (*path_prefix, "weekdays", w_idx)
+                        if not isinstance(w_val, str) or w_val not in _VALID_WEEKDAYS:
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=w_path,
+                                    code="invalid_weekday",
+                                    message=(
+                                        "weekday must be a canonical lowercase"
+                                        " weekday name"
+                                    ),
+                                )
+                            )
+                            continue
+                        if w_val in seen_weekdays:
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=w_path,
+                                    code="duplicate_weekday",
+                                    message="weekdays must be unique",
+                                )
+                            )
+                        else:
+                            seen_weekdays.add(w_val)
+
+                times_val = campaign.get("times", _MISSING)
+                if not isinstance(times_val, list) or not times_val:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "times"),
+                            code="invalid_times",
+                            message=(
+                                "times must be a non-empty list of 24-hour HH:MM"
+                                " strings"
+                            ),
+                        )
+                    )
+                else:
+                    seen_times: set[str] = set()
+                    for t_idx, t_val in enumerate(times_val):
+                        t_path = (*path_prefix, "times", t_idx)
+                        if not isinstance(t_val, str) or not _STRICT_TIME_PATTERN.match(
+                            t_val
+                        ):
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=t_path,
+                                    code="invalid_time",
+                                    message=(
+                                        "time must be in strict 24-hour HH:MM format"
+                                    ),
+                                )
+                            )
+                            continue
+                        if t_val in seen_times:
+                            issues.append(
+                                ConfigurationIssue(
+                                    path=t_path,
+                                    code="duplicate_time",
+                                    message="times must be unique",
+                                )
+                            )
+                        else:
+                            seen_times.add(t_val)
+
+                start_val = campaign.get("start_date", _MISSING)
+                parsed_start: date | None = None
+                if not isinstance(start_val, str) or not _DATE_FORMAT_PATTERN.match(
+                    start_val
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "start_date"),
+                            code="invalid_date",
+                            message="start_date must be in ISO YYYY-MM-DD format",
+                        )
+                    )
+                else:
+                    try:
+                        parsed_start = date.fromisoformat(start_val)
+                    except ValueError:
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(*path_prefix, "start_date"),
+                                code="invalid_date",
+                                message="start_date must be in ISO YYYY-MM-DD format",
+                            )
+                        )
+
+                end_val = campaign.get("end_date", _MISSING)
+                parsed_end: date | None = None
+                if not isinstance(end_val, str) or not _DATE_FORMAT_PATTERN.match(
+                    end_val
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "end_date"),
+                            code="invalid_date",
+                            message="end_date must be in ISO YYYY-MM-DD format",
+                        )
+                    )
+                else:
+                    try:
+                        parsed_end = date.fromisoformat(end_val)
+                    except ValueError:
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(*path_prefix, "end_date"),
+                                code="invalid_date",
+                                message="end_date must be in ISO YYYY-MM-DD format",
+                            )
+                        )
+
+                if (
+                    parsed_start is not None
+                    and parsed_end is not None
+                    and parsed_start > parsed_end
+                ):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "start_date"),
+                            code="invalid_date_range",
+                            message="start_date must be before or equal to end_date",
+                        )
+                    )
+
+                tz_val = campaign.get("timezone", _MISSING)
+                if not isinstance(tz_val, str) or not tz_val or tz_val.isspace():
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "timezone"),
+                            code="invalid_timezone",
+                            message="timezone must be a valid IANA timezone string",
+                        )
+                    )
+                else:
+                    try:
+                        ZoneInfo(tz_val)
+                    except (ZoneInfoNotFoundError, KeyError, ValueError):
+                        issues.append(
+                            ConfigurationIssue(
+                                path=(*path_prefix, "timezone"),
+                                code="invalid_timezone",
+                                message="timezone must be a valid IANA timezone string",
+                            )
+                        )
+
+                mode_val = campaign.get("publication_mode", _MISSING)
+                if mode_val != "copy":
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "publication_mode"),
+                            code="invalid_publication_mode",
+                            message="publication_mode must be 'copy'",
+                        )
+                    )
+
+                prio_val = campaign.get("priority", _MISSING)
+                if type(prio_val) is not int or prio_val < 0:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "priority"),
+                            code="invalid_priority",
+                            message="priority must be a non-negative integer",
+                        )
+                    )
+
+                gap_val = campaign.get("minimum_gap_seconds", _MISSING)
+                if type(gap_val) is not int or gap_val <= 0:
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "minimum_gap_seconds"),
+                            code="invalid_minimum_gap",
+                            message="minimum_gap_seconds must be a positive integer",
+                        )
+                    )
+
+                pol_val = campaign.get("error_policy", _MISSING)
+                if pol_val != "retry_then_fail":
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "error_policy"),
+                            code="invalid_error_policy",
+                            message="error_policy must be 'retry_then_fail'",
+                        )
+                    )
+
+                retries_val = campaign.get("max_retries", _MISSING)
+                if type(retries_val) is not int or not (0 <= retries_val <= 10):
+                    issues.append(
+                        ConfigurationIssue(
+                            path=(*path_prefix, "max_retries"),
+                            code="invalid_max_retries",
+                            message="max_retries must be an integer between 0 and 10",
+                        )
+                    )
+
     return issues
 
 

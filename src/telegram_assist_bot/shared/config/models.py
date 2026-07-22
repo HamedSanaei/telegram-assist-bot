@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Final, Literal, Self
@@ -19,6 +20,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 
@@ -643,11 +645,176 @@ class AdvertisementRouteConfig(_FrozenConfigModel):
     )
 
 
+class AdvertisementCampaignConfig(_FrozenConfigModel):
+    """Describe one scheduled advertisement campaign configuration."""
+
+    campaign_id: NonBlankString = Field(
+        description="Unique stable machine identity (ASCII slug)."
+    )
+    name: NonBlankString = Field(description="Human-readable display name.")
+    enabled: StrictBool = Field(description="Whether the campaign is active.")
+    source_post_url: NonBlankString = Field(
+        description="Public Telegram source post URL."
+    )
+    source_channel_username: NonBlankString = Field(
+        description="Source channel username."
+    )
+    destination_names: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = (
+        Field(description="Referenced destination channel names.")
+    )
+    weekdays: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = Field(
+        description="Target weekdays in campaign timezone."
+    )
+    times: Annotated[tuple[NonBlankString, ...], Field(min_length=1)] = Field(
+        description="Target daily times in 24-hour HH:MM format."
+    )
+    start_date: NonBlankString = Field(description="ISO start date (YYYY-MM-DD).")
+    end_date: NonBlankString = Field(description="ISO end date (YYYY-MM-DD).")
+    timezone: NonBlankString = Field(description="IANA timezone string.")
+    publication_mode: NonBlankString = Field(description="Publication mode (copy).")
+    priority: int = Field(description="Non-negative priority integer.")
+    minimum_gap_seconds: int = Field(
+        description="Strict positive minimum gap in seconds."
+    )
+    error_policy: NonBlankString = Field(
+        description="Execution error policy (retry_then_fail)."
+    )
+    max_retries: int = Field(description="Max retries from 0 to 10.")
+
+    @field_validator("priority", "minimum_gap_seconds", "max_retries", mode="before")
+    @classmethod
+    def validate_strict_int(cls, v: object) -> object:
+        """Reject boolean values passed to integer fields."""
+        if type(v) is bool:
+            raise ValueError("Boolean values are not accepted as integers")
+        return v
+
+    @field_validator("campaign_id")
+    @classmethod
+    def validate_campaign_id_slug(cls, v: str) -> str:
+        """Validate campaign_id is a valid ASCII slug."""
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v) or len(v) > 64:
+            raise ValueError(
+                "campaign_id must be a valid non-empty ASCII slug "
+                "(letters, digits, _, -)"
+            )
+        return v
+
+    @field_validator("source_post_url")
+    @classmethod
+    def validate_source_post_url_format(cls, v: str) -> str:
+        """Validate source_post_url is a public HTTPS t.me post URL."""
+        if (
+            not re.match(r"^https://t\.me/([a-zA-Z0-9_]{5,32})/([1-9]\d*)$", v)
+            or "?" in v
+            or "#" in v
+            or "@" in v.split("://")[-1].split("/")[0]
+            or "/c/" in v
+        ):
+            raise ValueError(
+                "source_post_url must be a valid public HTTPS t.me post URL"
+            )
+        return v
+
+    @field_validator("weekdays")
+    @classmethod
+    def validate_weekdays_list(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate weekdays are canonical lowercase weekday strings and unique."""
+        valid_set = {
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        }
+        for item in v:
+            if item not in valid_set:
+                raise ValueError("weekday must be a canonical lowercase weekday name")
+        if len(v) != len(set(v)):
+            raise ValueError("weekdays must be unique")
+        return v
+
+    @field_validator("times")
+    @classmethod
+    def validate_times_list(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate times are 24-hour HH:MM strings and unique."""
+        time_pat = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+        for item in v:
+            if not time_pat.match(item):
+                raise ValueError("time must be in strict 24-hour HH:MM format")
+        if len(v) != len(set(v)):
+            raise ValueError("times must be unique")
+        return v
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date_format(cls, v: str) -> str:
+        """Validate ISO date format."""
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("date must be in ISO YYYY-MM-DD format")
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_tz(cls, v: str) -> str:
+        """Validate IANA timezone."""
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, KeyError, ValueError) as err:
+            raise ValueError("timezone must be a valid IANA timezone string") from err
+        return v
+
+    @field_validator("publication_mode")
+    @classmethod
+    def validate_pub_mode(cls, v: str) -> str:
+        """Validate publication mode."""
+        if v != "copy":
+            raise ValueError("publication_mode must be 'copy'")
+        return v
+
+    @field_validator("error_policy")
+    @classmethod
+    def validate_err_policy(cls, v: str) -> str:
+        """Validate error policy."""
+        if v != "retry_then_fail":
+            raise ValueError("error_policy must be 'retry_then_fail'")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority_val(cls, v: int) -> int:
+        """Validate priority is non-negative."""
+        if v < 0:
+            raise ValueError("priority must be a non-negative integer")
+        return v
+
+    @field_validator("minimum_gap_seconds")
+    @classmethod
+    def validate_gap_val(cls, v: int) -> int:
+        """Validate minimum gap is positive."""
+        if v <= 0:
+            raise ValueError("minimum_gap_seconds must be a positive integer")
+        return v
+
+    @field_validator("max_retries")
+    @classmethod
+    def validate_retries_val(cls, v: int) -> int:
+        """Validate max retries is 0 to 10."""
+        if not (0 <= v <= 10):
+            raise ValueError("max_retries must be an integer between 0 and 10")
+        return v
+
+
 class AdvertisementConfig(_FrozenConfigModel):
-    """Hold the initial advertisement-routing skeleton only."""
+    """Hold advertisement routing and scheduled campaign configurations."""
 
     routes: tuple[AdvertisementRouteConfig, ...] = Field(
-        description="Configured advertisement routes."
+        default=(), description="Configured advertisement routes."
+    )
+    campaigns: tuple[AdvertisementCampaignConfig, ...] = Field(
+        default=(), description="Configured scheduled advertisement campaigns."
     )
 
 
@@ -688,7 +855,8 @@ class ApplicationConfig(_FrozenConfigModel):
     )
     ai: AiConfig = Field(description="AI provider and routing configuration.")
     advertisements: AdvertisementConfig = Field(
-        description="Advertisement routing configuration."
+        default_factory=AdvertisementConfig,
+        description="Advertisement routing configuration.",
     )
 
     @model_validator(mode="after")
@@ -809,6 +977,7 @@ class ApplicationConfig(_FrozenConfigModel):
 __all__ = [
     "SUPPORTED_CONFIGURATION_SCHEMA_VERSION",
     "AdminConfig",
+    "AdvertisementCampaignConfig",
     "AdvertisementConfig",
     "AdvertisementRouteConfig",
     "AiAuditConfig",

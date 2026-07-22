@@ -225,6 +225,36 @@
           "destination-fa"
         ]
       }
+    ],
+    "campaigns": [
+      {
+        "campaign_id": "daily-store-ad",
+        "name": "تبلیغ روزانه فروشگاه ✨",
+        "enabled": true,
+        "source_post_url": "https://t.me/advertisement_example/123",
+        "source_channel_username": "advertisement_example",
+        "destination_names": [
+          "destination-fa"
+        ],
+        "weekdays": [
+          "saturday",
+          "monday",
+          "wednesday"
+        ],
+        "times": [
+          "10:00",
+          "16:30",
+          "22:00"
+        ],
+        "start_date": "2026-08-01",
+        "end_date": "2026-12-31",
+        "timezone": "Asia/Tehran",
+        "publication_mode": "copy",
+        "priority": 100,
+        "minimum_gap_seconds": 300,
+        "error_policy": "retry_then_fail",
+        "max_retries": 3
+      }
     ]
   }
 }

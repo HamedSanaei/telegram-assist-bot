@@ -39,6 +39,9 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 │   ├── domain/
 │   │   ├── __init__.py
 │   │   ├── ai_job.py
+│   │   ├── advertisements/
+│   │   │   ├── __init__.py
+│   │   │   └── campaign.py
 │   │   └── posts/
 │   │       ├── __init__.py
 │   │       ├── entities.py
@@ -46,6 +49,8 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 │   │       ├── models.py
 │   │       └── status.py
 │   ├── application/
+│   │   ├── config/
+│   │   │   └── advertisements.py
 │   │   ├── ai/
 │   │   │   ├── __init__.py
 │   │   │   ├── claim_ai_job.py

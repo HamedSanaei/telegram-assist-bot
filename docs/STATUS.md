@@ -1,9 +1,9 @@
 # وضعیت فعلی
 
-- **Current milestone:** Milestone 5 — پلتفرم AI و قابلیت‌های فاز اول (تکمیل فاز اول)
+- **Current milestone:** Milestone 6 — تبلیغات زمان‌بندی‌شده
 - **Active task:** هیچ‌کدام.
-- **Last completed task:** [T047 — پذیرش End-to-end فاز اول](tasks/T047-phase-one-end-to-end.md)
+- **Last completed task:** [T048 — مدل و Validation تنظیم تبلیغات](tasks/T048-advertisement-configuration.md)
 - **Known blockers:** هیچ‌کدام.
-- **Failing tests:** هیچ‌کدام؛ تمام ۱۲۴۳ آزمون غیرزنده (non-live) شامل ۳ سناریوی جامع E2E فاز اول با موفقیت پاس شدند.
-- **Last verified commit:** `a415fa9`
-- **Next recommended action:** اجرای T048 — مدل و Validation تنظیم تبلیغات (آغاز Milestone 6).
+- **Failing tests:** هیچ‌کدام؛ تمام ۱۲۸۴ آزمون غیرزنده (non-live) شامل unit و integration برای T048 با موفقیت پاس شدند.
+- **Last verified commit:** `da9e1f8`
+- **Next recommended action:** اجرای T049 — دریافت/Cache پست تبلیغ از URL (دریافت محتوا و Cache منبع تبلیغ).
