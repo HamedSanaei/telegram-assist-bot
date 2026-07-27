@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 import telegram_assist_bot.bootstrap.media_cleanup as cleanup_module
-from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
+from telegram_assist_bot.bootstrap.media_cleanup import (
+    run_media_cleanup,
+    run_media_cleanup_worker,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationConfigurationError,
     FoundationExitCode,
@@ -52,6 +55,7 @@ class Foundation:
             root=Path("synthetic-media"),
             orphan_grace_seconds=60,
             cleanup_batch_size=10,
+            cleanup_interval_seconds=3600,
         )
         return SimpleNamespace(
             settings=SimpleNamespace(
@@ -66,6 +70,13 @@ class Foundation:
                 "media_items": object(),
                 "media_groups": object(),
                 "content_preparations": object(),
+                "posts": object(),
+                "publications": object(),
+                "scheduled_publications": object(),
+                "native_schedule_commands": object(),
+                "approval_deliveries": object(),
+                "advertisement_sources": object(),
+                "advertisement_slots": object(),
             }
         }
 
@@ -112,7 +123,9 @@ def setup(monkeypatch: pytest.MonkeyPatch, foundation: Foundation) -> None:
         cleanup_module, "initialize_content_preparation_indexes", indexes
     )
     monkeypatch.setattr(
-        cleanup_module, "MongoContentPreparationRepository", lambda *_args: object()
+        cleanup_module,
+        "MongoContentPreparationRepository",
+        lambda *_args, **_kwargs: object(),
     )
     monkeypatch.setattr(cleanup_module, "LocalMediaStorage", lambda _root: object())
     monkeypatch.setattr(cleanup_module, "CleanupExpiredMedia", Cleanup)
@@ -168,3 +181,40 @@ def test_cleanup_propagates_cancellation_after_shutdown(
     with pytest.raises(asyncio.CancelledError):
         execute()
     assert foundation.shutdowns == 1
+
+
+def test_periodic_cleanup_uses_configured_interval_and_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundation = Foundation()
+    setup(monkeypatch, foundation)
+    intervals: list[int] = []
+
+    class Worker:
+        def __init__(
+            self, _use_case: object, _clock: object, *, interval_seconds: int
+        ) -> None:
+            intervals.append(interval_seconds)
+
+        async def run(self, stop_event: asyncio.Event) -> int:
+            assert stop_event.is_set()
+            return 2
+
+    monkeypatch.setattr(cleanup_module, "PeriodicMediaCleanupWorker", Worker)
+    stop = asyncio.Event()
+    stop.set()
+    result = run(
+        run_media_cleanup_worker(
+            Path("synthetic.json"),
+            environ={},
+            sink=cast("EventSink", lambda _event: None),
+            stop_event=stop,
+        )
+    )
+
+    assert result is FoundationExitCode.SUCCESS
+    assert intervals == [3600]
+    assert foundation.shutdowns == 1
+    assert foundation.logger.events[-1]["event_name"] == (
+        "media_cleanup_worker_stopped"
+    )

@@ -13,7 +13,7 @@ from telethon import types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublicationPayload, PublisherError
 from telegram_assist_bot.domain import PublicationFailureCategory
-from telegram_assist_bot.domain.posts import TelegramEntity
+from telegram_assist_bot.domain.posts import TelegramEntity, TelegramUrlButton
 from telegram_assist_bot.infrastructure.telegram.user_publisher import (
     TelethonPublisherGateway,
 )
@@ -150,6 +150,34 @@ def test_maps_text_url_with_persian_utf16_offsets(tmp_path: Path) -> None:
     assert mapped[0].offset == 8
     assert mapped[0].length == 4
     assert mapped[0].url == "https://example.invalid/path"
+
+
+def test_maps_source_proxy_url_buttons_with_rows_unchanged(tmp_path: Path) -> None:
+    client = Client()
+    gateway = TelethonPublisherGateway(client, media_root=tmp_path)
+    proxy_url = "tg://proxy?server=example.invalid&port=443&secret=safe"
+    keyboard = (
+        (
+            TelegramUrlButton("اتصال 🚀", proxy_url),
+            TelegramUrlButton("راهنما", "https://example.invalid/help"),
+        ),
+    )
+
+    asyncio.run(
+        gateway.publish(
+            PublicationPayload(-1009, "پروکسی‌ آماده ✨", (), (), keyboard),
+            timeout_seconds=1,
+        )
+    )
+
+    assert client.call is not None
+    rows = client.call[2]["buttons"]
+    assert isinstance(rows, list)
+    assert [button.text for button in rows[0]] == ["اتصال 🚀", "راهنما"]
+    assert [button.url for button in rows[0]] == [
+        proxy_url,
+        "https://example.invalid/help",
+    ]
 
 
 def test_legacy_text_url_is_omitted_and_logged_without_blocking_send(

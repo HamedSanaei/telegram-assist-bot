@@ -59,6 +59,18 @@ class MessageMediaPhoto: ...
 class MessageMediaWebPage: ...
 
 
+class KeyboardButtonUrl:
+    def __init__(self, text: str, url: str) -> None:
+        self.text = text
+        self.url = url
+
+
+class KeyboardButtonCallback:
+    def __init__(self, text: str, data: bytes) -> None:
+        self.text = text
+        self.data = data
+
+
 def test_maps_persian_text_zwnj_emoji_and_utf16_entities_exactly() -> None:
     source = "سلام‌دنیا\n😀"
     raw = SimpleNamespace(
@@ -104,6 +116,74 @@ def test_maps_optional_text_url_metadata_without_changing_utf16_bounds() -> None
     assert mapped.text_entities[0].offset_utf16 == 8
     assert mapped.text_entities[0].length_utf16 == 4
     assert mapped.text_entities[0].url == "https://example.invalid/path"
+
+
+def test_maps_url_button_rows_and_proxy_target_exactly() -> None:
+    proxy_url = (
+        "https://t.me/proxy?server=bo9ss.co.uk.&port=443&"
+        "secret=ddf0eeb0bd9adc4fd4a93994ee3b2a216b"
+    )
+    raw = SimpleNamespace(
+        id=72,
+        date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
+        message="پروکسی‌ آماده ✨",
+        entities=[],
+        media=None,
+        action=None,
+        reply_markup=SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    buttons=[
+                        KeyboardButtonUrl("اتصال 🚀", proxy_url),
+                        KeyboardButtonUrl("راهنما", "tg://resolve?domain=example"),
+                    ]
+                )
+            ]
+        ),
+    )
+
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username="source_fixture",
+        source_channel_display_name="منبع فارسی",
+    )
+
+    assert tuple(button.label for button in mapped.inline_keyboard[0]) == (
+        "اتصال 🚀",
+        "راهنما",
+    )
+    assert mapped.inline_keyboard[0][0].url == proxy_url
+
+
+def test_unsupported_and_invalid_source_buttons_are_not_reinterpreted() -> None:
+    raw = SimpleNamespace(
+        id=73,
+        date=datetime(2026, 7, 11, 9, 0, tzinfo=UTC),
+        message="متن",
+        entities=[],
+        media=None,
+        action=None,
+        reply_markup=SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    buttons=[
+                        KeyboardButtonCallback("Callback", b"unsafe"),
+                        KeyboardButtonUrl("Bad", "javascript:alert(1)"),
+                    ]
+                )
+            ]
+        ),
+    )
+
+    mapped = map_telethon_message(
+        raw,
+        source_channel_id=-1001,
+        source_channel_username=None,
+        source_channel_display_name="Source",
+    )
+
+    assert mapped.inline_keyboard == ()
 
 
 def test_media_text_maps_to_caption_without_normalization() -> None:

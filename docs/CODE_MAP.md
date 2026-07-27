@@ -202,10 +202,10 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `application/native_scheduling.py` | claim، Slot پنج‌دقیقه‌ای، cancellation و reconciliation بومی restart-safe |
 | `presentation/bot/runtime_handlers.py` | handlerهای SDK-independent برای `/start` و callback عملیاتی |
 | `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease منصفانه با `claim_due_at`، وضعیت retry/permanent هر مدیر، heartbeat Runtime، status/due/sync outbox و loader تأیید |
-| `bootstrap/media_cleanup.py` | Composition Root یک‌مرحله‌ای cleanup محدود Media با reuse تنظیمات، repository و storage موجود |
+| `bootstrap/media_cleanup.py` | Composition Root مشترک cleanup یک‌مرحله‌ای و Worker دوره‌ای با Config/Logging/lifecycle موجود |
 | `bootstrap/scheduling.py` | Composition Root legacy؛ CLI عمومی آن پیش از Session fail-closed است |
 | `bootstrap/__init__.py` | API عمومی Composition Root و CLI بدون اجرای Startup هنگام import |
-| `domain/posts/models.py` | `PostId`، هویت منبع، محتوای اصلی و aggregate frozen `Post` با انقضای ۱۴روزه |
+| `domain/posts/models.py` | `PostId`، هویت منبع، محتوای اصلی، دکمهٔ URL قابل‌انتقال و aggregate frozen `Post` با انقضای ۱۴روزه |
 | `domain/posts/entities.py` | Entity مستقل از SDK با مختصات UTF-16 و metadata محدود Custom Emoji |
 | `domain/posts/status.py` | Enumها، جدول immutable Transition و history recordهای UTC |
 | `domain/posts/errors.py` | Exceptionهای Domain برای invariant، زمان، transition، version و تغییر محتوای اصلی |
@@ -236,7 +236,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `application/handle_live_message.py` | فیلتر و ingest مشترک رویداد زنده بدون payload logging |
 | `application/ingest_post_idempotently.py` | تنها write path Crawl/Listener؛ Created/AlreadyExists/Conflict و claim اتمیک |
 | `application/download_post_media.py` | دانلود stream محدود، ثبت metadata و بازیابی file-commit/database-failure |
-| `application/cleanup_expired_media.py` | پاک‌سازی batchدار و idempotent با recheck reference و containment |
+| `application/cleanup_expired_media.py` | پاک‌سازی batchدار، retry محدود per-candidate و recheck reference بلافاصله پیش از حذف |
 | `application/assemble_media_group.py` | ثبت arrival پیش از دانلود، عضوگیری replay-safe و quiet/max deadline پایدار Album |
 | `application/text_normalization.py` و `detect_exact_duplicate.py` | normalization حداقلی نسخه ۱ و hash قطعی نسخه ۱ در پنجرهٔ دقیق ۱۴روزه |
 | `application/content/` و `prepare_destination_content.py` | تبدیل خالص مقصد با edit span و rebasing Entityهای UTF-16؛ policy نسخه ۱ |
@@ -273,22 +273,23 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/persistence/mongodb/client.py` | ساخت `AsyncMongoClient` از Config/Secret، timeout محدود، Stable API و بررسی حداقل MongoDB 7.0؛ دسترسی به collection پایدار `posts` |
 | `infrastructure/persistence/mongodb/indexes.py` | Indexهای source identity، TTL و scan قطعی پنجره semantic با validation تکرارشونده و fail-fast |
 | `infrastructure/persistence/mongodb/semantic_duplicate_candidates.py` | query حداقلی MongoDB برای نامزدهای معتبر ۱۴روزه با ترتیب قطعی |
-| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity و state/result تبلیغ و semantic با default امن legacy |
+| `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity/URL-button و state/result تبلیغ و semantic با default امن legacy |
 | `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
-| `infrastructure/persistence/mongodb/content_repository.py` | Media و preparation به‌همراه mapper سازگار legacy و claim/lease/retry/permanent state برای Album |
+| `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار، recheck consumerهای پایدار و state آماده‌سازی/Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
-| `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album و metadata اختیاری `text_url` بدون binary در MongoDB |
+| `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album، metadata اختیاری `text_url` و ردیف‌های دکمهٔ URL بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
+| `workers/media_cleanup.py` | محرک one-shot و loop دوره‌ای cancellation-safe؛ هر iteration فقط یک batch MongoDB-backed |
 | `infrastructure/telegram/user/media_adapter.py` | resolve reference و stream فقط Photo/Document concrete تلگرام، با رد امن WebPage/Media نامعتبر |
 | `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium، channel access، auto-reconnect محدود و await کردن disconnect نهایی همان client مالک |
-| `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16 و نگه‌داشتن WebPage preview به‌صورت متن عادی |
+| `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16، دکمه‌های `KeyboardButtonUrl` و نگه‌داشتن WebPage preview به‌صورت متن عادی |
 | `infrastructure/telegram/user/history_adapter.py` | pagination و query bounded History بدون token SDK در Application |
 | `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، خطای mapping امن per-message و unsubscribe cancellation-safe |
 | `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
-| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
-| `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` با serializer مشترک همان client Runtime |
+| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji/URL-button، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
+| `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` همراه دکمه‌های URL با serializer مشترک همان client Runtime |
 | `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API، upload نوع‌صحیح Media زیر root محصور و نگاشت امن network/rate-limit/server failures به retry Application |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |
@@ -317,7 +318,7 @@ BSON، Collection و Query صرفاً داخل `infrastructure.persistence.mongo
 
 ```text
 دادهٔ داخلی Adapter آینده
-    -> SourceMessageIdentity + OriginalPostContent + TelegramEntity
+    -> SourceMessageIdentity + OriginalPostContent + TelegramEntity + TelegramUrlButton
     -> Post(Discovered, version=0, history=())
     -> transition_to(..., expected_version)
     -> snapshot تازهٔ Stored یا Expired + history افزایشی
@@ -328,8 +329,8 @@ BSON، Collection و Query صرفاً داخل `infrastructure.persistence.mongo
 ```
 
 هویت Idempotency زوج شناسهٔ کانال/پیام منبع است و با `PostId` داخلی یکی نیست.
-متن و Caption اصلی و Entityهای جداگانهٔ آن‌ها frozen و بدون normalization
-می‌مانند. `expires_at` فقط از زمان UTC دریافت و retention ثابت ۱۴ روز محاسبه
+متن و Caption اصلی، Entityهای جداگانه و ردیف‌های دکمهٔ URL آن‌ها frozen و بدون
+normalization می‌مانند. `expires_at` فقط از زمان UTC دریافت و retention ثابت ۱۴ روز محاسبه
 می‌شود. Mapper زمان‌های BSON را همراه remainder میکروثانیه بازسازی می‌کند؛
 `expires_at` برای جلوگیری از حذف زودهنگام TTL به بالا گرد می‌شود و query پس از
 فیلتر MongoDB مرز دقیق Domain را نیز بررسی می‌کند. درج بدون check مقدماتی به
@@ -418,6 +419,11 @@ MongoDB منبع حقیقت resume هر مرحله است. Worker پس از rest
 category و artifact موجود را دوباره مصرف می‌کند و readiness تنها یک برنده دارد.
 AIهای آینده صدا زده نمی‌شوند و state آن‌ها در این milestone صریحاً
 `NotRequested` است.
+
+Media جدید `media_expires_at = registered_at + retention_days` دارد؛ مقدار پیش‌فرض
+دو روز است. Post `expires_at` و پنجرهٔ Exact/Semantic Duplicate مستقل و دقیقاً
+چهارده روز باقی مانده‌اند. legacy Media از expiration قبلی خود استفاده می‌کند و
+هیچ migration blocking در startup اجرا نمی‌شود.
 
 ## جریان تأیید Milestone 3
 
@@ -649,3 +655,17 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `tests/e2e/test_phase_one_text_flow.py` | سناریوی E2E ۱: دریافت یکتا، AI، Approval، انتشار فوری، User API Fake، و امتیازدهی تاخیری بدون دستکاری محتوای منتشرشده |
 | `tests/e2e/test_phase_one_media_schedule_flow.py` | سناریوی E2E ۲: آلبوم out-of-order، حفظ Caption/Entity، Toggle زمان‌بندی، restart/recovery و انتشار زمان‌بندی‌شده یکتا |
 | `tests/e2e/test_phase_one_restart_idempotency.py` | سناریوی E2E ۳: Idempotency دریافت، بازیابی Lease منقضی AI Job، هم‌زمانی خوش‌بینانه، امنیت Callback، توکن جعلی و Redaction |
+
+## بسته‌بندی و انتشار Production (T080–T082)
+
+| مسیر | مسئولیت |
+|---|---|
+| `Dockerfile` و `.dockerignore` | Build چندمرحله‌ای Wheel قفل‌شده، runtime غیرroot و حذف context محلی/Secret |
+| `compose.yaml` و `deploy/compose.env.example` | MongoDB و سه Process برنامه با resourceهای per-instance |
+| `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
+| `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
+| `bootstrap/instance_config.py` | تولید typed و اتمیک Config از template بدون persistence وابسته به OS |
+| `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
+| `.github/workflows/release.yml` | GHCR چندسکویی، SemVer/SHA tags، SBOM/provenance و Asset checksum |
+| `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
+| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.0.0` |

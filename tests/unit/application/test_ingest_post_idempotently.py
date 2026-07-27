@@ -21,7 +21,12 @@ from telegram_assist_bot.application.ports import (
     PostRepositoryUnavailableError,
     TelegramTextMessage,
 )
-from telegram_assist_bot.domain.posts import Post, PostId, SourceMessageIdentity
+from telegram_assist_bot.domain.posts import (
+    Post,
+    PostId,
+    SourceMessageIdentity,
+    TelegramUrlButton,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Mapping
@@ -107,7 +112,11 @@ class Logger:
         self.events.append((event_name, fields))
 
 
-def message(*, text: str = "متن‌اصلی\n😀") -> TelegramTextMessage:
+def message(
+    *,
+    text: str = "متن‌اصلی\n😀",
+    inline_keyboard: tuple[tuple[TelegramUrlButton, ...], ...] = (),
+) -> TelegramTextMessage:
     return TelegramTextMessage(
         source_channel_id=-1001,
         source_channel_username="source_fixture",
@@ -120,6 +129,7 @@ def message(*, text: str = "متن‌اصلی\n😀") -> TelegramTextMessage:
         source_published_at=datetime(2099, 3, 20, 7, 59, tzinfo=UTC),
         is_service=False,
         has_media=False,
+        inline_keyboard=inline_keyboard,
     )
 
 
@@ -149,6 +159,29 @@ def test_created_call_wins_exactly_one_downstream_claim() -> None:
     assert first.post_id == second.post_id == PostId("candidate-a")
     assert len(repository.posts) == 1
     assert len(repository.claims) == 1
+
+
+def test_ingestion_preserves_source_url_buttons_without_normalization() -> None:
+    repository = AtomicRepository()
+    keyboard = (
+        (
+            TelegramUrlButton(
+                "اتصال مستقیم 🚀",
+                "https://t.me/proxy?server=example.test&port=443&secret=abcdef",
+            ),
+        ),
+    )
+
+    result = run(
+        ingestor(repository, "candidate-buttons").execute(
+            message(inline_keyboard=keyboard), correlation_id="buttons"
+        )
+    )
+
+    assert result.outcome is IngestionOutcome.CREATED
+    assert next(iter(repository.posts.values())).original_content.inline_keyboard == (
+        keyboard
+    )
 
 
 def test_conflicting_source_payload_is_not_overwritten_or_claimed() -> None:

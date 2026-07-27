@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -58,6 +59,7 @@ class StoredMedia:
     original_filename: str | None
     storage_path: str
     expires_at: datetime
+    post_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate digest, size and timezone-aware expiration."""
@@ -65,3 +67,11 @@ class StoredMedia:
             raise ValueError("Stored media metadata is invalid.")
         if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
             raise ValueError("Media expiration must be timezone-aware.")
+        if self.post_id is not None and (
+            type(self.post_id) is not str
+            or not self.post_id
+            or self.post_id.isspace()
+            or len(self.post_id) > 128
+        ):
+            raise ValueError("Media Post identity is invalid.")
+        object.__setattr__(self, "expires_at", self.expires_at.astimezone(UTC))

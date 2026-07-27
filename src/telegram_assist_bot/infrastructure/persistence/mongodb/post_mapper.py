@@ -34,6 +34,7 @@ from telegram_assist_bot.domain.posts import (
     SourceMessageIdentity,
     StatusTransition,
     TelegramEntity,
+    TelegramUrlButton,
     TransitionActorCategory,
 )
 from telegram_assist_bot.domain.scoring import (
@@ -218,9 +219,11 @@ _SCORING_FAILURE_FIELDS = frozenset(
         "next_retry_at_microsecond_remainder",
     }
 )
-_CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
+_LEGACY_CONTENT_FIELDS: Final[frozenset[str]] = frozenset(
     {"text", "caption", "text_entities", "caption_entities"}
 )
+_CONTENT_FIELDS: Final[frozenset[str]] = _LEGACY_CONTENT_FIELDS | {"inline_keyboard"}
+_URL_BUTTON_FIELDS: Final[frozenset[str]] = frozenset({"label", "url"})
 _ENTITY_FIELDS: Final[frozenset[str]] = frozenset(
     {"offset_utf16", "length_utf16", "entity_type", "custom_emoji_id", "url"}
 )
@@ -416,6 +419,47 @@ def _entities_from_document(value: object) -> tuple[TelegramEntity, ...]:
     return tuple(_entity_from_document(item) for item in value)
 
 
+def inline_keyboard_to_document(
+    keyboard: tuple[tuple[TelegramUrlButton, ...], ...],
+) -> list[list[dict[str, str]]]:
+    """Serialize portable source URL-button rows without changing their order."""
+    return [
+        [{"label": button.label, "url": button.url} for button in row]
+        for row in keyboard
+    ]
+
+
+def inline_keyboard_from_document(
+    value: object,
+) -> tuple[tuple[TelegramUrlButton, ...], ...]:
+    """Deserialize an additive URL keyboard or reject malformed persisted data."""
+    if type(value) is not list:
+        raise InvalidPostDocumentError
+    rows: list[tuple[TelegramUrlButton, ...]] = []
+    try:
+        for value_row in value:
+            if type(value_row) is not list:
+                raise InvalidPostDocumentError
+            buttons: list[TelegramUrlButton] = []
+            for value_button in value_row:
+                document = _require_mapping(value_button, rule="invalid_document")
+                _require_exact_fields(document, _URL_BUTTON_FIELDS)
+                buttons.append(
+                    TelegramUrlButton(
+                        _require_string(document["label"]),
+                        _require_string(document["url"]),
+                    )
+                )
+            rows.append(tuple(buttons))
+        return OriginalPostContent(
+            text=None,
+            caption=None,
+            inline_keyboard=tuple(rows),
+        ).inline_keyboard
+    except PostDomainError:
+        raise InvalidPostDocumentError from None
+
+
 def status_transition_to_document(transition: StatusTransition) -> dict[str, object]:
     """Serialize one transition for full documents or an atomic ``$push``."""
     if type(transition) is not StatusTransition:
@@ -471,19 +515,24 @@ def _original_content_to_document(content: OriginalPostContent) -> dict[str, obj
         "caption_entities": [
             _entity_to_document(entity) for entity in content.caption_entities
         ],
+        "inline_keyboard": inline_keyboard_to_document(content.inline_keyboard),
     }
 
 
 def _original_content_from_document(value: object) -> OriginalPostContent:
     """Deserialize exact source content without text or entity normalization."""
     document = _require_mapping(value, rule="invalid_document")
-    _require_exact_fields(document, _CONTENT_FIELDS)
+    if frozenset(document) not in {_CONTENT_FIELDS, _LEGACY_CONTENT_FIELDS}:
+        raise InvalidPostDocumentError("invalid_document")
     try:
         return OriginalPostContent(
             text=_require_string(document["text"], optional=True),
             caption=_require_string(document["caption"], optional=True),
             text_entities=_entities_from_document(document["text_entities"]),
             caption_entities=_entities_from_document(document["caption_entities"]),
+            inline_keyboard=inline_keyboard_from_document(
+                document.get("inline_keyboard", [])
+            ),
         )
     except PostDomainError:
         raise InvalidPostDocumentError from None
@@ -1209,6 +1258,8 @@ __all__ = [
     "InvalidPostDocumentError",
     "advertisement_processing_to_document",
     "categorization_processing_to_document",
+    "inline_keyboard_from_document",
+    "inline_keyboard_to_document",
     "post_from_document",
     "post_to_document",
     "scoring_processing_to_document",

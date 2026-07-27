@@ -1,6 +1,7 @@
 # Telegram Assist Bot
 
-پایهٔ ماژولار یک دستیار مدیریت کانال‌های تلگرام با Python و معماری تمیز است.
+نسخهٔ Production `1.0.0` یک دستیار Dockerized برای جمع‌آوری، تأیید،
+زمان‌بندی و انتشار محتوای کانال‌های تلگرام با Python و معماری تمیز است.
 Scaffold معماری، سامانهٔ typed Configuration، مدل خالص چرخهٔ عمر Post و
 Repository یکتای Post با Adapter ناهمگام MongoDB آماده‌اند. Composition Root
 Config، Logging، MongoDB و vertical slice دریافت متن Telegram User API را متصل
@@ -11,6 +12,99 @@ Config، Logging، MongoDB و vertical slice دریافت متن Telegram User A
 تعامل مدیریتی private با Bot API، callback opaque، پیام تأیید مستقل، Keyboard
 مقصد، Toggle اتمیک و همگام‌سازی چندمدیره نیز در Milestone 3 آماده شده‌اند؛
 انتشار فوری متن/Media/Album و زمان‌بندی بومی Telegram با outbox پایدار نیز آماده است.
+
+## نصب Production
+
+پیش‌نیاز Linux یک توزیع ۶۴بیتی Debian/Ubuntu یا Fedora با `curl` و دسترسی
+`sudo` است؛ Installer در صورت نیاز Docker Engine و Compose Plugin رسمی را نصب
+می‌کند. در Windows 10/11 64-bit، PowerShell 5.1+، WSL2 و Docker Desktop لازم
+است. نصب Docker Desktop ممکن است Restart و سپس اجرای دوبارهٔ همان فرمان را
+لازم کند.
+
+Linux، از PowerShell یا shellای که Environmentهای لازم را تنظیم کرده است:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.sh -o install.sh
+bash install.sh --instance first
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -Instance first
+```
+
+Installer ورودی‌های Telegram و مدیر را هدایت‌شده دریافت می‌کند و Secretها را
+فقط در فایل محلی `.env` با دسترسی محدود نگه می‌دارد. نصب Instance دوم روی همان
+Server collision پورت ندارد:
+
+```bash
+bash install.sh --instance second --retention-days 7
+```
+
+```powershell
+.\install.ps1 -Instance second -RetentionDays 7
+```
+
+نام Instance، Compose project، MongoDB database/volume، Network، Session،
+Media، Config و `.env` هر نصب مستقل است. مسیر پیش‌فرض Linux برابر
+`~/.local/share/telegram-assist-bot/<instance>` و مسیر Windows برابر
+`%LOCALAPPDATA%\TelegramAssistBot\instances\<instance>` است. retention فایل
+Media مستقل و پیش‌فرض دو روز است؛ Post metadata و تاریخچهٔ Duplicate همچنان
+۱۴ روز نگه داشته می‌شوند.
+
+## مدیریت Instance
+
+از پوشهٔ Instance در Linux:
+
+```bash
+./manage.sh login
+./manage.sh start
+./manage.sh status
+./manage.sh logs
+./manage.sh restart
+./manage.sh stop
+./manage.sh update
+./manage.sh backup
+./manage.sh config-check
+./manage.sh uninstall
+./manage.sh purge --yes
+```
+
+در Windows همین عملیات با
+`.\manage.ps1 login|start|status|logs|restart|stop|update|backup|config-check|uninstall`
+و حذف صریح با `.\manage.ps1 purge -Yes` انجام می‌شود. `uninstall` containerها
+را پایین می‌آورد اما Config و volumeها را حفظ می‌کند؛ `purge` فقط volumeهای
+همان Instance را حذف می‌کند. برای Upgrade ابتدا backup بگیرید، Installer را
+با `--update`/`-Update` دوباره اجرا کنید و سپس فرمان `update` را اجرا کنید.
+
+فقط پیام‌های Approval ساخته‌شده توسط Bot پس از پایان retention حذف می‌شوند.
+Cleanup هرگز پیام یا پست کانال Source یا Destination را حذف نمی‌کند و T079
+هیچ حذف User API اضافه نکرده است.
+
+## عیب‌یابی Production
+
+- خطای دسترسی Docker در Linux: یک‌بار logout/login کنید و Installer را تکرار
+  کنید.
+- Docker Desktop در Windows: WSL2/virtualization را فعال و پس از Restart همان
+  فرمان نصب را دوباره اجرا کنید.
+- خطای Config: `manage.sh config-check` یا `manage.ps1 config-check`.
+- وضعیت MongoDB و Workerها: `status` و سپس `logs`.
+- Login ناقص: `login` را دوباره اجرا کنید؛ داده‌های Instance حفظ می‌شوند.
+- Update ناموفق: Image tag و دسترسی به `ghcr.io` را بررسی و از backup استفاده
+  کنید.
+
+## ساخت Release و GHCR
+
+Gate Pull Request علاوه بر Quality کامل، Image، Compose، Installerهای Linux و
+Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workflow Release با Tag
+`v*.*.*` Image چندسکویی `linux/amd64` و `linux/arm64` را به
+`ghcr.io/hamedsanaei/telegram-assist-bot` می‌فرستد؛ برای Release پایدار
+`v1.0.0` Tagهای `1.0.0`، `1.0`، `1`، Git SHA و `latest` تولید می‌شوند. مراحل
+دستی و کنترل Artifact در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده
+است. Tag و GitHub Release باید فقط پس از موفقیت تمام Gateها به‌صورت دستی ساخته
+شوند.
 
 ## تعامل مدیران و تأیید
 
@@ -364,6 +458,30 @@ Media به‌صورت stream و با timeout/سقف حجم زیر root خصوص�
 می‌شود و MongoDB فقط metadata و مسیر نسبی امن را نگه می‌دارد، نه bytes فایل.
 Cleanup در batch محدود و پس از recheck reference اجرا می‌شود؛ فایل referenced یا
 غیرمنقضی، shared hash دارای reference و orphan جوان در grace حذف نمی‌شوند.
+`media.retention_days` مستقل از Post TTL است، بین ۱ تا ۳۶۵۰ قرار می‌گیرد و در
+Config قدیمی به ۲ روز resolve می‌شود. Post metadata و پنجره‌های Exact/Semantic
+Duplicate همچنان ۱۴ روزه‌اند. `media.cleanup_interval_seconds` حداقل ۶۰ ثانیه و
+پیش‌فرض ۳۶۰۰ است.
+
+یک batch دستی بدون استفاده از interval:
+
+```powershell
+uv run python -m telegram_assist_bot media-cleanup `
+  --config config/configuration.local.json
+```
+
+Worker دوره‌ای همان Use Case و state پایدار MongoDB را مصرف می‌کند:
+
+```powershell
+uv run python -m telegram_assist_bot media-cleanup-worker `
+  --config config/configuration.local.json
+```
+
+Publication یا Native Schedule فعال حتی پس از expiration اولیه فایل را محافظت
+می‌کند؛ Approval تحویل‌شده نیز تا انقضای Post مرجع محافظت می‌شود و پس از terminal
+شدن آخرین reference فایل دوباره candidate است. این cleanup
+هیچ Telegram API call ندارد، پیام Approval را حذف نمی‌کند و هرگز پست Source یا
+Destination را پاک نمی‌کند؛ حذف پیام‌های Approval به T079 واگذار شده است.
 
 نام فایل ورودی مسیر ذخیره را کنترل نمی‌کند و absolute path، traversal و symlink
 escape رد می‌شوند. روی POSIX مجوزهای خصوصی best-effort اعمال می‌شوند. `chmod` در

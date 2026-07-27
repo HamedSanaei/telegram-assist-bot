@@ -2,12 +2,15 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from telegram_assist_bot.application.download_post_media import DownloadPostMedia
+from telegram_assist_bot.application.download_post_media import (
+    DownloadPostMedia,
+    calculate_media_expiration,
+)
 from telegram_assist_bot.application.ports import (
     MediaDownloadSpec,
     MediaRateLimitError,
@@ -16,6 +19,16 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
 from tests.unit.application.m2_fakes import FakePreparationRepository
+
+
+def test_calculates_exact_utc_media_expiration_from_fixed_registration_time() -> None:
+    registered = datetime(
+        2026, 7, 27, 12, 30, tzinfo=timezone(timedelta(hours=3, minutes=30))
+    )
+
+    assert calculate_media_expiration(registered, timedelta(days=2)) == datetime(
+        2026, 7, 29, 9, 0, tzinfo=UTC
+    )
 
 
 class Source:

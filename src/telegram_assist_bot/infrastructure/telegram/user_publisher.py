@@ -6,7 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Protocol
 
-from telethon import errors, types  # type: ignore[import-untyped]
+from telethon import Button, errors, types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublisherError
 from telegram_assist_bot.domain import PublicationFailureCategory, PublishedMessage
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from telegram_assist_bot.application.ports import PublicationPayload
-    from telegram_assist_bot.domain.posts import TelegramEntity
+    from telegram_assist_bot.domain.posts import TelegramEntity, TelegramUrlButton
     from telegram_assist_bot.shared.observability import StructuredLogger
 
 
@@ -104,6 +104,15 @@ def _prepare_entities(
     return mapped, omitted
 
 
+def _map_inline_keyboard(
+    keyboard: tuple[tuple[TelegramUrlButton, ...], ...],
+) -> list[list[object]]:
+    """Map application-owned URL buttons without changing rows or targets."""
+    return [
+        [Button.url(button.label, button.url) for button in row] for row in keyboard
+    ]
+
+
 class TelethonPublisherGateway:
     """Publish through the authenticated Premium User API session only."""
 
@@ -137,6 +146,7 @@ class TelethonPublisherGateway:
             entities, omitted_text_urls = _prepare_entities(
                 payload.text, payload.entities
             )
+            buttons = _map_inline_keyboard(payload.inline_keyboard)
         except (AttributeError, OverflowError, TypeError, ValueError) as error:
             raise PublisherError(
                 PublicationFailureCategory.PERMANENT,
@@ -157,23 +167,31 @@ class TelethonPublisherGateway:
         try:
             async with asyncio.timeout(timeout_seconds):
                 if not payload.media:
+                    kwargs: dict[str, object] = {
+                        "formatting_entities": entities,
+                        "parse_mode": None,
+                    }
+                    if buttons:
+                        kwargs["buttons"] = buttons
                     result = await self._client.send_message(
                         destination_id,
                         payload.text or "",
-                        formatting_entities=entities,
-                        parse_mode=None,
+                        **kwargs,
                     )
                 else:
                     serialized = await self._media.serialize(payload.media)
                     file_value: object = (
                         serialized[0] if len(serialized) == 1 else list(serialized)
                     )
+                    kwargs = {
+                        "caption": payload.text,
+                        "formatting_entities": entities,
+                        "parse_mode": None,
+                    }
+                    if buttons:
+                        kwargs["buttons"] = buttons
                     result = await self._client.send_file(
-                        destination_id,
-                        file_value,
-                        caption=payload.text,
-                        formatting_entities=entities,
-                        parse_mode=None,
+                        destination_id, file_value, **kwargs
                     )
         except asyncio.CancelledError:
             raise

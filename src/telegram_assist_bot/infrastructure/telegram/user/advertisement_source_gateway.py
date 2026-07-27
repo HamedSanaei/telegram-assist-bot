@@ -23,7 +23,7 @@ from telegram_assist_bot.application.ports import (
     TelegramMediaReference,
 )
 from telegram_assist_bot.domain.media import MediaType
-from telegram_assist_bot.domain.posts import TelegramEntity
+from telegram_assist_bot.domain.posts import InvalidTelegramEntityError, TelegramEntity
 
 _CAMEL_BOUNDARY: Final[re.Pattern[str]] = re.compile(r"(?<!^)(?=[A-Z])")
 _DOWNLOADABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
@@ -83,7 +83,7 @@ def _map_entity(raw_entity: object) -> TelegramEntity | None:
             custom_emoji_id=custom_emoji_id,
             url=url,
         )
-    except ValueError:
+    except (InvalidTelegramEntityError, ValueError):
         return None
 
 

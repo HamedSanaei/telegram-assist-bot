@@ -1,3 +1,5 @@
+# ruff: noqa: DTZ001
+# mypy: disable-error-code="redundant-cast"
 """Validate the storage-independent post repository contract."""
 
 from __future__ import annotations
@@ -9,14 +11,19 @@ from dataclasses import FrozenInstanceError, is_dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.util import resolve_name
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from telegram_assist_bot.application.ports import (
+    AdvertisementPostUpdateRequest,
+    CategorizationPostUpdateRequest,
     InsertPostOutcome,
     InsertPostResult,
     InvalidPostRepositoryRequestError,
+    PostClaimOutcome,
+    PostClaimRequest,
+    PostClaimResult,
     PostConcurrencyConflictError,
     PostNotFoundError,
     PostRepository,
@@ -24,7 +31,12 @@ from telegram_assist_bot.application.ports import (
     PostRepositoryError,
     PostRepositoryUnavailableError,
     PostTransitionRequest,
+    ScoringPostUpdateRequest,
+    SemanticDuplicatePostUpdateRequest,
 )
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
+from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -33,6 +45,7 @@ from telegram_assist_bot.domain.posts import (
     SourceMessageIdentity,
     TransitionActorCategory,
 )
+from telegram_assist_bot.domain.scoring import ScoringState
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _PORTS_ROOT = _REPOSITORY_ROOT / "src" / "telegram_assist_bot" / "application" / "ports"
@@ -88,6 +101,106 @@ def test_insert_result_rejects_coerced_or_foreign_outcomes() -> None:
         InsertPostResult(
             cast("InsertPostOutcome", "Created"),
             PostId("canonical-post"),
+        )
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        InsertPostResult(
+            InsertPostOutcome.CREATED,
+            cast("PostId", "canonical-post"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("post_id", "post"),
+        ("source_identity", (-1001, 1)),
+        ("claimed_at", datetime(2026, 1, 1)),
+        ("correlation_id", ""),
+        ("correlation_id", " "),
+        ("correlation_id", "x" * 129),
+    ],
+)
+def test_claim_request_rejects_invalid_application_values(
+    field_name: str, value: object
+) -> None:
+    values: dict[str, object] = {
+        "post_id": PostId("post"),
+        "source_identity": SourceMessageIdentity(-1001, 1),
+        "claimed_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "correlation_id": "correlation",
+    }
+    values[field_name] = value
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        PostClaimRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "post_id"),
+    [
+        ("Claimed", PostId("post")),
+        (PostClaimOutcome.CLAIMED, "post"),
+    ],
+)
+def test_claim_result_requires_exact_owned_types(
+    outcome: object, post_id: object
+) -> None:
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        PostClaimResult(
+            cast("PostClaimOutcome", outcome),
+            cast("PostId", post_id),
+        )
+
+
+@pytest.mark.parametrize(
+    ("request_type", "version_field", "state"),
+    [
+        (
+            AdvertisementPostUpdateRequest,
+            "advertisement_processing_version",
+            AdvertisementProcessingState.NOT_REQUESTED,
+        ),
+        (
+            SemanticDuplicatePostUpdateRequest,
+            "semantic_duplicate_version",
+            SemanticDuplicateState.NOT_REQUESTED,
+        ),
+        (
+            CategorizationPostUpdateRequest,
+            "categorization_processing_version",
+            CategorizationState.NOT_REQUESTED,
+        ),
+        (
+            ScoringPostUpdateRequest,
+            "scoring_processing_version",
+            ScoringState.NOT_REQUESTED,
+        ),
+    ],
+)
+def test_processing_update_requests_reject_invalid_cas_inputs(
+    request_type: object,
+    version_field: str,
+    state: object,
+) -> None:
+    post = _stored_post()
+    object.__setattr__(post, version_field, 1)
+    request = cast("object", request_type)
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        cast("Any", request)(
+            post=post,
+            expected_processing_version=-1,
+            expected_processing_state=state,
+        )
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        cast("Any", request)(
+            post=cast("Post", object()),
+            expected_processing_version=0,
+            expected_processing_state=state,
+        )
+    with pytest.raises(InvalidPostRepositoryRequestError):
+        cast("Any", request)(
+            post=post,
+            expected_processing_version=0,
+            expected_processing_state="invalid",
         )
 
 
@@ -292,18 +405,26 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "CategorizationPostRepository",
         "CategorizationPostUpdateRequest",
         "ApprovalContent",
+        "ApprovalCleanupClaim",
+        "ApprovalCleanupRepository",
         "ApprovalAdministratorDeliveryState",
         "ApprovalDeliveryError",
         "ApprovalDeliveryRateLimitError",
         "ApprovalDeliveryRejectedError",
         "ApprovalDeliveryTransientError",
         "ApprovalDeliveryUnavailableError",
+        "ApprovalDeleteError",
+        "ApprovalDeleteOutcome",
+        "ApprovalDeleteRateLimitError",
+        "ApprovalDeleteTransientError",
+        "ApprovalDeleteUnavailableError",
         "ApprovalMedia",
         "ApprovalMediaNetworkError",
         "ApprovalMediaPathError",
         "ApprovalMediaRejectionReason",
         "ApprovalMediaRejectedError",
         "ApprovalMediaUploadTimeoutError",
+        "ApprovalMessageDeleteGateway",
         "ApprovalDeliveryClaim",
         "ApprovalPost",
         "ApprovalPostLoader",

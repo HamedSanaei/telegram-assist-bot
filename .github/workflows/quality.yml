@@ -101,3 +101,29 @@ jobs:
 
       - name: Check patch whitespace
         run: git diff --check
+
+  docker-acceptance:
+    name: Docker and installer acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate Linux installer syntax
+        run: bash -n install.sh deploy/manage.sh scripts/v1_acceptance.sh
+
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          [void][ScriptBlock]::Create((Get-Content ./install.ps1 -Raw))
+          [void][ScriptBlock]::Create((Get-Content ./deploy/manage.ps1 -Raw))
+
+      - name: Run Docker, Compose and installer acceptance
+        env:
+          TAB_IMAGE: telegram-assist-bot:acceptance
+        run: bash scripts/v1_acceptance.sh

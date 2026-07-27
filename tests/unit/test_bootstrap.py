@@ -915,6 +915,27 @@ def test_cli_dispatches_one_shot_media_cleanup(
     assert calls == [Path("media.json")]
 
 
+def test_cli_dispatches_periodic_media_cleanup_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    async def cleanup_worker(path: Path, **_kwargs: object) -> FoundationExitCode:
+        calls.append(path)
+        return FoundationExitCode.SUCCESS
+
+    monkeypatch.setattr(cli_module, "run_media_cleanup_worker", cleanup_worker)
+
+    result = cli_module.main(
+        ["media-cleanup-worker", "--config", "media.json"],
+        environ={},
+        output=_BinaryBuffer(),
+    )
+
+    assert result == FoundationExitCode.SUCCESS
+    assert calls == [Path("media.json")]
+
+
 def test_cli_inspects_queue_without_starting_runtime(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

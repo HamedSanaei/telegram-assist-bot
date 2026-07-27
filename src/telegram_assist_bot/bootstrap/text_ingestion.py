@@ -920,6 +920,7 @@ async def _create_runtime_ingestor(
         album_finalization_lease=timedelta(
             seconds=settings.media.album_finalization_lease_seconds
         ),
+        media_retention=timedelta(days=settings.media.retention_days),
     )
 
 

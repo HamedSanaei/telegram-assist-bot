@@ -121,10 +121,12 @@
   "media": {
     "root": "var/media",
     "preview_enabled": false,
+    "retention_days": 2,
     "maximum_bytes": 104857600,
     "download_timeout_seconds": 300,
     "download_max_attempts": 3,
     "cleanup_batch_size": 100,
+    "cleanup_interval_seconds": 3600,
     "orphan_grace_seconds": 3600,
     "album_quiet_seconds": 3,
     "album_maximum_wait_seconds": 30,

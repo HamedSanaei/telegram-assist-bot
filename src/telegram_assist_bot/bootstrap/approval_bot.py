@@ -25,6 +25,10 @@ from telegram_assist_bot.application.approvals import (
     SynchronizeApprovalMessages,
     ToggleDestinationSelection,
 )
+from telegram_assist_bot.application.cleanup_expired_approvals import (
+    ApprovalCleanupLoop,
+    CleanupExpiredApprovals,
+)
 from telegram_assist_bot.application.operational_approval import (
     ApprovalCallbackExecutor,
     ApprovalDeliveryLoop,
@@ -49,11 +53,13 @@ from telegram_assist_bot.domain import (
 from telegram_assist_bot.domain.categories import Category
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoAdvertisementSlotRepository,
+    MongoApprovalCleanupRepository,
     MongoApprovalPostLoader,
     MongoNativeScheduleRepository,
     MongoOperationalApprovalRepository,
     MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
+    initialize_approval_cleanup_indexes,
     initialize_native_schedule_indexes,
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
@@ -116,6 +122,7 @@ class ApprovalBotApplication:
         self._polling_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._sync_task: asyncio.Task[None] | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
         self._gateway: AiogramAdminMessagingGateway | None = None
         self._started = False
         self._closed = False
@@ -138,6 +145,7 @@ class ApprovalBotApplication:
             native_commands = database["native_schedule_commands"]
             native_leases = database["native_schedule_destination_leases"]
             await initialize_operational_approval_indexes(deliveries)
+            await initialize_approval_cleanup_indexes(database["approval_references"])
             await initialize_publication_indexes(publications, schedules, queues)
             await initialize_native_schedule_indexes(native_commands, native_leases)
             operational = MongoOperationalApprovalRepository(
@@ -341,6 +349,7 @@ class ApprovalBotApplication:
                     )
                 ),
                 max_attempts=settings.telegram.bot.approval_retry_max_attempts,
+                retention_days=settings.media.retention_days,
                 logger=self._foundation.logger,
             )
             loop = ApprovalDeliveryLoop(
@@ -358,6 +367,31 @@ class ApprovalBotApplication:
             )
             self._delivery_task = asyncio.create_task(
                 loop.run(), name="approval-delivery"
+            )
+            cleanup_repository = MongoApprovalCleanupRepository(
+                database["approval_references"],
+                database["approval_callbacks"],
+                deliveries,
+            )
+            cleanup = CleanupExpiredApprovals(
+                cleanup_repository,
+                components.gateway,
+                owner=f"approval-cleanup-{uuid4().hex}",
+                clock=_utc_now,
+                retention_days=settings.media.retention_days,
+                lease_seconds=float(settings.telegram.bot.approval_claim_lease_seconds),
+                retry_seconds=float(
+                    settings.telegram.bot.approval_delivery_poll_seconds
+                ),
+                max_attempts=settings.telegram.bot.approval_retry_max_attempts,
+            )
+            cleanup_loop = ApprovalCleanupLoop(
+                cleanup,
+                batch_size=settings.media.cleanup_batch_size,
+                interval_seconds=float(settings.media.cleanup_interval_seconds),
+            )
+            self._cleanup_task = asyncio.create_task(
+                cleanup_loop.run(), name="approval-cleanup"
             )
             sync_owner = f"approval-sync-{uuid4().hex}"
 
@@ -401,7 +435,12 @@ class ApprovalBotApplication:
         )
         self._polling_task = polling
         try:
-            watched = {polling, self._delivery_task, self._sync_task}
+            watched = {
+                polling,
+                self._delivery_task,
+                self._sync_task,
+                self._cleanup_task,
+            }
             done, _ = await asyncio.wait(
                 {task for task in watched if task is not None},
                 return_when=asyncio.FIRST_COMPLETED,
@@ -454,6 +493,10 @@ class ApprovalBotApplication:
             self._sync_task.cancel()
             await asyncio.gather(self._sync_task, return_exceptions=True)
             self._sync_task = None
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            await asyncio.gather(self._cleanup_task, return_exceptions=True)
+            self._cleanup_task = None
         if self._gateway is not None:
             await self._gateway.close()
             self._gateway = None

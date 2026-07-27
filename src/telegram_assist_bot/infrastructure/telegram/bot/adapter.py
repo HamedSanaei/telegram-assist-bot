@@ -22,6 +22,10 @@ from aiogram.types import (
 
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalDeleteOutcome,
+    ApprovalDeleteRateLimitError,
+    ApprovalDeleteTransientError,
+    ApprovalDeleteUnavailableError,
     ApprovalDeliveryRateLimitError,
     ApprovalDeliveryRejectedError,
     ApprovalDeliveryTransientError,
@@ -495,6 +499,39 @@ class AiogramAdminMessagingGateway:
         """Answer one callback with bounded transport time."""
         async with asyncio.timeout(self._timeout):
             await self._bot.answer_callback_query(query_id, text=text, show_alert=alert)
+
+    async def delete_approval_message(
+        self, chat_id: int, message_id: int
+    ) -> ApprovalDeleteOutcome:
+        """Delete one persisted Bot-owned approval message idempotently."""
+        try:
+            async with asyncio.timeout(self._timeout):
+                await self._bot.delete_message(chat_id, message_id)
+        except TelegramBadRequest as error:
+            detail = str(error).casefold()
+            if any(
+                marker in detail
+                for marker in (
+                    "message to delete not found",
+                    "message not found",
+                    "message identifier is not specified",
+                )
+            ):
+                return ApprovalDeleteOutcome.NOT_FOUND
+            raise ApprovalDeleteUnavailableError(
+                "Approval message is unavailable."
+            ) from None
+        except TelegramForbiddenError:
+            raise ApprovalDeleteUnavailableError(
+                "Approval chat is unavailable."
+            ) from None
+        except TelegramRetryAfter as error:
+            raise ApprovalDeleteRateLimitError(error.retry_after) from None
+        except (TelegramNetworkError, TelegramServerError):
+            raise ApprovalDeleteTransientError(
+                "Approval deletion temporarily failed."
+            ) from None
+        return ApprovalDeleteOutcome.DELETED
 
     async def close(self) -> None:
         """Close the Bot session exactly once."""

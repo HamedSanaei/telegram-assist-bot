@@ -122,6 +122,20 @@
 | [T056](tasks/T056-refine-phase-four-scope.md) | تعریف محصولی تحلیل عملکرد | T054 | `8` | Planned |
 | [T057](tasks/T057-refine-phase-five-scope.md) | تعریف محصولی پنل و اتوماسیون | T054 | `9`، `14` | Planned |
 
+## Milestone 8 — Production Packaging and v1 Distribution — Completed
+
+این Milestone به‌دلیل نیاز عملی Release `v1.0.0` پیش از Gateهای برنامه‌ریزی‌شدهٔ
+Milestone 7 در اولویت اجرا قرار گرفته است؛ شماره یا Scope خود Milestone 7 تغییر
+نمی‌کند.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T078](tasks/T078-configurable-independent-media-retention.md) | Configurable Independent Media Retention | T014، T029، T031، T049، T051، T054، T077 | `4`، `5.4`، `5.5`، `5.9`، `5.12–5.19`، `6` | Completed |
+| [T079](tasks/T079-expired-approval-message-cleanup.md) | Expired Approval Message Cleanup | T078 | `5.12–5.19` | Completed |
+| [T080](tasks/T080-production-docker-image-compose-stack.md) | Production Docker Image and Compose Stack | T078، T079 | Release packaging | Completed |
+| [T081](tasks/T081-multi-instance-linux-windows-installers.md) | Multi-instance Linux and Windows Installers | T080 | Release installation | Completed |
+| [T082](tasks/T082-ghcr-release-pipeline-v1-acceptance.md) | GHCR Release Pipeline and v1 Acceptance | T078–T081، T083 | Release `v1.0.0` | Completed |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
@@ -145,6 +159,8 @@
 | [T074](tasks/T074-approval-document-delivery-recovery.md) | Approval document delivery recovery | T020–T026، T061–T073 | `5.12`–`5.16`، `13`، `14`، `16` | Completed |
 | [T075](tasks/T075-destination-text-url-publication.md) | Destination text URL publication recovery | T027–T033، T060–T074 | `5.17`–`5.19`، `13`، `14`، `16` | Completed |
 | [T076](tasks/T076-immediate-publication-recovery.md) | Immediate publication and approval-toggle recovery | T027–T033، T060–T075 | `5.17`–`5.19`، `13`، `14`، `16` | Completed |
+| [T077](tasks/T077-preserve-telegram-proxy-links-and-buttons.md) | Preserve Telegram proxy links and source URL buttons | T008–T012، T017، T027–T033، T060–T076 | `5.2`، `5.4`، `5.10`، `5.17`–`5.19` | Completed |
+| [T083](tasks/T083-restore-repository-wide-quality-gates.md) | Restore Repository-wide Quality Gates | T078 | Quality and release gates | Completed |
 
 ## بازبینی وابستگی‌ها
 
