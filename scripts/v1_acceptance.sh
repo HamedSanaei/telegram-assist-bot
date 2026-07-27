@@ -21,7 +21,7 @@ TAB_MONGODB_USERNAME=acceptance TAB_MONGODB_PASSWORD=not-a-production-secret \
   TAB_MONGODB_DATABASE=telegram_assist_acceptance \
   bash "$ROOT/install.sh" --instance acceptance --retention-days 7 \
   --non-interactive --dry-run >/dev/null
-powershell -NoProfile -File "$ROOT/install.ps1" -Instance acceptance \
+pwsh -NoProfile -File "$ROOT/install.ps1" -Instance acceptance \
   -RetentionDays 7 -NonInteractive -DryRun >/dev/null
 
 for instance in a b; do
