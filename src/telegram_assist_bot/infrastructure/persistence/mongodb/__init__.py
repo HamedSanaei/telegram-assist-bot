@@ -4,6 +4,10 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.advertisement_reposi
     MongoAdvertisementRepository,
     MongoAdvertisementSlotRepository,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.approval_cleanup_repository import (  # noqa: E501
+    MongoApprovalCleanupRepository,
+    initialize_approval_cleanup_indexes,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.approval_repository import (
     MongoApprovalRepository,
     initialize_approval_indexes,
@@ -76,6 +80,7 @@ __all__ = (
     "InvalidPostDocumentError",
     "MongoAdvertisementRepository",
     "MongoAdvertisementSlotRepository",
+    "MongoApprovalCleanupRepository",
     "MongoApprovalPostLoader",
     "MongoApprovalRepository",
     "MongoConnectionError",
@@ -94,6 +99,7 @@ __all__ = (
     "close_mongodb_client",
     "create_mongodb_client",
     "get_posts_collection",
+    "initialize_approval_cleanup_indexes",
     "initialize_approval_indexes",
     "initialize_native_schedule_indexes",
     "initialize_operational_approval_indexes",

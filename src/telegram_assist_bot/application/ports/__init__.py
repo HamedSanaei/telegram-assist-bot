@@ -58,6 +58,16 @@ from telegram_assist_bot.application.ports.ai_job_repository import (
     EnqueueJobResult,
 )
 from telegram_assist_bot.application.ports.ai_provider import AIProvider
+from telegram_assist_bot.application.ports.approval_cleanup import (
+    ApprovalCleanupClaim,
+    ApprovalCleanupRepository,
+    ApprovalDeleteError,
+    ApprovalDeleteOutcome,
+    ApprovalDeleteRateLimitError,
+    ApprovalDeleteTransientError,
+    ApprovalDeleteUnavailableError,
+    ApprovalMessageDeleteGateway,
+)
 from telegram_assist_bot.application.ports.clock import Clock
 from telegram_assist_bot.application.ports.media import (
     AlbumFinalizationStatus,
@@ -210,7 +220,14 @@ __all__ = (
     "AdvertisementSourceTransientError",
     "AlbumFinalizationStatus",
     "ApprovalAdministratorDeliveryState",
+    "ApprovalCleanupClaim",
+    "ApprovalCleanupRepository",
     "ApprovalContent",
+    "ApprovalDeleteError",
+    "ApprovalDeleteOutcome",
+    "ApprovalDeleteRateLimitError",
+    "ApprovalDeleteTransientError",
+    "ApprovalDeleteUnavailableError",
     "ApprovalDeliveryClaim",
     "ApprovalDeliveryError",
     "ApprovalDeliveryRateLimitError",
@@ -223,6 +240,7 @@ __all__ = (
     "ApprovalMediaRejectedError",
     "ApprovalMediaRejectionReason",
     "ApprovalMediaUploadTimeoutError",
+    "ApprovalMessageDeleteGateway",
     "ApprovalPost",
     "ApprovalPostLoader",
     "ApprovalRepository",

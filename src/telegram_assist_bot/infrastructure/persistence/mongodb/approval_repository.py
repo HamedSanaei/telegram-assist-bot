@@ -89,6 +89,7 @@ def _reference(document: Document) -> ApprovalReference:
         document.get("next_retry_at"),
         document.get("last_error_category"),
         ApprovalDeliveryState(state),
+        document.get("approval_expires_at"),
     )
 
 
@@ -182,6 +183,9 @@ class MongoApprovalRepository:
             "next_retry_at": reference.next_retry_at,
             "last_error_category": reference.last_error_category,
             "delivery_state": reference.delivery_state.value,
+            "approval_expires_at": reference.expires_at,
+            "cleanup_state": "pending",
+            "cleanup_next_attempt_at": reference.expires_at,
         }
         try:
             await self._references.insert_one(document)
@@ -217,6 +221,9 @@ class MongoApprovalRepository:
                     "next_retry_at": reference.next_retry_at,
                     "last_error_category": reference.last_error_category,
                     "delivery_state": reference.delivery_state.value,
+                    "approval_expires_at": reference.expires_at,
+                    "cleanup_state": "pending",
+                    "cleanup_next_attempt_at": reference.expires_at,
                 }
             },
             upsert=True,

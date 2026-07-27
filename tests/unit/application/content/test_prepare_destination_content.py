@@ -68,3 +68,40 @@ def test_multiple_links_long_input_and_immutability() -> None:
     assert "https://safe.example/" in result.text
     assert result.entities == entities
     assert original.startswith("متن‌\n@one_name")
+
+
+def test_preserves_functional_telegram_proxy_links_byte_for_byte() -> None:
+    proxy = (
+        "https://t.me/proxy?server=bo9ss.co.uk.&port=443&"
+        "secret=ddf0eeb0bd9adc4fd4a93994ee3b2a216b"
+    )
+    socks = "https://telegram.me/socks?server=127.0.0.1&port=1080&user=من"
+    text = f"پروکسی‌ اصلی ✨\n{proxy}\n{socks}\nhttps://t.me/other_name?q=1"
+
+    result = prepare_destination_content(
+        text=text,
+        entities=(),
+        source_username="source_name",
+        destination_username="dest_name",
+    )
+
+    assert proxy in result.text
+    assert socks in result.text
+    assert "https://t.me/other_name" not in result.text
+    assert "?q=1" not in result.text
+
+
+def test_proxy_channel_without_complete_configuration_is_still_removed() -> None:
+    text = (
+        "https://t.me/proxy https://t.me/proxy/123 "
+        "https://t.me/proxy?server=host&port=443"
+    )
+
+    result = prepare_destination_content(
+        text=text,
+        entities=(),
+        source_username="source_name",
+        destination_username="dest_name",
+    )
+
+    assert result.text.strip() == ""

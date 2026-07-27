@@ -19,6 +19,7 @@ from telegram_assist_bot.domain.posts.models import (
     Post,
     PostId,
     SourceMessageIdentity,
+    TelegramUrlButton,
 )
 from telegram_assist_bot.domain.posts.status import (
     ALLOWED_POST_STATUS_TRANSITIONS,
@@ -48,6 +49,7 @@ __all__ = (
     "SourceMessageIdentity",
     "StatusTransition",
     "TelegramEntity",
+    "TelegramUrlButton",
     "TransitionActorCategory",
     "is_post_status_transition_allowed",
 )

@@ -1,8 +1,12 @@
+# ruff: noqa: DTZ001
+# mypy: disable-error-code="arg-type"
 """Unit tests for advertisement state independent from Post lifecycle."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -223,6 +227,104 @@ def test_expired_or_stale_post_cannot_move_backward() -> None:
     with pytest.raises(InvalidAdvertisementTransitionError):
         pending.apply_advertisement_result(
             expired_result,
+            job_id="job-ad-1",
+            expected_processing_version=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("is_advertisement", 1),
+        ("confidence", 1),
+        ("confidence", 1.1),
+        ("reason", " "),
+        ("reason", "bad\nreason"),
+        ("provider_name", ""),
+        ("attempt_number", 0),
+        ("fallback_count", -1),
+        ("cache_hit", 1),
+        ("cache_age_seconds", -0.1),
+        ("checked_at", datetime(2026, 1, 1)),
+    ],
+)
+def test_advertisement_result_rejects_invalid_persisted_metadata(
+    field_name: str, value: object
+) -> None:
+    with pytest.raises(InvalidAdvertisementResultError):
+        replace(
+            _result(is_advertisement=False),
+            **{field_name: value},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("policy", "retry_later"),
+        ("failure_category", "provider-secret"),
+        ("failure_type", " "),
+        ("attempted_candidates_count", -1),
+        ("retry_count", True),
+        ("failed_at", datetime(2026, 1, 1)),
+    ],
+)
+def test_advertisement_failure_rejects_invalid_sanitized_metadata(
+    field_name: str, value: object
+) -> None:
+    failure = AdvertisementCheckFailure(
+        AdvertisementFailurePolicy.RETRY_LATER,
+        "timeout",
+        "all_providers_failed",
+        _NOW,
+        1,
+        1,
+        0,
+        _NOW + timedelta(seconds=1),
+    )
+    with pytest.raises(InvalidAdvertisementResultError):
+        replace(failure, **{field_name: value})
+    with pytest.raises(InvalidAdvertisementResultError):
+        replace(failure, next_retry_at=_NOW)
+
+
+@pytest.mark.parametrize("job_id", ["", " ", "x" * 129, 1])
+def test_start_advertisement_rejects_invalid_job_identity(job_id: object) -> None:
+    with pytest.raises(InvalidAdvertisementTransitionError):
+        _stored_post().start_advertisement_check(
+            job_id=cast("str", job_id),
+            expected_processing_version=0,
+            requested_at=_NOW,
+        )
+
+
+def test_advertisement_transitions_are_idempotent_only_for_exact_replay() -> None:
+    pending = _pending()
+    assert (
+        pending.start_advertisement_check(
+            job_id="job-ad-1",
+            expected_processing_version=1,
+            requested_at=_NOW,
+        )
+        is pending
+    )
+    result = _result(is_advertisement=False)
+    completed = pending.apply_advertisement_result(
+        result,
+        job_id="job-ad-1",
+        expected_processing_version=1,
+    )
+    assert (
+        completed.apply_advertisement_result(
+            result,
+            job_id="job-ad-1",
+            expected_processing_version=2,
+        )
+        is completed
+    )
+    with pytest.raises(InvalidAdvertisementTransitionError):
+        pending.apply_advertisement_result(
+            cast("AdvertisementCheckResult", object()),
             job_id="job-ad-1",
             expected_processing_version=1,
         )

@@ -120,11 +120,9 @@ class PublishImmediately:
             or (request.payload.text is None and not request.payload.media)
         ):
             return PublishResult(PublishStatus.REJECTED)
-        validation_time = self._aware_now()
-        if any(
-            not item.ready or item.expires_at.astimezone(UTC) <= validation_time
-            for item in request.payload.media
-        ):
+        # Media retention is a cleanup-candidate boundary, not a publication
+        # validity deadline. Durable active references protect the underlying file.
+        if any(not item.ready for item in request.payload.media):
             return PublishResult(PublishStatus.REJECTED)
         identity = publication_identity(
             request.post_id, request.destination_id, request.action

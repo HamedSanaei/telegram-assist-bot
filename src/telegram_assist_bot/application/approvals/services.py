@@ -366,6 +366,7 @@ class DeliverApproval:
         header: str,
         content: ApprovalContent,
         keyboard: InlineKeyboard | None = None,
+        expires_at: datetime | None = None,
     ) -> ApprovalReference:
         """Resume content-first delivery without repeating a persisted phase."""
         existing = await self._repository.get_reference(reference_id)
@@ -382,7 +383,12 @@ class DeliverApproval:
                     (),
                     active=False,
                     delivery_state=ApprovalDeliveryState.PENDING,
+                    expires_at=expires_at,
                 )
+            )
+        elif existing.expires_at is None and expires_at is not None:
+            existing = await self._repository.save_delivery_progress(
+                replace(existing, expires_at=expires_at)
             )
         if not existing.content_message_ids:
             existing = await self._repository.save_delivery_progress(

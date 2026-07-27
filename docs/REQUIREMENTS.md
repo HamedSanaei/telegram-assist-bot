@@ -244,7 +244,8 @@ Telegram Bot API فقط برای ارتباط با مدیران، دریافت �
 - آلبوم یا Media Group
 - پست متنی بدون مدیا
 
-اطلاعات مدیا باید به‌گونه‌ای ذخیره شود که پست تا ۱۴ روز بعد قابل ارسال مجدد باشد.
+Metadata پست و تاریخچهٔ Duplicate همچنان ۱۴ روز نگهداری می‌شوند. retention فایل
+محلی Media مستقل و قابل تنظیم است و مقدار پیش‌فرض آن ۲ روز است.
 
 اگر استفاده مجدد از شناسه فایل تلگرام امکان‌پذیر نباشد، فایل باید در فضای ذخیره‌سازی محلی یا یک Object Storage دانلود و نگهداری شود.
 
@@ -258,9 +259,17 @@ Telegram Bot API فقط برای ارتباط با مدیران، دریافت �
 - مسیر ذخیره‌سازی
 - Hash فایل
 - وضعیت دانلود
-- تاریخ انقضا
+- تاریخ انقضای مستقل Media
 
-در صورت حذف رکورد پست پس از ۱۴ روز، فایل‌های محلی وابسته به آن نیز باید پاک شوند.
+Media پس از رسیدن تاریخ انقضای خود فقط وقتی حذف می‌شود که هیچ Publication،
+زمان‌بندی بومی، انتشار تبلیغاتی یا عملیات nonterminal به آن نیاز نداشته باشد و
+reference بلافاصله پیش از حذف دوباره بررسی شود. shared file تا آخرین reference
+معتبر حفظ می‌شود. رسیدن retention اولیه به‌تنهایی Publication فعال را نامعتبر
+نمی‌کند.
+
+Cleanup فقط فایل خصوصی زیر Media root را حذف می‌کند. پیام Approval ساخته‌شده توسط
+Bot در T079 پاک خواهد شد؛ پست‌های کانال مبدا و مقصد هرگز توسط Media cleanup حذف
+نمی‌شوند.
 
 ### 5.6 مدیریت آلبوم‌ها
 
@@ -367,7 +376,16 @@ Premium Emoji و Custom Emojiهای موجود در متن باید حفظ شو�
 - http://t.me/username
 - https://telegram.me/username
 - لینک مستقیم پست مانند https://t.me/channel/123
-- لینک‌های دارای Query String
+- لینک‌های نامرتبط دارای Query String
+
+لینک تنظیمات عملیاتی پروکسی تلگرام از نوع `t.me/proxy` با پارامترهای غیرخالی
+`server`، `port` و `secret` و لینک `t.me/socks` با پارامترهای غیرخالی `server`
+و `port` از این حذف مستثنا هستند و باید بدون تغییر حفظ شوند. صرفاً داشتن نام
+کانال `proxy` یا یک Query ناقص، لینک را از قانون حذف مستثنا نمی‌کند.
+
+ردیف‌ها و ترتیب دکمه‌های چسبانِ URL منبع نیز باید تا انتشار مقصد حفظ شوند؛ متن
+دکمه و URLهای `http`، `https` و `tg` نباید normalize یا بازنویسی شوند. دکمه‌های
+callback یا قابلیت‌های وابسته به Bot/Session منبع نباید به URL جعلی تبدیل شوند.
 
 حذف لینک یا Username نباید باعث چسبیدن کلمات به یکدیگر یا ایجاد خطوط خالی غیرعادی شود.
 
@@ -1573,7 +1591,8 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 1. پیام‌های امروز تمام کانال‌های فعال دریافت شوند.
 1. پیام‌های جدید به‌صورت لحظه‌ای دریافت شوند.
 1. هیچ پیام واحدی دوبار ذخیره نشود.
-1. متن و مدیای پست‌ها تا ۱۴ روز نگهداری شوند.
+1. metadata پست‌ها و تاریخچهٔ Duplicate تا ۱۴ روز نگهداری شوند.
+1. Media محلی با retention مستقل پیش‌فرض ۲ روز و حفاظت reference فعال پاک شود.
 1. رکوردهای منقضی‌شده با TTL حذف شوند.
 1. آلبوم‌ها به‌عنوان یک پست واحد پردازش شوند.
 1. Premium Emojiها در انتشار نهایی سالم باقی بمانند.
@@ -1627,3 +1646,19 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 | `17.10` | ثبت نتیجه و audit تمام تلاش‌های انتشار | T051، Publication و Slot audit | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_competing_workers_restart_and_audit` | PASS | دادهٔ خام خطا و payload حساس عمداً persist نمی‌شود. |
 | `17.11` | Retry محدود و نتیجهٔ مبهم بدون ارسال کور | T051، backoff محدود و terminal outcome | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_ambiguous_timeout_is_persisted_without_second_send` | PASS | Retry فقط برای شکست قطعی transient مجاز است. |
 | `17.12` | گزارش مجاز امروز، آینده و خطاها | T053، query محدود، renderer فارسی و Handler مجاز | `tests/integration/advertisements/test_advertisement_admin_reports.py::test_all_commands_ranges_order_filtering_and_zero_mutation` | PASS | فقط policy `truncate` پشتیبانی می‌شود؛ pagination عمداً وجود ندارد. |
+
+## 18. توزیع Production نسخهٔ اول
+
+1. نسخهٔ Package و Image برابر `1.0.0` است.
+2. Linux و Windows نصب هدایت‌شده و چند Instance مستقل دارند.
+3. Config، Session، Media، MongoDB volume/database و Network هر Instance مستقل
+   است و هیچ Host port collision وجود ندارد.
+4. Media retention مستقل پیش‌فرض دو روز است؛ Post metadata و Exact/Semantic
+   Duplicate history همچنان ۱۴ روز است.
+5. فقط پیام‌های Approval ساخته‌شده توسط Bot پس از انقضا حذف می‌شوند؛ پیام‌ها و
+   پست‌های Source و Destination هرگز توسط Cleanup حذف نمی‌شوند.
+6. PR باید Quality و Docker acceptance را بدون Push اجرا کند.
+7. Release workflow Imageهای amd64/arm64 را با OCI metadata، SBOM و provenance
+   به `ghcr.io/hamedsanaei/telegram-assist-bot` آمادهٔ انتشار می‌کند.
+8. Tag، GitHub Release و انتشار Production فقط پس از checklist و اقدام صریح
+   مالک انجام می‌شود.

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
         PublishedMessage,
     )
     from telegram_assist_bot.domain.media import MediaType
-    from telegram_assist_bot.domain.posts import TelegramEntity
+    from telegram_assist_bot.domain.posts import TelegramEntity, TelegramUrlButton
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +47,7 @@ class PublicationPayload:
     text: str | None
     entities: tuple[TelegramEntity, ...]
     media: tuple[PublicationMedia, ...] = ()
+    inline_keyboard: tuple[tuple[TelegramUrlButton, ...], ...] = ()
 
 
 class PublisherError(Exception):

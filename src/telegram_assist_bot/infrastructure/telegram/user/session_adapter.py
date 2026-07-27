@@ -165,9 +165,9 @@ class _SessionFileLock:
                 handle.flush()
             handle.seek(0)
             if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                module = importlib.import_module("msvcrt")
+                locking = cast("Callable[[int, int, int], None]", module.locking)
+                locking(handle.fileno(), int(module.LK_NBLCK), 1)
             else:
                 module = importlib.import_module("fcntl")
                 flock = cast("Callable[[int, int], None]", module.flock)
@@ -186,10 +186,10 @@ class _SessionFileLock:
         self._handle = None
         try:
             if os.name == "nt":
-                import msvcrt
-
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                module = importlib.import_module("msvcrt")
+                locking = cast("Callable[[int, int, int], None]", module.locking)
+                locking(handle.fileno(), int(module.LK_UNLCK), 1)
             else:
                 module = importlib.import_module("fcntl")
                 flock = cast("Callable[[int, int], None]", module.flock)

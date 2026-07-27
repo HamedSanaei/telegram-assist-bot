@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from telethon.errors import (  # type: ignore[import-untyped]
@@ -426,3 +426,54 @@ def test_rejects_invalid_connection_retry_policy(
             FakeFactory(SessionState()),
             **{field_name: value},
         )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("api_id", 0, "api_id"),
+        ("api_hash", "", "api_hash"),
+        ("timeout_seconds", 0, "timeouts"),
+        ("lock_timeout_seconds", 0, "timeouts"),
+        ("session_path", "wrong.txt", ".session"),
+    ],
+)
+def test_rejects_invalid_session_adapter_configuration(
+    tmp_path: Path,
+    field_name: str,
+    value: object,
+    message: str,
+) -> None:
+    overrides: dict[str, object] = {field_name: value}
+    if field_name == "session_path":
+        overrides[field_name] = tmp_path / cast("str", value)
+    with pytest.raises(ValueError, match=message):
+        adapter(tmp_path, FakeFactory(SessionState()), **overrides)
+
+
+def test_login_mutation_methods_require_one_owned_pending_flow(
+    tmp_path: Path,
+) -> None:
+    gateway = adapter(tmp_path, FakeFactory(SessionState()))
+    with pytest.raises(ValueError, match="phone_number"):
+        run(gateway.begin_login(" "))
+    with pytest.raises(TelegramSessionMutationConflictError):
+        run(gateway.submit_login_code("code"))
+    with pytest.raises(TelegramSessionMutationConflictError):
+        run(gateway.submit_two_factor_password("password"))
+
+    run(gateway.begin_login("synthetic-phone"))
+    with pytest.raises(TelegramSessionMutationConflictError):
+        run(gateway.begin_login("synthetic-phone"))
+    run(gateway.abort_login())
+
+
+def test_context_manager_lock_release_is_idempotent(tmp_path: Path) -> None:
+    lock = session_adapter_module._SessionFileLock(
+        tmp_path / "source.session.lock",
+    )
+    assert lock.try_acquire()
+    assert lock.try_acquire()
+    with lock as acquired:
+        assert acquired is lock
+    lock.release()

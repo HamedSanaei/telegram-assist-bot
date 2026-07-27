@@ -50,19 +50,24 @@ def test_preserves_album_member_order() -> None:
     ]
 
 
-@pytest.mark.parametrize(
-    "media",
-    [
-        PublicationMedia(MediaType.PHOTO, "safe/expired", NOW),
-        PublicationMedia(
-            MediaType.PHOTO,
-            "safe/not-ready",
-            datetime(2026, 7, 13, tzinfo=UTC),
-            ready=False,
-        ),
-    ],
-)
-def test_rejects_expired_or_not_ready_media(media: PublicationMedia) -> None:
+def test_initial_retention_boundary_does_not_block_active_publication() -> None:
+    repository, publisher = Repository(), Publisher()
+    media = PublicationMedia(MediaType.PHOTO, "safe/retention-reached", NOW)
+    payload = PublicationPayload(-1002, None, (), (media,))
+    result = asyncio.run(
+        service(repository, publisher).execute(request(payload=payload))
+    )
+    assert result.status is PublishStatus.SUCCEEDED
+    assert publisher.payloads[0].media == (media,)
+
+
+def test_rejects_not_ready_media() -> None:
+    media = PublicationMedia(
+        MediaType.PHOTO,
+        "safe/not-ready",
+        datetime(2026, 7, 13, tzinfo=UTC),
+        ready=False,
+    )
     repository, publisher = Repository(), Publisher()
     payload = PublicationPayload(-1002, None, (), (media,))
     result = asyncio.run(

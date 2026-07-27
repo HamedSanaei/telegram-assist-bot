@@ -10,7 +10,7 @@ from zipfile import BadZipFile, ZipFile
 
 EXPECTED_DISTRIBUTION = "telegram-assist-bot"
 EXPECTED_IMPORT_PACKAGE = "telegram_assist_bot"
-EXPECTED_VERSION = "0.1.0"
+EXPECTED_VERSION = "1.0.0"
 EXPECTED_PYTHON_SPECIFIERS = frozenset({">=3.12", "<3.15"})
 EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
     {
@@ -232,6 +232,88 @@ def validate_wheel(wheel_path: Path) -> None:
                     )
                 },
             }
+            additional_required_members = {
+                "application/advertisements/expand_advertisement_slots.py",
+                "application/advertisements/fetch_advertisement_source.py",
+                "application/advertisements/publish_advertisement_slot.py",
+                "application/advertisements/report_advertisement_runs.py",
+                "application/advertisements/resolve_publication_collision.py",
+                "application/ai/__init__.py",
+                "application/ai/cache_key.py",
+                "application/ai/claim_ai_job.py",
+                "application/ai/contracts.py",
+                "application/ai/enqueue_ai_job.py",
+                "application/ai/exceptions.py",
+                "application/ai/prompt_registry.py",
+                "application/ai/prompts/advertisement_detection.txt",
+                "application/ai/prompts/categorization.txt",
+                "application/ai/prompts/scoring.txt",
+                "application/ai/prompts/semantic_duplicate.txt",
+                "application/ai/provider_guard.py",
+                "application/ai/response_normalizer.py",
+                "application/ai/response_parser.py",
+                "application/ai/response_validator.py",
+                "application/ai/retry.py",
+                "application/ai/routing.py",
+                "application/ai/schemas.py",
+                "application/ai/task_handlers/__init__.py",
+                "application/ai/task_handlers/advertisement_detection.py",
+                "application/ai/task_handlers/categorization.py",
+                "application/ai/task_handlers/scoring.py",
+                "application/ai/task_handlers/semantic_duplicate.py",
+                "application/ai/use_cases/execute_ai_with_fallback.py",
+                "application/cleanup_expired_approvals.py",
+                "application/config/advertisements.py",
+                "application/detect_advertisement.py",
+                "application/detect_semantic_duplicate.py",
+                "application/ports/advertisement_repository.py",
+                "application/ports/advertisement_source_gateway.py",
+                "application/ports/ai_audit_repository.py",
+                "application/ports/ai_cache_repository.py",
+                "application/ports/ai_job_repository.py",
+                "application/ports/ai_provider.py",
+                "application/ports/approval_cleanup.py",
+                "application/ports/provider_metrics_repository.py",
+                "application/ports/provider_state_repository.py",
+                "application/ports/publication_collision.py",
+                "application/ports/semantic_duplicate_candidates.py",
+                "application/scoring_approval.py",
+                "application/use_cases/apply_ai_score.py",
+                "application/use_cases/categorize_with_ai.py",
+                "application/use_cases/schedule_ai_scoring.py",
+                "bootstrap/instance_config.py",
+                "domain/advertisement.py",
+                "domain/advertisement_slot.py",
+                "domain/advertisement_source.py",
+                "domain/advertisements/__init__.py",
+                "domain/advertisements/campaign.py",
+                "domain/ai/__init__.py",
+                "domain/ai/provider_health.py",
+                "domain/ai_job.py",
+                "domain/ai_task.py",
+                "domain/publication_collision.py",
+                "domain/scoring.py",
+                "infrastructure/ai/__init__.py",
+                "infrastructure/ai/deepseek.py",
+                "infrastructure/ai/z_ai.py",
+                "infrastructure/mongodb/ai_audit_repository.py",
+                "infrastructure/mongodb/ai_cache_repository.py",
+                "infrastructure/mongodb/ai_job_repository.py",
+                "infrastructure/mongodb/provider_metrics_repository.py",
+                "infrastructure/mongodb/provider_state_repository.py",
+                "infrastructure/persistence/mongodb/advertisement_repository.py",
+                "infrastructure/persistence/mongodb/approval_cleanup_repository.py",
+                "infrastructure/persistence/mongodb/publication_collision_repository.py",
+                "infrastructure/persistence/mongodb/semantic_duplicate_candidates.py",
+                "infrastructure/telegram/user/advertisement_source_gateway.py",
+                "presentation/bot/advertisement_reports.py",
+                "workers/advertisement_publication_worker.py",
+                "workers/ai_worker.py",
+            }
+            required_members.update(
+                f"{EXPECTED_IMPORT_PACKAGE}/{name}"
+                for name in additional_required_members
+            )
             missing = sorted(required_members - set(member_names))
             if missing:
                 raise DistributionValidationError(f"wheel members missing: {missing}")

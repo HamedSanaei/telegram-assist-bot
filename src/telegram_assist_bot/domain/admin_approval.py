@@ -148,6 +148,7 @@ class ApprovalReference:
     next_retry_at: datetime | None = None
     last_error_category: str | None = None
     delivery_state: ApprovalDeliveryState = ApprovalDeliveryState.COMPLETED
+    expires_at: datetime | None = None
 
 
 __all__ = (

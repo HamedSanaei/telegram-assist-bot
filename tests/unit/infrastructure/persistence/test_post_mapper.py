@@ -4,12 +4,28 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from bson.int64 import Int64
 
-from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.advertisement import (
+    AdvertisementCheckFailure,
+    AdvertisementCheckResult,
+    AdvertisementFailurePolicy,
+    AdvertisementProcessingState,
+)
+from telegram_assist_bot.domain.categories import (
+    CategorizationCheckFailure,
+    CategorizationMethod,
+    CategorizationResult,
+)
+from telegram_assist_bot.domain.duplicates import (
+    SemanticDuplicateFailure,
+    SemanticDuplicateFailurePolicy,
+    SemanticDuplicatePolicy,
+    SemanticDuplicateResult,
+)
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -18,7 +34,16 @@ from telegram_assist_bot.domain.posts import (
     SourceMessageIdentity,
     StatusTransition,
     TelegramEntity,
+    TelegramUrlButton,
     TransitionActorCategory,
+)
+from telegram_assist_bot.domain.scoring import (
+    ScoringFailure,
+    ScoringFailurePolicy,
+    ScoringResult,
+)
+from telegram_assist_bot.infrastructure.persistence.mongodb import (
+    post_mapper as post_mapper_module,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
     POST_DOCUMENT_SCHEMA_VERSION,
@@ -44,6 +69,14 @@ def _make_post() -> Post:
                 TelegramEntity(33, 2, "custom_emoji", "5368324170671202286"),
             ),
             caption_entities=(TelegramEntity(0, 5, "italic"),),
+            inline_keyboard=(
+                (
+                    TelegramUrlButton(
+                        "اتصال 🚀",
+                        "https://t.me/proxy?server=example.invalid&port=443&secret=safe",
+                    ),
+                ),
+            ),
         ),
         source_published_at=datetime(
             2026,
@@ -136,7 +169,22 @@ def test_document_uses_stable_version_one_schema_and_indexable_identity_fields()
         "caption",
         "text_entities",
         "caption_entities",
+        "inline_keyboard",
     ]
+
+
+def test_inline_url_keyboard_round_trip_and_legacy_default() -> None:
+    document = post_to_document(_make_post())
+
+    restored = post_from_document(document)
+
+    assert restored.original_content.inline_keyboard[0][0].label == "اتصال 🚀"
+    assert restored.original_content.inline_keyboard[0][0].url.startswith(
+        "https://t.me/proxy?"
+    )
+    content = cast("dict[str, object]", document["original_content"])
+    del content["inline_keyboard"]
+    assert post_from_document(document).original_content.inline_keyboard == ()
 
 
 def test_pre_t011_version_one_document_defaults_missing_claim_marker() -> None:
@@ -455,3 +503,303 @@ def test_status_transition_helper_rejects_non_transition_values() -> None:
         )
 
     assert error.value.rule == "invalid_document"
+
+
+def test_rich_processing_results_round_trip_without_losing_audit_metadata() -> None:
+    """Exercise every additive processing result through the strict BSON mapper."""
+    now = datetime(2026, 3, 20, 8, 10, 0, 654321, tzinfo=UTC)
+    post = Post(
+        post_id=PostId("rich-processing-post"),
+        source_identity=SourceMessageIdentity(-1001, 808),
+        source_channel_username="source",
+        source_channel_display_name="Source",
+        original_content=OriginalPostContent("rich processing", None),
+        source_published_at=now - timedelta(minutes=1),
+        received_at=now,
+    ).transition_to(
+        PostStatus.STORED,
+        expected_version=0,
+        occurred_at=now,
+        actor_category=TransitionActorCategory.SERVICE,
+        reason="stored",
+    )
+    post = post.start_advertisement_check(
+        job_id="ad-job",
+        expected_processing_version=0,
+        requested_at=now,
+    ).apply_advertisement_result(
+        AdvertisementCheckResult(
+            is_advertisement=False,
+            confidence=0.75,
+            reason="not an advertisement",
+            provider_name="provider",
+            model_name="model",
+            checked_at=now,
+            prompt_version="1",
+            schema_version="1",
+            attempt_number=2,
+            fallback_count=1,
+            cache_hit=True,
+            cache_age_seconds=4.5,
+        ),
+        job_id="ad-job",
+        expected_processing_version=1,
+    )
+    post = post.start_semantic_duplicate_check(
+        job_id="semantic-job",
+        expected_processing_version=0,
+        requested_at=now,
+    ).apply_semantic_duplicate_result(
+        SemanticDuplicateResult(
+            is_duplicate=False,
+            similarity=0.25,
+            confidence=0.9,
+            matched_post_id=None,
+            reason="different",
+            provider_name="provider",
+            model_name="model",
+            checked_at=now,
+            prompt_version="1",
+            schema_version="1",
+            attempt_number=1,
+            fallback_count=0,
+            cache_hit=True,
+            cache_age_seconds=2.5,
+        ),
+        policy=SemanticDuplicatePolicy.REJECT,
+        job_id="semantic-job",
+        expected_processing_version=1,
+    )
+    post = post.enqueue_categorization("category-job").apply_categorization_result(
+        CategorizationResult(
+            category_id="news",
+            method=CategorizationMethod.AI,
+            policy_version=2,
+            assigned_at=now,
+            reason="news",
+            confidence=0.8,
+            provider_name="provider",
+            model_name="model",
+            prompt_version="2.0.0",
+            schema_version="2",
+            cache_hit=True,
+            cache_age=1.5,
+            attempt_number=2,
+            fallback_count=1,
+        ),
+        "category-job",
+        expected_processing_version=1,
+    )
+    post = post.schedule_scoring(
+        job_id="score-job",
+        due_at=now + timedelta(minutes=1),
+        expected_processing_version=0,
+    ).apply_scoring_result(
+        ScoringResult(
+            score=81,
+            confidence=0.88,
+            reason="useful",
+            provider_name="provider",
+            model_name="model",
+            scored_at=now,
+            prompt_version="1",
+            schema_version="1",
+            attractiveness_probability=0.7,
+            engagement_probability=0.6,
+            headline_quality=80,
+            freshness=90,
+            news_value=75,
+            writing_quality=79,
+            cache_hit=True,
+            cache_age_seconds=3.0,
+            attempt_number=2,
+            fallback_count=1,
+        ),
+        job_id="score-job",
+        expected_processing_version=1,
+    )
+
+    restored = post_from_document(post_to_document(post))
+
+    assert restored.advertisement_result == post.advertisement_result
+    assert restored.semantic_duplicate_result == post.semantic_duplicate_result
+    assert restored.categorization_result == post.categorization_result
+    assert restored.scoring_result == post.scoring_result
+
+
+def test_processing_failures_round_trip_without_fabricating_results() -> None:
+    """Every persisted failure policy remains distinct from a provider result."""
+    now = datetime(2026, 3, 20, 8, 10, tzinfo=UTC)
+    base = Post(
+        post_id=PostId("failure-processing-post"),
+        source_identity=SourceMessageIdentity(-1001, 809),
+        source_channel_username="source",
+        source_channel_display_name="Source",
+        original_content=OriginalPostContent("failure processing", None),
+        source_published_at=now - timedelta(minutes=1),
+        received_at=now,
+    ).transition_to(
+        PostStatus.STORED,
+        expected_version=0,
+        occurred_at=now,
+        actor_category=TransitionActorCategory.SERVICE,
+        reason="stored",
+    )
+    ad_failed = base.start_advertisement_check(
+        job_id="ad-job",
+        expected_processing_version=0,
+        requested_at=now,
+    ).apply_advertisement_failure(
+        AdvertisementCheckFailure(
+            policy=AdvertisementFailurePolicy.CONTINUE_PROCESSING,
+            failure_category="timeout",
+            failure_type="all_providers_failed",
+            failed_at=now,
+            attempted_candidates_count=2,
+            retry_count=1,
+            fallback_count=1,
+        ),
+        job_id="ad-job",
+        expected_processing_version=1,
+    )
+    semantic_failed = ad_failed.start_semantic_duplicate_check(
+        job_id="semantic-job",
+        expected_processing_version=0,
+        requested_at=now,
+    ).apply_semantic_duplicate_failure(
+        SemanticDuplicateFailure(
+            SemanticDuplicateFailurePolicy.CONTINUE_PROCESSING,
+            "timeout",
+            now,
+        ),
+        job_id="semantic-job",
+        expected_processing_version=1,
+    )
+    categorization_failed = semantic_failed.enqueue_categorization(
+        "category-job"
+    ).apply_categorization_failure(
+        CategorizationCheckFailure(
+            policy="stop_processing",
+            failure_category="invalid_response",
+            failed_at=now,
+            attempted_candidates_count=2,
+            retry_count=1,
+            fallback_count=1,
+        ),
+        "category-job",
+        expected_processing_version=1,
+    )
+    restored_category = post_from_document(post_to_document(categorization_failed))
+    assert restored_category.categorization_result is None
+    assert (
+        restored_category.categorization_failure
+        == categorization_failed.categorization_failure
+    )
+
+    score_base = semantic_failed.apply_categorization_result(
+        CategorizationResult(
+            "news",
+            CategorizationMethod.SOURCE_DEFAULT,
+            1,
+            now,
+        ),
+        None,
+        0,
+    ).schedule_scoring(
+        job_id="score-job",
+        due_at=now + timedelta(minutes=1),
+        expected_processing_version=0,
+    )
+    scoring_failed = score_base.apply_scoring_failure(
+        ScoringFailure(
+            ScoringFailurePolicy.MARK_UNAVAILABLE,
+            "provider_failure",
+            now,
+        ),
+        job_id="score-job",
+        expected_processing_version=1,
+    )
+    restored_score = post_from_document(post_to_document(scoring_failed))
+    assert restored_score.scoring_result is None
+    assert restored_score.scoring_failure == scoring_failed.scoring_failure
+
+
+@pytest.mark.parametrize(
+    ("path", "invalid_value"),
+    [
+        (("original_content",), []),
+        (("original_content", "text"), 1),
+        (("original_content", "text_entities"), {}),
+        (("original_content", "text_entities", 0), []),
+        (("original_content", "text_entities", 0, "offset_utf16"), True),
+        (("original_content", "inline_keyboard"), {}),
+        (("original_content", "inline_keyboard", 0), {}),
+        (("original_content", "inline_keyboard", 0, 0), []),
+        (("transition_history",), {}),
+        (("transition_history", 0), []),
+        (("transition_history", 0, "actor_category"), "unknown"),
+        (("received_at",), "2026-01-01"),
+        (("next_stage_claimed_at",), datetime(2026, 1, 1, tzinfo=UTC)),
+    ],
+)
+def test_nested_document_type_confusion_is_rejected(
+    path: tuple[str | int, ...],
+    invalid_value: object,
+) -> None:
+    """The public mapper rejects malformed nested BSON without coercion."""
+    document = post_to_document(_make_post())
+    target: object = document
+    for segment in path[:-1]:
+        target = (
+            cast("dict[str, object]", target)[segment]
+            if isinstance(segment, str)
+            else cast("list[object]", target)[segment]
+        )
+    final = path[-1]
+    if isinstance(final, str):
+        cast("dict[str, object]", target)[final] = invalid_value
+    else:
+        cast("list[object]", target)[final] = invalid_value
+
+    with pytest.raises(InvalidPostDocumentError):
+        post_from_document(document)
+
+
+@pytest.mark.parametrize(
+    ("operation", "args"),
+    [
+        (post_mapper_module._require_mapping, ([1],)),
+        (post_mapper_module._require_mapping, ({1: "value"},)),
+        (post_mapper_module._require_string, (1,)),
+        (post_mapper_module._require_boolean, (1,)),
+        (post_mapper_module._require_float, (1,)),
+        (post_mapper_module._entities_from_document, ({},)),
+        (post_mapper_module.inline_keyboard_from_document, ({},)),
+        (post_mapper_module.status_transition_to_document, ({},)),
+        (post_mapper_module.post_to_document, ({},)),
+    ],
+)
+def test_mapper_scalar_helpers_reject_type_confusion(
+    operation: object,
+    args: tuple[object, ...],
+) -> None:
+    """All BSON helper boundaries reject coercion before constructing Domain data."""
+    kwargs = (
+        {"rule": "invalid_document"}
+        if operation is post_mapper_module._require_mapping
+        else {}
+    )
+    with pytest.raises(InvalidPostDocumentError):
+        cast("Any", operation)(*args, **kwargs)
+
+
+def test_mapper_timestamp_overflow_is_reported_as_safe_document_error() -> None:
+    with pytest.raises(InvalidPostDocumentError) as ceiling:
+        post_mapper_module._ceil_to_millisecond(datetime.max.replace(tzinfo=UTC))
+    assert ceiling.value.rule == "invalid_timestamp"
+    with pytest.raises(InvalidPostDocumentError) as restore:
+        post_mapper_module._restore_ceil_datetime(
+            datetime.min.replace(tzinfo=UTC),
+            1,
+        )
+    assert restore.value.rule == "invalid_timestamp"
