@@ -22,7 +22,8 @@ TAB_MONGODB_USERNAME=acceptance TAB_MONGODB_PASSWORD=not-a-production-secret \
   bash "$ROOT/install.sh" --instance acceptance --retention-days 7 \
   --non-interactive --dry-run >/dev/null
 pwsh -NoProfile -File "$ROOT/install.ps1" -Instance acceptance \
-  -RetentionDays 7 -NonInteractive -DryRun >/dev/null
+  -RetentionDays 7 -InstallDirectory "$TMP_ROOT/pwsh-dry-run" \
+  -NonInteractive -DryRun >/dev/null
 
 for instance in a b; do
   mkdir -p "$TMP_ROOT/$instance/config"
