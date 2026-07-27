@@ -607,3 +607,19 @@
   هستند. expiration اولیه Media deadline Publication نیست؛ reference فعال فایل
   را حفظ و terminal شدن آخرین reference آن را دوباره candidate می‌کند. حذف پیام
   Telegram و Approval فقط در T079 مجاز است.
+
+## ADR-042 — یک Image مشترک و Compose project مستقل برای هر Instance
+
+- **Status:** Accepted
+- **Context:** نسخهٔ اول باید روی Linux و Windows نصب ساده، چند Instance هم‌زمان
+  و مسیر انتشار قابل تکرار داشته باشد، بدون اینکه Config، Session، Media،
+  MongoDB یا Network Instanceها مشترک شوند.
+- **Decision:** یک Image immutable نسخهٔ `1.0.0` تمام entry pointهای Python را
+  دارد؛ Compose آن را برای Processهای جدا با project name و volume/network
+  per-instance اجرا می‌کند. هیچ host port یا container name سراسری تعریف
+  نمی‌شود. PR فقط build/smoke می‌کند و انتشار GHCR فقط از Tag یا dispatch صریح
+  با permission حداقلی، Image چندسکویی، SBOM و provenance انجام می‌شود.
+- **Consequences:** چند نصب روی یک Host collision ندارند و Upgrade با تغییر
+  Image tag انجام می‌شود. MongoDB/Media/Session با `down` حفظ و فقط purge صریح
+  همان project حذف می‌شوند. Telegram live در CI اجرا نمی‌شود و Release واقعی
+  پس از checklist دستی خارج از T082 است.

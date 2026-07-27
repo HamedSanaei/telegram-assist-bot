@@ -967,3 +967,19 @@ Post و DestinationSelection اجرا می‌کند. refresh اجباری metada
 را بازنویسی نمی‌کند، keyboard را حفظ می‌کند و شکست هر reference مستقل می‌ماند. این
 task Worker عمومی، startup wiring، Telegram handler یا ویرایش پیام مقصد اضافه نمی‌کند؛
 فعال‌سازی عملیاتی کامل به T046 واگذار شده است.
+
+## 18. استقرار Production نسخهٔ 1.0.0
+
+یک Image مشترک و immutable از Wheel قفل‌شده ساخته می‌شود و Processهای
+`runtime`، `approval-bot` و `media-cleanup-worker` در کنار MongoDB به‌صورت
+سرویس‌های جدا اجرا می‌شوند. هر Instance با Compose project مستقل، Config
+read-only، Session/Media/Mongo volume و Network اختصاصی جداسازی می‌شود؛ هیچ
+Host port یا `container_name` سراسری وجود ندارد. Processهای Python با
+UID/GID `10001:10001` و shutdown grace اجرا می‌شوند.
+
+PR Image را بدون Push می‌سازد و دو Instance را smoke می‌کند. Release workflow
+فقط برای Tag یا dispatch صریح با `GITHUB_TOKEN` و permission حداقلی به GHCR
+می‌نویسد و Imageهای amd64/arm64 دارای OCI metadata، SBOM و provenance تولید
+می‌کند. MongoDB منبع حقیقت Workerها باقی می‌ماند. Cleanup Approval فقط
+reference پیام Bot را حذف می‌کند؛ source/destination message ID هرگز ورودی حذف
+نیست. Cleanup Media نیز هیچ Telegram API call ندارد.

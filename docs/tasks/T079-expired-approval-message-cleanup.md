@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -73,3 +73,16 @@ Source یا Destination.
 ## تعریف انجام‌شدن
 
 - معیارها و Gateها پاس و رفتار حذف فقط به Approval Bot محدود شده باشد.
+
+## وضعیت راستی‌آزمایی
+
+- `ApprovalReference.approval_expires_at` از `ready_at + media.retention_days`
+  محاسبه و به‌صورت UTC-aware ذخیره می‌شود.
+- legacy referenceها در batch محدود از delivery/callback پایدار backfill می‌شوند؛
+  fallback ناشناخته از زمان اجرای فعلی شروع می‌شود تا حذف ناگهانی رخ ندهد.
+- Callback و UI پیش از Bot API deletion منقضی و claim/recheck/progress در MongoDB
+  پایدار می‌شود.
+- Unit focused: `52 passed`.
+- MongoDB Integration focused: `13 passed`.
+- هیچ Source، Destination، Scheduled Message یا Advertisement ID به delete
+  gateway داده نمی‌شود و Media cleanup همچنان Worker مستقل T078 است.

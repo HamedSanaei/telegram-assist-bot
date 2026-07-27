@@ -10,6 +10,7 @@ import pytest
 from telegram_assist_bot.application.ports import (
     MediaPermanentError,
     MediaTooLargeError,
+    MediaTransientError,
 )
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
@@ -182,5 +183,86 @@ def test_disabled_preview_never_creates_preview_directory(tmp_path: Path) -> Non
         assert not await storage.prepare_preview_directory()
         assert not await storage.ensure_preview(media)
         assert not preview_root.exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("magic", "expected"),
+    [
+        (b"\xff\xd8\xffbytes", "jpg"),
+        (b"\x89PNG\r\n\x1a\nbytes", "png"),
+        (b"RIFF0000WEBPbytes", "webp"),
+        (b"GIF87abytes", "gif"),
+        (b"%PDF-bytes", "pdf"),
+        (b"PK\x03\x04bytes", "zip"),
+        (b"\x00\x00\x00\x18ftypqt  bytes", "mov"),
+        (b"\x00\x00\x00\x18ftypm4a bytes", "m4a"),
+        (b"\x1aE\xdf\xa3bytes", "mkv"),
+        (b"ID3bytes", "mp3"),
+        (b"OggSbytes", "ogg"),
+        (b"unknown", "bin"),
+    ],
+)
+def test_preview_magic_detection_is_explicit(
+    tmp_path: Path, magic: bytes, expected: str
+) -> None:
+    source = tmp_path / "media"
+    source.write_bytes(magic)
+    assert LocalMediaStorage._preview_extension(source, None, None) == expected
+
+
+def test_preview_extension_prefers_supported_filename_after_unknown_mime(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "media"
+    source.write_bytes(b"unknown")
+    assert (
+        LocalMediaStorage._preview_extension(
+            source, "application/octet-stream", "ITEM.WEBP"
+        )
+        == "webp"
+    )
+
+
+def test_store_rejects_invalid_limits_chunks_and_hash_collision(
+    tmp_path: Path,
+) -> None:
+    storage = LocalMediaStorage(tmp_path / "private")
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError):  # noqa: PT011
+            await storage.store(MediaIdentity(-1, 1), chunks(b"x"), maximum_bytes=0)
+        with pytest.raises(MediaPermanentError, match="invalid chunk"):
+            await storage.store(MediaIdentity(-1, 2), chunks(b""), maximum_bytes=1)
+        relative, _, _ = await storage.store(
+            MediaIdentity(-1, 3), chunks(b"same"), maximum_bytes=10
+        )
+        (tmp_path / "private" / relative).write_bytes(b"wrong")
+        with pytest.raises(MediaPermanentError, match="inconsistent"):
+            await storage.store(MediaIdentity(-1, 4), chunks(b"same"), maximum_bytes=10)
+
+    asyncio.run(scenario())
+
+
+def test_delete_rejects_directory_and_maps_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = LocalMediaStorage(tmp_path / "private")
+    (tmp_path / "private" / "directory").mkdir()
+
+    async def scenario() -> None:
+        with pytest.raises(MediaPermanentError, match="regular"):
+            await storage.delete("directory")
+        path, _, _ = await storage.store(
+            MediaIdentity(-1, 9), chunks(b"x"), maximum_bytes=2
+        )
+
+        def fail_unlink(*_args: object, **_kwargs: object) -> None:
+            raise OSError
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+        with pytest.raises(MediaTransientError):
+            await storage.delete(path)
 
     asyncio.run(scenario())

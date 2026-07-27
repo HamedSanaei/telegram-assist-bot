@@ -1,0 +1,90 @@
+name: ${COMPOSE_PROJECT_NAME:-telegram-assist-default}
+
+x-application: &application
+  image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.0.0}
+  restart: unless-stopped
+  init: true
+  depends_on:
+    mongodb:
+      condition: service_healthy
+  env_file:
+    - path: ${TAB_INSTANCE_DIR:-.}/.env
+      required: true
+  environment:
+    TAB_CONFIG_PATH: /app/config/configuration.json
+  volumes:
+    - type: bind
+      source: ${TAB_INSTANCE_DIR:-.}/config/configuration.json
+      target: /app/config/configuration.json
+      read_only: true
+    - type: volume
+      source: telegram_session
+      target: /app/var/sessions
+    - type: volume
+      source: media
+      target: /app/var/media
+  networks:
+    - application
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  stop_grace_period: 30s
+
+services:
+  mongodb:
+    image: mongo:8.0.21
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${TAB_MONGODB_USERNAME:?required}
+      MONGO_INITDB_ROOT_PASSWORD: ${TAB_MONGODB_PASSWORD:?required}
+      MONGO_INITDB_DATABASE: ${TAB_MONGODB_DATABASE:?required}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --host 127.0.0.1
+          --username "$$MONGO_INITDB_ROOT_USERNAME"
+          --password "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin
+          --eval "quit(db.runCommand({ ping: 1 }).ok ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    volumes:
+      - type: volume
+        source: mongodb_data
+        target: /data/db
+    networks:
+      - application
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  runtime:
+    <<: *application
+    command: ["runtime", "--config", "/app/config/configuration.json"]
+
+  approval-bot:
+    <<: *application
+    command: ["approval-bot", "--config", "/app/config/configuration.json"]
+
+  media-cleanup-worker:
+    <<: *application
+    command:
+      - media-cleanup-worker
+      - --config
+      - /app/config/configuration.json
+
+volumes:
+  mongodb_data:
+  telegram_session:
+  media:
+
+networks:
+  application:
+    driver: bridge

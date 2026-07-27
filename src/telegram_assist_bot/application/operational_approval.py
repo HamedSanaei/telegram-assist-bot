@@ -111,6 +111,7 @@ class ApprovalDeliveryWorker:
         max_backlog_per_startup: int = 10,
         historical_batch_pause_seconds: float = 10,
         max_attempts: int = 3,
+        retention_days: int = 2,
         logger: StructuredLogger | None = None,
     ) -> None:
         """Store durable delivery collaborators and bounded lease settings."""
@@ -135,6 +136,7 @@ class ApprovalDeliveryWorker:
         self._historical_batch_pause_seconds = historical_batch_pause_seconds
         self._historical_paused_until: datetime | None = None
         self._max_attempts = max_attempts
+        self._retention_days = retention_days
         self._idle = False
 
     async def execute_once(self) -> bool:
@@ -289,6 +291,8 @@ class ApprovalDeliveryWorker:
                     header=header,
                     content=post.content,
                     keyboard=keyboard,
+                    expires_at=(claim.ready_at or now)
+                    + timedelta(days=self._retention_days),
                 )
                 self._emit(
                     "approval_message_delivered",

@@ -12,7 +12,10 @@ import pytest
 
 import telegram_assist_bot.bootstrap.approval_bot as module
 from telegram_assist_bot.application.approvals import AuthorizeAdminAction
-from telegram_assist_bot.application.ports import BotEditOutcome
+from telegram_assist_bot.application.ports import (
+    ApprovalDeleteOutcome,
+    BotEditOutcome,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationConfigurationError,
     FoundationExitCode,
@@ -71,6 +74,12 @@ class Gateway:
     async def answer_callback(self, query_id: str, text: str, *, alert: bool) -> None:
         del query_id, text, alert
 
+    async def delete_approval_message(
+        self, chat_id: int, message_id: int
+    ) -> ApprovalDeleteOutcome:
+        del chat_id, message_id
+        return ApprovalDeleteOutcome.DELETED
+
 
 class Database(dict[str, object]):
     def __missing__(self, key: str) -> object:
@@ -112,6 +121,11 @@ class Foundation:
                 publishing=publishing,
                 timezone=ZoneInfo("Asia/Tehran"),
                 categorization=SimpleNamespace(categories=()),
+                media=SimpleNamespace(
+                    retention_days=2,
+                    cleanup_batch_size=100,
+                    cleanup_interval_seconds=3600,
+                ),
             )
         )
         self.mongodb_client = {"test": Database()}
@@ -137,6 +151,20 @@ class IdleDeliveryLoop:
         delivery_interval_seconds: float,
     ) -> None:
         del worker, poll_seconds, delivery_interval_seconds
+
+    async def run(self) -> None:
+        await asyncio.Event().wait()
+
+
+class IdleCleanupLoop:
+    def __init__(
+        self,
+        cleanup: object,
+        *,
+        batch_size: int,
+        interval_seconds: float,
+    ) -> None:
+        del cleanup, batch_size, interval_seconds
 
     async def run(self) -> None:
         await asyncio.Event().wait()
@@ -231,7 +259,9 @@ def test_approval_bot_start_and_shutdown_own_resources_once(
         )
         monkeypatch.setattr(module, "initialize_publication_indexes", initialize)
         monkeypatch.setattr(module, "initialize_native_schedule_indexes", initialize)
+        monkeypatch.setattr(module, "initialize_approval_cleanup_indexes", initialize)
         monkeypatch.setattr(module, "ApprovalDeliveryLoop", IdleDeliveryLoop)
+        monkeypatch.setattr(module, "ApprovalCleanupLoop", IdleCleanupLoop)
         monkeypatch.setattr(module, "ApprovalCallbackExecutor", Callbacks)
         monkeypatch.setattr(module, "Router", CapturingRouter)
         monkeypatch.setattr(module, "Dispatcher", Poller)

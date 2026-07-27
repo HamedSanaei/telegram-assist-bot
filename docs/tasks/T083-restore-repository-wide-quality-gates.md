@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -108,3 +108,16 @@ git diff --check
 - threshold یا validationها تضعیف نشده‌اند.
 - T079 یا Feature دیگری پیاده‌سازی نشده است.
 - T083 در Roadmap و STATUS به‌روز و پیام Commit انگلیسی پیشنهاد شده است.
+
+## وضعیت راستی‌آزمایی
+
+- Branch Coverage از baseline `84.09%` به `90.05%` رسید؛ Full Suite
+  `1757 passed`.
+- `ruff check .` با exclude دقیق فقط `npvt-link-extractor`، format و mypy موفق
+  شدند.
+- Wheel/sdist نسخهٔ `1.0.0` با allowlist دقیق پذیرفته و تست member مصنوعی
+  ناخواسته رد شد.
+- text integrity changed/all، detect-secrets روی tracked و untrackedهای قابل
+  انتشار، build، clean-wheel import و `git diff --check` موفق شدند.
+- کانفیگ‌های عمومی VPN طبق تصمیم مالک دادهٔ عمومی عمدی‌اند و تغییر یا mask
+  نشدند؛ هیچ Secret واقعی پروژه یافت نشد.

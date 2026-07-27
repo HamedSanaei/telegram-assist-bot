@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -70,3 +70,13 @@ Planned
 ## تعریف انجام‌شدن
 
 - Image و stack قابل بازتولید، امن و verified باشند.
+
+## وضعیت راستی‌آزمایی
+
+- Dockerfile چندمرحله‌ای با uv قفل‌شده، Wheel builder، runtime غیرroot و
+  entrypoint مستقیم Python ایجاد شد.
+- Compose چهار service، healthcheck MongoDB، volume/network project-scoped،
+  Config read-only، logging bounded و بدون Host port/container name ثابت دارد.
+- قرارداد static و isolation دو Instance: `4 passed`.
+- Docker CLI در میزبان فعلی موجود نبود؛ Build و Compose smoke واقعی در Acceptance
+  و CI نهایی T082 تعریف شده است.

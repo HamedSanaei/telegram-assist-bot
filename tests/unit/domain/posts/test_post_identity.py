@@ -1,3 +1,4 @@
+# mypy: disable-error-code="arg-type"
 """Verify post aggregate identity and immutable original-content contracts."""
 
 from __future__ import annotations
@@ -8,6 +9,9 @@ from typing import Any, cast
 
 import pytest
 
+from telegram_assist_bot.domain.advertisement import AdvertisementProcessingState
+from telegram_assist_bot.domain.categories import CategorizationState
+from telegram_assist_bot.domain.duplicates import SemanticDuplicateState
 from telegram_assist_bot.domain.posts import (
     InvalidPostIdentifierError,
     InvalidPostVersionError,
@@ -21,6 +25,7 @@ from telegram_assist_bot.domain.posts import (
     TelegramEntity,
     TelegramUrlButton,
 )
+from telegram_assist_bot.domain.scoring import ScoringState
 
 
 class _ExternalString(str):
@@ -360,4 +365,137 @@ def test_post_rejects_invalid_aggregate_field_shapes(
     changes: dict[str, Any] = {field_name: value}
 
     with pytest.raises(expected_error):
+        replace(post, **changes)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("advertisement_state", "NotRequested"),
+        ("advertisement_processing_version", -1),
+        ("advertisement_job_id", " "),
+        ("advertisement_result", object()),
+        ("advertisement_failure", object()),
+        ("semantic_duplicate_state", "NotRequested"),
+        ("semantic_duplicate_version", -1),
+        ("semantic_duplicate_job_id", " "),
+        ("semantic_duplicate_result", object()),
+        ("semantic_duplicate_failure", object()),
+        ("categorization_state", "NotRequested"),
+        ("categorization_processing_version", -1),
+        ("categorization_job_id", " "),
+        ("categorization_result", object()),
+        ("categorization_failure", object()),
+        ("scoring_state", "NotRequested"),
+        ("scoring_processing_version", -1),
+        ("scoring_job_id", " "),
+        ("scoring_result", object()),
+        ("scoring_failure", object()),
+    ],
+)
+def test_post_rehydration_rejects_invalid_typed_processing_fields(
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    """Strict aggregate construction rejects persistence type confusion."""
+    post = _make_post(
+        post_id=PostId("typed-processing"),
+        source_identity=SourceMessageIdentity(-1001, 1),
+    )
+    with pytest.raises(PostInvariantError):
+        replace(post, **{field_name: invalid_value})
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "advertisement_state": AdvertisementProcessingState.NOT_REQUESTED,
+            "advertisement_processing_version": 1,
+        },
+        {
+            "advertisement_state": AdvertisementProcessingState.PENDING,
+            "advertisement_processing_version": 1,
+        },
+        {
+            "advertisement_state": AdvertisementProcessingState.RETRY_PENDING,
+            "advertisement_processing_version": 1,
+            "advertisement_job_id": "job",
+        },
+        {
+            "advertisement_state": AdvertisementProcessingState.PASSED,
+            "advertisement_processing_version": 1,
+            "advertisement_job_id": "job",
+        },
+        {
+            "semantic_duplicate_state": SemanticDuplicateState.NOT_REQUESTED,
+            "semantic_duplicate_version": 1,
+        },
+        {
+            "semantic_duplicate_state": SemanticDuplicateState.PENDING,
+            "semantic_duplicate_version": 1,
+        },
+        {
+            "semantic_duplicate_state": SemanticDuplicateState.RETRY_PENDING,
+            "semantic_duplicate_version": 1,
+            "semantic_duplicate_job_id": "job",
+        },
+        {
+            "semantic_duplicate_state": SemanticDuplicateState.PASSED,
+            "semantic_duplicate_version": 1,
+            "semantic_duplicate_job_id": "job",
+        },
+        {
+            "categorization_state": CategorizationState.NOT_REQUESTED,
+            "categorization_processing_version": 1,
+        },
+        {
+            "categorization_state": CategorizationState.PENDING,
+            "categorization_processing_version": 1,
+        },
+        {
+            "categorization_state": CategorizationState.RETRY_PENDING,
+            "categorization_processing_version": 1,
+            "categorization_job_id": "job",
+        },
+        {
+            "categorization_state": CategorizationState.AI_ASSIGNED,
+            "categorization_processing_version": 1,
+        },
+        {
+            "categorization_state": CategorizationState.PROCESSING_STOPPED,
+            "categorization_processing_version": 1,
+            "categorization_job_id": "job",
+        },
+        {
+            "scoring_state": ScoringState.NOT_REQUESTED,
+            "scoring_processing_version": 1,
+        },
+        {
+            "scoring_state": ScoringState.SCHEDULED,
+            "scoring_processing_version": 1,
+        },
+        {
+            "scoring_state": ScoringState.RETRY_PENDING,
+            "scoring_processing_version": 1,
+            "scoring_job_id": "job",
+            "scoring_due_at": datetime(2026, 1, 2, tzinfo=UTC),
+        },
+        {
+            "scoring_state": ScoringState.COMPLETED,
+            "scoring_processing_version": 1,
+            "scoring_job_id": "job",
+            "scoring_due_at": datetime(2026, 1, 2, tzinfo=UTC),
+        },
+    ],
+)
+def test_post_rehydration_rejects_inconsistent_processing_state(
+    changes: dict[str, object],
+) -> None:
+    """Persistence cannot combine a processing state with missing metadata."""
+    post = _make_post(
+        post_id=PostId("state-processing"),
+        source_identity=SourceMessageIdentity(-1001, 1),
+    )
+    with pytest.raises(PostInvariantError):
         replace(post, **changes)

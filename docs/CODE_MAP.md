@@ -655,3 +655,17 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `tests/e2e/test_phase_one_text_flow.py` | سناریوی E2E ۱: دریافت یکتا، AI، Approval، انتشار فوری، User API Fake، و امتیازدهی تاخیری بدون دستکاری محتوای منتشرشده |
 | `tests/e2e/test_phase_one_media_schedule_flow.py` | سناریوی E2E ۲: آلبوم out-of-order، حفظ Caption/Entity، Toggle زمان‌بندی، restart/recovery و انتشار زمان‌بندی‌شده یکتا |
 | `tests/e2e/test_phase_one_restart_idempotency.py` | سناریوی E2E ۳: Idempotency دریافت، بازیابی Lease منقضی AI Job، هم‌زمانی خوش‌بینانه، امنیت Callback، توکن جعلی و Redaction |
+
+## بسته‌بندی و انتشار Production (T080–T082)
+
+| مسیر | مسئولیت |
+|---|---|
+| `Dockerfile` و `.dockerignore` | Build چندمرحله‌ای Wheel قفل‌شده، runtime غیرroot و حذف context محلی/Secret |
+| `compose.yaml` و `deploy/compose.env.example` | MongoDB و سه Process برنامه با resourceهای per-instance |
+| `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
+| `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
+| `bootstrap/instance_config.py` | تولید typed و اتمیک Config از template بدون persistence وابسته به OS |
+| `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
+| `.github/workflows/release.yml` | GHCR چندسکویی، SemVer/SHA tags، SBOM/provenance و Asset checksum |
+| `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
+| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.0.0` |

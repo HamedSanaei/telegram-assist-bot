@@ -21,6 +21,10 @@ from telegram_assist_bot.bootstrap.approval_queue import (
     recover_rejected_document_deliveries,
     retry_approval_delivery,
 )
+from telegram_assist_bot.bootstrap.instance_config import (
+    InstanceConfigurationError,
+    render_instance_configuration,
+)
 from telegram_assist_bot.bootstrap.media_cleanup import (
     run_media_cleanup,
     run_media_cleanup_worker,
@@ -159,6 +163,7 @@ def _parser() -> _SafeArgumentParser:
             "approval-queue",
             "approval-retry",
             "approval-recover-documents",
+            "render-instance-config",
         ),
         default="check",
         help=(
@@ -192,6 +197,18 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--requeue", action="store_true")
     parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument("--template", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--instance")
+    parser.add_argument("--retention-days", type=int, default=2)
+    parser.add_argument("--approval-chat-id", type=int)
+    parser.add_argument("--admin-user-id", type=int)
+    parser.add_argument("--source-username")
+    parser.add_argument("--destination-name")
+    parser.add_argument("--destination-id", type=int)
+    parser.add_argument("--destination-username")
+    parser.add_argument("--timezone", default="UTC")
+    parser.add_argument("--force", action="store_true")
     return parser
 
 
@@ -240,11 +257,43 @@ def main(
 
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.command == "render-instance-config":
+            required = (
+                arguments.template,
+                arguments.output,
+                arguments.instance,
+                arguments.approval_chat_id,
+                arguments.admin_user_id,
+                arguments.source_username,
+                arguments.destination_name,
+                arguments.destination_id,
+            )
+            if any(value is None for value in required):
+                raise CliUsageError
+            render_instance_configuration(
+                template_path=arguments.template,
+                output_path=arguments.output,
+                instance=arguments.instance,
+                retention_days=arguments.retention_days,
+                approval_chat_id=arguments.approval_chat_id,
+                admin_user_id=arguments.admin_user_id,
+                source_username=arguments.source_username,
+                destination_name=arguments.destination_name,
+                destination_id=arguments.destination_id,
+                destination_username=arguments.destination_username,
+                timezone=arguments.timezone,
+                force=arguments.force,
+            )
+            return int(FoundationExitCode.SUCCESS)
         configuration_path = resolve_configuration_path(
             arguments.config,
             environ=environment_snapshot,
         )
-    except (CliUsageError, FoundationConfigurationError) as error:
+    except (
+        CliUsageError,
+        FoundationConfigurationError,
+        InstanceConfigurationError,
+    ) as error:
         with suppress(Exception):
             _report_cli_failure(sink=sink, redactor=redactor, error=error)
         return int(FoundationExitCode.CONFIGURATION_ERROR)

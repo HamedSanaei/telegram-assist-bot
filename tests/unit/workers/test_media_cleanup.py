@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from telegram_assist_bot.workers.media_cleanup import PeriodicMediaCleanupWorker
+from telegram_assist_bot.workers.media_cleanup import (
+    PeriodicMediaCleanupWorker,
+    cleanup_media_once,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -88,3 +91,28 @@ def test_periodic_worker_cancellation_interrupts_sleep() -> None:
             await task
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("interval", [True, 59, 604_801])
+def test_periodic_worker_rejects_invalid_intervals(interval: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="Media cleanup interval is outside supported bounds",
+    ):
+        PeriodicMediaCleanupWorker(
+            cast("CleanupExpiredMedia", Cleanup()),
+            cast("Clock", FixedClock(datetime(2026, 7, 27, tzinfo=UTC))),
+            interval_seconds=cast("int", interval),
+        )
+
+
+def test_cleanup_media_once_delegates_the_explicit_time() -> None:
+    now = datetime(2026, 7, 27, tzinfo=UTC)
+    cleanup = Cleanup()
+
+    result = asyncio.run(
+        cleanup_media_once(cast("CleanupExpiredMedia", cleanup), now=now)
+    )
+
+    assert result == 0
+    assert cleanup.calls == [now]

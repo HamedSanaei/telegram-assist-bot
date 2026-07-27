@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-arg"
 """Application tests for semantic enqueue, consistency and winner selection."""
 
 from __future__ import annotations
@@ -5,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pytest
 
@@ -25,18 +26,17 @@ from telegram_assist_bot.application.detect_semantic_duplicate import (
 from telegram_assist_bot.application.ports import (
     EnqueueJobOutcome,
     EnqueueJobResult,
+    PostConcurrencyConflictError,
     SemanticDuplicateCandidate,
     SemanticDuplicatePostUpdateRequest,
 )
 from telegram_assist_bot.domain.advertisement import AdvertisementCheckResult
+from telegram_assist_bot.domain.ai_job import AIJob
 from telegram_assist_bot.domain.duplicates import (
     DuplicateCheckResult,
     SemanticDuplicateFailurePolicy,
     SemanticDuplicatePolicy,
 )
-
-if TYPE_CHECKING:
-    from telegram_assist_bot.domain.ai_job import AIJob
 from telegram_assist_bot.domain.posts import (
     OriginalPostContent,
     Post,
@@ -324,5 +324,233 @@ def test_handler_selects_highest_similarity_and_applies_manual_review() -> None:
             posts.post.semantic_duplicate_manual_review_reason
             == "semantic_duplicate_detected"
         )
+
+    asyncio.run(scenario())
+
+
+def _semantic_ai_result(
+    *,
+    duplicate: bool = True,
+    similarity: float = 0.9,
+    candidate_reason: str = "similar",
+) -> dict[str, object]:
+    result = AIResult(
+        success=True,
+        task_type=AITaskType.SEMANTIC_DUPLICATE,
+        provider_name="provider",
+        model_name="model",
+        result={
+            "is_duplicate": duplicate,
+            "similarity": similarity,
+            "confidence": 0.6,
+            "reason": candidate_reason,
+        },
+        confidence=0.6,
+        reason=candidate_reason,
+        prompt_version="2.0.0",
+        schema_version="2",
+        attempt_number=1,
+        fallback_count=0,
+        created_at=_NOW,
+    )
+    return result.model_dump(mode="json")
+
+
+def _completed_semantic_job(
+    candidate_results: list[object],
+) -> AIJob:
+    job = AIJob.create(
+        "semantic-handler-job",
+        "current",
+        AITaskType.SEMANTIC_DUPLICATE.value,
+        "2.0.0",
+        "2",
+        20,
+        created_at=_NOW,
+    ).claim("worker", 60, _NOW)
+    return replace(
+        job.complete("worker", {}, _NOW),
+        semantic_candidate_results=cast("Any", candidate_results),
+    )
+
+
+@pytest.mark.parametrize(
+    ("threshold", "policy"),
+    [
+        (1, SemanticDuplicatePolicy.REJECT),
+        (-0.1, SemanticDuplicatePolicy.REJECT),
+        (0.8, "reject"),
+    ],
+)
+def test_handler_rejects_invalid_threshold_and_policy(
+    threshold: object, policy: object
+) -> None:
+    async def scenario() -> None:
+        with pytest.raises(SemanticDuplicateTaskValidationError):
+            await SemanticDuplicateHandler(
+                cast("Any", _Posts(_post())),
+                cast("Any", _Jobs()),
+                cast("Any", _Candidates(())),
+                _Clock(),
+            ).complete(
+                job_id="missing",
+                expected_job_version=0,
+                threshold=cast("Any", threshold),
+                duplicate_policy=cast("Any", policy),
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "candidate_results",
+    [
+        [],
+        ["not-a-mapping"],
+        [{"candidate_post_id": "unknown", "result": _semantic_ai_result()}],
+        [{"candidate_post_id": "candidate", "result": {"invalid": True}}],
+        [
+            {
+                "candidate_post_id": "candidate",
+                "result": {
+                    **_semantic_ai_result(),
+                    "prompt_version": "old",
+                },
+            }
+        ],
+        [
+            {
+                "candidate_post_id": "candidate",
+                "result": _semantic_ai_result(duplicate=False, similarity=0.9),
+            }
+        ],
+    ],
+)
+def test_handler_rejects_malformed_or_inconsistent_candidate_results(
+    candidate_results: list[object],
+) -> None:
+    async def scenario() -> None:
+        jobs = _Jobs()
+        jobs.job = _completed_semantic_job(candidate_results)
+        with pytest.raises(SemanticDuplicateTaskValidationError):
+            await SemanticDuplicateHandler(
+                cast("Any", _Posts(_post())),
+                cast("Any", jobs),
+                cast("Any", _Candidates((_candidate("candidate", 1),))),
+                _Clock(),
+            ).complete(
+                job_id=jobs.job.job_id,
+                expected_job_version=jobs.job.version,
+                threshold=0.8,
+                duplicate_policy=SemanticDuplicatePolicy.REJECT,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_handler_reports_stale_and_concurrent_conflict_without_overwrite() -> None:
+    class MissingPosts(_Posts):
+        async def get_by_id(self, post_id: PostId, *, as_of: datetime) -> Post | None:
+            del post_id, as_of
+            return None
+
+    class ConflictingPosts(_Posts):
+        async def update_semantic_duplicate(
+            self, request: SemanticDuplicatePostUpdateRequest
+        ) -> Post:
+            del request
+            raise PostConcurrencyConflictError
+
+    async def scenario() -> None:
+        jobs = _Jobs()
+        jobs.job = _completed_semantic_job(
+            [
+                {
+                    "candidate_post_id": "candidate",
+                    "result": _semantic_ai_result(),
+                }
+            ]
+        )
+        candidates = _Candidates((_candidate("candidate", 1),))
+        stale = await SemanticDuplicateHandler(
+            cast("Any", MissingPosts(_post())),
+            cast("Any", jobs),
+            cast("Any", candidates),
+            _Clock(),
+        ).complete(
+            job_id=jobs.job.job_id,
+            expected_job_version=jobs.job.version,
+            threshold=0.8,
+            duplicate_policy=SemanticDuplicatePolicy.REJECT,
+        )
+        assert stale.outcome is SemanticDuplicateHandlerOutcome.STALE
+
+        pending = _post().start_semantic_duplicate_check(
+            job_id=jobs.job.job_id,
+            expected_processing_version=0,
+            requested_at=_NOW,
+        )
+        conflict = await SemanticDuplicateHandler(
+            cast("Any", ConflictingPosts(pending)),
+            cast("Any", jobs),
+            cast("Any", candidates),
+            _Clock(),
+        ).complete(
+            job_id=jobs.job.job_id,
+            expected_job_version=jobs.job.version,
+            threshold=0.8,
+            duplicate_policy=SemanticDuplicatePolicy.REJECT,
+        )
+        assert conflict.outcome is SemanticDuplicateHandlerOutcome.CONFLICT
+
+    asyncio.run(scenario())
+
+
+def test_handler_applies_retry_failure_and_rejects_wrong_job_status() -> None:
+    async def scenario() -> None:
+        job = AIJob.create(
+            "semantic-handler-job",
+            "current",
+            AITaskType.SEMANTIC_DUPLICATE.value,
+            "2.0.0",
+            "2",
+            20,
+            created_at=_NOW,
+        ).claim("worker", 60, _NOW)
+        waiting = replace(
+            job.fail("worker", "safe", 30, _NOW),
+            safe_last_failure_code="timeout",
+        )
+        jobs = _Jobs()
+        jobs.job = waiting
+        posts = _Posts(
+            _post().start_semantic_duplicate_check(
+                job_id=waiting.job_id,
+                expected_processing_version=0,
+                requested_at=_NOW,
+            )
+        )
+        result = await SemanticDuplicateHandler(
+            cast("Any", posts),
+            cast("Any", jobs),
+            cast("Any", _Candidates(())),
+            _Clock(),
+        ).fail(
+            job_id=waiting.job_id,
+            expected_job_version=waiting.version,
+            policy=SemanticDuplicateFailurePolicy.RETRY_LATER,
+        )
+        assert result.outcome is SemanticDuplicateHandlerOutcome.RETRY_SCHEDULED
+        with pytest.raises(SemanticDuplicateTaskValidationError):
+            await SemanticDuplicateHandler(
+                cast("Any", posts),
+                cast("Any", jobs),
+                cast("Any", _Candidates(())),
+                _Clock(),
+            ).fail(
+                job_id=waiting.job_id,
+                expected_job_version=waiting.version,
+                policy=SemanticDuplicateFailurePolicy.STOP_PROCESSING,
+            )
 
     asyncio.run(scenario())

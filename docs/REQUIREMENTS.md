@@ -1646,3 +1646,19 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 | `17.10` | ثبت نتیجه و audit تمام تلاش‌های انتشار | T051، Publication و Slot audit | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_competing_workers_restart_and_audit` | PASS | دادهٔ خام خطا و payload حساس عمداً persist نمی‌شود. |
 | `17.11` | Retry محدود و نتیجهٔ مبهم بدون ارسال کور | T051، backoff محدود و terminal outcome | `tests/integration/advertisements/test_idempotent_advertisement_publication.py::test_ambiguous_timeout_is_persisted_without_second_send` | PASS | Retry فقط برای شکست قطعی transient مجاز است. |
 | `17.12` | گزارش مجاز امروز، آینده و خطاها | T053، query محدود، renderer فارسی و Handler مجاز | `tests/integration/advertisements/test_advertisement_admin_reports.py::test_all_commands_ranges_order_filtering_and_zero_mutation` | PASS | فقط policy `truncate` پشتیبانی می‌شود؛ pagination عمداً وجود ندارد. |
+
+## 18. توزیع Production نسخهٔ اول
+
+1. نسخهٔ Package و Image برابر `1.0.0` است.
+2. Linux و Windows نصب هدایت‌شده و چند Instance مستقل دارند.
+3. Config، Session، Media، MongoDB volume/database و Network هر Instance مستقل
+   است و هیچ Host port collision وجود ندارد.
+4. Media retention مستقل پیش‌فرض دو روز است؛ Post metadata و Exact/Semantic
+   Duplicate history همچنان ۱۴ روز است.
+5. فقط پیام‌های Approval ساخته‌شده توسط Bot پس از انقضا حذف می‌شوند؛ پیام‌ها و
+   پست‌های Source و Destination هرگز توسط Cleanup حذف نمی‌شوند.
+6. PR باید Quality و Docker acceptance را بدون Push اجرا کند.
+7. Release workflow Imageهای amd64/arm64 را با OCI metadata، SBOM و provenance
+   به `ghcr.io/hamedsanaei/telegram-assist-bot` آمادهٔ انتشار می‌کند.
+8. Tag، GitHub Release و انتشار Production فقط پس از checklist و اقدام صریح
+   مالک انجام می‌شود.

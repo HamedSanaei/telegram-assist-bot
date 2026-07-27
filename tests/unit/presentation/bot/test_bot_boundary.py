@@ -17,6 +17,9 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from telegram_assist_bot.application.approvals import AuthorizeAdminAction
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalDeleteOutcome,
+    ApprovalDeleteTransientError,
+    ApprovalDeleteUnavailableError,
     ApprovalDeliveryRateLimitError,
     ApprovalDeliveryRejectedError,
     ApprovalDeliveryTransientError,
@@ -60,6 +63,7 @@ class FakeBot:
         self.answers: list[str] = []
         self.media_count = 0
         self.media_calls: list[tuple[str, object, dict[str, object]]] = []
+        self.deleted: list[tuple[int, int]] = []
 
     async def send_message(self, *_args: object, **_kwargs: object) -> Result:
         return Result()
@@ -91,6 +95,9 @@ class FakeBot:
 
     async def answer_callback_query(self, query_id: str, **_kwargs: object) -> None:
         self.answers.append(query_id)
+
+    async def delete_message(self, chat_id: int, message_id: int) -> None:
+        self.deleted.append((chat_id, message_id))
 
 
 def update(actor: int = 1001, *, chat_type: str = "private") -> Update:
@@ -164,6 +171,70 @@ def test_handler_rejects_before_dispatch_and_adapter_closes_once(
         await gateway.close()
         await gateway.close()
         assert fake.session.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_approval_delete_adapter_maps_idempotent_and_safe_failures() -> None:
+    class FailingBot(FakeBot):
+        def __init__(self, error: BaseException) -> None:
+            super().__init__()
+            self.error = error
+
+        async def delete_message(self, chat_id: int, message_id: int) -> None:
+            del chat_id, message_id
+            raise self.error
+
+    async def scenario() -> None:
+        success_bot = FakeBot()
+        success = AiogramAdminMessagingGateway(
+            cast("Any", success_bot), timeout_seconds=1
+        )
+        assert (
+            await success.delete_approval_message(7, 11)
+            is ApprovalDeleteOutcome.DELETED
+        )
+        assert success_bot.deleted == [(7, 11)]
+
+        missing = AiogramAdminMessagingGateway(
+            cast(
+                "Any",
+                FailingBot(
+                    TelegramBadRequest(
+                        cast("Any", object()), "message to delete not found"
+                    )
+                ),
+            ),
+            timeout_seconds=1,
+        )
+        assert (
+            await missing.delete_approval_message(7, 11)
+            is ApprovalDeleteOutcome.NOT_FOUND
+        )
+
+        unavailable = AiogramAdminMessagingGateway(
+            cast(
+                "Any",
+                FailingBot(TelegramBadRequest(cast("Any", object()), "chat not found")),
+            ),
+            timeout_seconds=1,
+        )
+        with pytest.raises(ApprovalDeleteUnavailableError):
+            await unavailable.delete_approval_message(7, 11)
+
+        transient = AiogramAdminMessagingGateway(
+            cast(
+                "Any",
+                FailingBot(
+                    TelegramNetworkError(
+                        cast("Any", object()), "synthetic network failure"
+                    )
+                ),
+            ),
+            timeout_seconds=1,
+        )
+        with pytest.raises(ApprovalDeleteTransientError):
+            await transient.delete_approval_message(7, 11)
 
     asyncio.run(scenario())
 

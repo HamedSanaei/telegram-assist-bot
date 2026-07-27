@@ -330,6 +330,13 @@ class MongoOperationalApprovalRepository:
 
     async def is_actionable(self, post_id: str) -> bool:
         """Return whether the Post has durable ready preparation state."""
+        if (
+            await self._deliveries.find_one(
+                {"_id": post_id, "approval_expired": True}, projection={"_id": 1}
+            )
+            is not None
+        ):
+            return False
         return (
             await self._preparations.find_one(
                 {"_id": post_id, "ready_at": {"$exists": True}}, projection={"_id": 1}

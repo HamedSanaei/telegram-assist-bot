@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from telegram_assist_bot.domain.advertisement import AdvertisementCheckResult
 from telegram_assist_bot.domain.duplicates import (
+    InvalidSemanticDuplicateTransitionError,
+    SemanticDuplicateFailure,
+    SemanticDuplicateFailurePolicy,
     SemanticDuplicatePolicy,
     SemanticDuplicateResult,
     SemanticDuplicateState,
@@ -141,6 +145,53 @@ def test_non_duplicate_has_no_matched_identity_and_advances() -> None:
 def test_similarity_is_strictly_bounded(similarity: float) -> None:
     with pytest.raises(ValueError, match="similarity"):
         _result(duplicate=True, similarity=similarity)
+
+
+def test_semantic_start_and_retry_are_exactly_idempotent() -> None:
+    pending = _pending()
+    assert (
+        pending.start_semantic_duplicate_check(
+            job_id="semantic-job",
+            expected_processing_version=1,
+            requested_at=_NOW,
+        )
+        is pending
+    )
+    retry = SemanticDuplicateFailure(
+        SemanticDuplicateFailurePolicy.RETRY_LATER,
+        "timeout",
+        _NOW,
+        _NOW + timedelta(seconds=30),
+    )
+    retried = pending.apply_semantic_duplicate_failure(
+        retry,
+        job_id="semantic-job",
+        expected_processing_version=1,
+    )
+    assert retried.semantic_duplicate_state is SemanticDuplicateState.RETRY_PENDING
+    with pytest.raises(InvalidSemanticDuplicateTransitionError):
+        retried.start_semantic_duplicate_check(
+            job_id="different-job",
+            expected_processing_version=2,
+            requested_at=_NOW,
+        )
+
+
+@pytest.mark.parametrize("job_id", ["", " ", "x" * 129])
+def test_semantic_start_rejects_invalid_job_identity(job_id: str) -> None:
+    post = _pending()
+    fresh = replace(
+        post,
+        semantic_duplicate_state=SemanticDuplicateState.NOT_REQUESTED,
+        semantic_duplicate_version=0,
+        semantic_duplicate_job_id=None,
+    )
+    with pytest.raises(InvalidSemanticDuplicateTransitionError):
+        fresh.start_semantic_duplicate_check(
+            job_id=job_id,
+            expected_processing_version=0,
+            requested_at=_NOW,
+        )
 
 
 def test_exact_contract_stays_independent_from_semantic_result() -> None:

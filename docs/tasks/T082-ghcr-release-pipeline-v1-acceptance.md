@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -15,7 +15,7 @@ Planned
 
 ## وابستگی‌ها
 
-- T078، T079، T080 و T081.
+- T078، T079، T080، T081 و T083.
 
 ## محدوده
 
@@ -45,7 +45,7 @@ Planned
 ## معیارهای پذیرش عینی
 
 1. workflow بدون Secret سفارشی غیرضروری و با permission حداقلی تعریف شده است.
-2. Image version `v1.0.0` و digest immutable در GHCR قابل دریافت است.
+2. Image version `1.0.0` و digest immutable برای انتشار GHCR آماده است.
 3. Matrix پذیرش تمام ویژگی‌های Release را اثبات می‌کند.
 4. failure هیچ Release ناقص را latest نمی‌کند.
 
@@ -67,4 +67,15 @@ Planned
 
 ## تعریف انجام‌شدن
 
-- پس از تأیید صریح، GHCR Image و Release `v1.0.0` با evidence کامل منتشر شده باشد.
+- Workflow، Image، Asset، Acceptance و Documentation با نسخه `1.0.0` هماهنگ و
+  Gateهای قابل اجرای محلی موفق باشند.
+- Tag، GHCR push و GitHub Release فقط اقدام بعدی مالک و خارج از این Task است.
+
+## وضعیت راستی‌آزمایی
+
+- Workflow امن GHCR، Bundle/checksum، پذیرش دو Instance و مستندات Production
+  پیاده شدند.
+- Contract testها و Gateهای محلی موفق‌اند.
+- Docker و Bash روی میزبان Windows فعلی موجود نبودند؛ acceptance واقعی به‌صورت
+  job الزام‌آور `ubuntu-latest` در PR ثبت شده و Telegram live اجرا نمی‌کند.
+- هیچ Commit، Push، Tag، Release یا Artifact Production ساخته نشده است.

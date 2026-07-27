@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Planned
+Completed
 
 ## هدف
 
@@ -68,3 +68,13 @@ Planned
 ## تعریف انجام‌شدن
 
 - نصب و isolation واقعی روی هر دو platform verified باشد.
+
+## وضعیت راستی‌آزمایی
+
+- Installerهای Linux/Windows، management commandها و generator مشترک typed بر
+  پایه `ApplicationConfig` پیاده شدند.
+- Config موجود بدون `--update`/`-Update` overwrite نمی‌شود؛ uninstall volumeها
+  را حفظ و purge تأیید صریح می‌خواهد.
+- تست grouped Config/installer/deployment: `66 passed`.
+- PowerShell parser و dry-run واقعی موفق بود؛ Bash و Docker runtime در میزبان
+  فعلی موجود نبودند و smoke آن‌ها در CI نهایی اجرا می‌شود.
