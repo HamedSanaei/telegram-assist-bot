@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from pymongo import ASCENDING, ReturnDocument
@@ -31,6 +32,19 @@ if TYPE_CHECKING:
 type Document = dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class MongoMediaReferenceCollections:
+    """Hold optional MongoDB collections used only for cleanup reference checks."""
+
+    posts: AsyncCollection[Document] | None = None
+    publications: AsyncCollection[Document] | None = None
+    schedules: AsyncCollection[Document] | None = None
+    native_schedules: AsyncCollection[Document] | None = None
+    approval_deliveries: AsyncCollection[Document] | None = None
+    advertisement_sources: AsyncCollection[Document] | None = None
+    advertisement_slots: AsyncCollection[Document] | None = None
+
+
 async def initialize_content_preparation_indexes(
     media: AsyncCollection[Document],
     groups: AsyncCollection[Document],
@@ -43,6 +57,14 @@ async def initialize_content_preparation_indexes(
     await media.create_index(
         [("expires_at", ASCENDING), ("cleaned_at", ASCENDING)],
         name="ix_media_cleanup_v1",
+    )
+    await media.create_index(
+        [("media_expires_at", ASCENDING), ("cleaned_at", ASCENDING)],
+        name="ix_media_retention_cleanup_v2",
+    )
+    await media.create_index(
+        [("post_id", ASCENDING), ("storage_path", ASCENDING)],
+        name="ix_media_post_path_v1",
     )
     await groups.create_index(
         [("source_channel_id", ASCENDING), ("telegram_group_id", ASCENDING)],
@@ -83,12 +105,18 @@ def _media_document(media: StoredMedia) -> Document:
         "mime_type": media.mime_type,
         "original_filename": media.original_filename,
         "storage_path": media.storage_path,
+        "post_id": media.post_id,
+        "media_expires_at": media.expires_at,
+        # Retain the pre-T078 field for old readers during the additive transition.
         "expires_at": media.expires_at,
         "cleaned_at": None,
     }
 
 
 def _media_from(document: Document) -> StoredMedia:
+    expiration = document.get("media_expires_at")
+    if expiration is None:
+        expiration = document["expires_at"]
     return StoredMedia(
         MediaIdentity(
             document["source_channel_id"],
@@ -101,7 +129,8 @@ def _media_from(document: Document) -> StoredMedia:
         document.get("mime_type"),
         document.get("original_filename"),
         document["storage_path"],
-        document["expires_at"],
+        cast("datetime", expiration),
+        document.get("post_id"),
     )
 
 
@@ -255,9 +284,12 @@ class MongoContentPreparationRepository:
         media: AsyncCollection[Document],
         groups: AsyncCollection[Document],
         preparations: AsyncCollection[Document],
+        *,
+        references: MongoMediaReferenceCollections | None = None,
     ) -> None:
         """Initialize concrete MongoDB collections."""
         self._media, self._groups, self._preparations = media, groups, preparations
+        self._references = references or MongoMediaReferenceCollections()
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
         """Load one non-cleaned media record."""
@@ -289,7 +321,18 @@ class MongoContentPreparationRepository:
         """List a bounded deterministic expired-media batch."""
         del orphan_before
         cursor = (
-            self._media.find({"cleaned_at": None, "expires_at": {"$lte": now}})
+            self._media.find(
+                {
+                    "cleaned_at": None,
+                    "$or": [
+                        {"media_expires_at": {"$lte": now}},
+                        {
+                            "media_expires_at": {"$exists": False},
+                            "expires_at": {"$lte": now},
+                        },
+                    ],
+                }
+            )
             .sort("_id", ASCENDING)
             .limit(limit)
         )
@@ -299,18 +342,205 @@ class MongoContentPreparationRepository:
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime
     ) -> bool:
-        """Recheck whether any non-expired record references a path."""
-        return (
-            await self._media.find_one(
+        """Recheck shared files and every durable nonterminal consumer."""
+        fresh = await self._media.find_one(
+            {
+                "storage_path": storage_path,
+                "cleaned_at": None,
+                "$or": [
+                    {"media_expires_at": {"$gt": now}},
+                    {
+                        "media_expires_at": {"$exists": False},
+                        "expires_at": {"$gt": now},
+                    },
+                ],
+            },
+            projection={"_id": 1},
+        )
+        if fresh is not None:
+            return True
+
+        cursor = self._media.find(
+            {"storage_path": storage_path, "cleaned_at": None},
+            projection={
+                "post_id": 1,
+                "source_channel_id": 1,
+                "source_message_id": 1,
+            },
+        )
+        documents = [document async for document in cursor]
+        post_ids = {
+            str(document["post_id"])
+            for document in documents
+            if isinstance(document.get("post_id"), str)
+        }
+        references = self._references
+        if references.posts is not None:
+            identities = [
                 {
-                    "storage_path": storage_path,
-                    "expires_at": {"$gt": now},
-                    "cleaned_at": None,
+                    "source_channel_id": document.get("source_channel_id"),
+                    "source_message_id": document.get("source_message_id"),
+                }
+                for document in documents
+            ]
+            if identities:
+                post_cursor = references.posts.find(
+                    {"$or": identities}, projection={"_id": 1}
+                )
+                async for item in post_cursor:
+                    post_ids.add(str(item["_id"]))
+
+        if (
+            await self._groups.find_one(
+                {
+                    "members.media.storage_path": storage_path,
+                    "$or": [
+                        {"finalization_status": {"$exists": False}},
+                        {
+                            "finalization_status": {
+                                "$in": [
+                                    AlbumFinalizationStatus.PENDING.value,
+                                    AlbumFinalizationStatus.PROCESSING.value,
+                                ]
+                            }
+                        },
+                    ],
                 },
                 projection={"_id": 1},
             )
             is not None
+        ):
+            return True
+
+        if references.advertisement_sources is not None:
+            snapshots = references.advertisement_sources
+            if (
+                await snapshots.find_one(
+                    {
+                        "media_references.storage_path": storage_path,
+                        "is_current": True,
+                    },
+                    projection={"_id": 1},
+                )
+                is not None
+            ):
+                return True
+            snapshot_cursor = snapshots.find(
+                {"media_references.storage_path": storage_path},
+                projection={"_id": 1},
+            )
+            snapshot_ids = [str(item["_id"]) async for item in snapshot_cursor]
+            if (
+                snapshot_ids
+                and references.advertisement_slots is not None
+                and await references.advertisement_slots.find_one(
+                    {
+                        "source_snapshot_id": {"$in": snapshot_ids},
+                        "status": {
+                            "$in": [
+                                "scheduled",
+                                "claimed",
+                                "waiting_for_retry",
+                            ]
+                        },
+                    },
+                    projection={"_id": 1},
+                )
+                is not None
+            ):
+                return True
+
+        if not post_ids:
+            return False
+        active_post_ids: set[str] = set()
+        if references.posts is not None:
+            active_cursor = references.posts.find(
+                {
+                    "_id": {"$in": sorted(post_ids)},
+                    "expires_at": {"$gt": now},
+                    "status": {"$ne": "Expired"},
+                },
+                projection={"_id": 1},
+            )
+            active_post_ids = {str(item["_id"]) async for item in active_cursor}
+        post_filter = {"post_id": {"$in": sorted(post_ids)}}
+        if (
+            await self._preparations.find_one(
+                {
+                    "_id": {"$in": sorted(post_ids)},
+                    "ready_at": {"$exists": False},
+                },
+                projection={"_id": 1},
+            )
+            is not None
+        ):
+            return True
+        checks = (
+            (
+                references.publications,
+                {
+                    **post_filter,
+                    "state": {"$in": ["Pending", "Claimed", "WaitingForRetry"]},
+                },
+            ),
+            (
+                references.schedules,
+                {
+                    **post_filter,
+                    "status": {
+                        "$in": ["Pending", "Claimed", "Running", "WaitingForRetry"]
+                    },
+                },
+            ),
+            (
+                references.native_schedules,
+                {
+                    **post_filter,
+                    "status": {
+                        "$in": [
+                            "pending",
+                            "claimed",
+                            "request_started",
+                            "scheduled",
+                            "cancel_requested",
+                            "cancelling",
+                        ]
+                    },
+                },
+            ),
         )
+        for collection, query in checks:
+            if (
+                collection is not None
+                and await collection.find_one(query, projection={"_id": 1}) is not None
+            ):
+                return True
+        approvals = references.approval_deliveries
+        if approvals is not None:
+            if (
+                await approvals.find_one(
+                    {
+                        "_id": {"$in": sorted(post_ids)},
+                        "status": {"$in": ["pending", "claimed", "retry"]},
+                    },
+                    projection={"_id": 1},
+                )
+                is not None
+            ):
+                return True
+            if (
+                active_post_ids
+                and await approvals.find_one(
+                    {
+                        "_id": {"$in": sorted(active_post_ids)},
+                        "status": "completed",
+                    },
+                    projection={"_id": 1},
+                )
+                is not None
+            ):
+                return True
+        return False
 
     async def mark_media_cleaned(
         self, identity: MediaIdentity, *, cleaned_at: datetime

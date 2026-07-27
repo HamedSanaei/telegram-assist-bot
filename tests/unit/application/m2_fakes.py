@@ -28,6 +28,7 @@ class FakePreparationRepository:
     categories: dict[str, CategorizationResult] = field(default_factory=dict)
     artifacts: dict[tuple[str, str], DestinationArtifact] = field(default_factory=dict)
     cleaned: set[str] = field(default_factory=set)
+    active_storage_paths: set[str] = field(default_factory=set)
     ready: set[str] = field(default_factory=set)
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
@@ -52,7 +53,7 @@ class FakePreparationRepository:
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime
     ) -> bool:
-        return any(
+        return storage_path in self.active_storage_paths or any(
             item.storage_path == storage_path and item.expires_at > now
             for item in self.media.values()
         )

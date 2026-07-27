@@ -89,6 +89,9 @@ subscription را پیش از crawl می‌سازند تا gap حداقل شود
 timer حافظه‌ای منبع حقیقت نیست. shutdown taskها، subscription، client/session lock و
 MongoDB را در ترتیب معکوس و دقیقاً یک‌بار می‌بندد. command `media-cleanup` نیز یک batch
 محدود و one-shot را با همان Config، repository و storage اجرا می‌کند.
+فرمان `media-cleanup-worker` همان Use Case را در batch محدود با interval
+`media.cleanup_interval_seconds` اجرا می‌کند؛ MongoDB منبع حقیقت هر iteration است
+و cancellation حین انتظار shutdown تمیز دارد.
 command قدیمی `schedule-worker` پیش از بازکردن Session به‌شکل fail-closed متوقف
 می‌شود. رکوردهای قدیمی `scheduled_publications` با `action=scheduled` برای audit و
 سازگاری بدون migration یا execution دست‌نخورده می‌مانند.
@@ -218,6 +221,22 @@ entity نوع `text_url` در ingestion همراه URL اختیاری خود و�
 شبکه/RPC همچنان ambiguous است. `publication-recover-presend` تنها با Post ID دقیق
 و proof gate روی failure قدیمی `ValueError` پیش از send، job را idempotent برمی‌گرداند.
 
+### Telegram proxy links and portable source buttons
+
+پاک‌سازی مقصد همچنان referenceهای نامرتبط `t.me` را حذف می‌کند، اما routeهای
+عملیاتی `t.me/proxy` و `t.me/socks` فقط در صورت داشتن مجموعه پارامترهای لازم و
+غیرخالی مستثنا می‌شوند؛ بنابراین کانالی با نام `proxy` یا Query ناقص از حذف فرار
+نمی‌کند. `KeyboardButtonUrl` منبع در Adapter تلگرام به `TelegramUrlButton`
+application-owned تبدیل و به‌صورت tupleهای frozen و مرتب در `OriginalPostContent`
+نگه‌داری می‌شود. Postهای legacy فاقد فیلد افزایشی `inline_keyboard` به صفحه‌کلید
+خالی نگاشت می‌شوند.
+
+`MongoPublicationPayloadLoader` فقط این مقدار مستقل از SDK را به payload انتشار
+می‌افزاید. Publisher فوری و Native Scheduler آن را در آخرین مرز به `Button.url`
+Telethon تبدیل می‌کنند و همان ردیف، label و target را برای متن، Media یا Album
+می‌فرستند. callback، login، WebApp و سایر دکمه‌های وابسته به context منبع عمداً
+عبور داده نمی‌شوند و هیچ callback token مدیریتی تغییر نمی‌کند.
+
 ## 4. مدل Domain
 
 مدل‌ها مستقل از Documentهای MongoDB و Objectهای SDK تلگرام‌اند. قراردادهای
@@ -228,7 +247,8 @@ entity نوع `text_url` در ingestion همراه URL اختیاری خود و�
 | `PostId` | شناسهٔ داخلی opaque و مستقل از نوع شناسهٔ پایگاه‌داده |
 | `SourceMessageIdentity` | کلید Idempotency برابر `(source_channel_id, source_message_id)`؛ شناسه کانال مبدا در startup از username resolve می‌شود |
 | `TelegramEntity` | offset و length بر حسب UTF-16 code unit، نوع Entity و `custom_emoji_id` اختیاری |
-| `OriginalPostContent` | متن، Caption و tupleهای مستقل Entityهای هرکدام، بدون normalization |
+| `TelegramUrlButton` | دکمهٔ URL قابل‌انتقال با label و target محدود و مستقل از SDK |
+| `OriginalPostContent` | متن، Caption، tupleهای مستقل Entityها و ردیف‌های frozen دکمه‌های URL، بدون normalization |
 | `Post` | snapshot immutable هویت، اطلاعات منبع، محتوای اصلی، زمان‌ها، وضعیت، version و history |
 | `PostStatus` | وضعیت کلی حداقلی Post در Milestone 0 |
 | `StatusTransition` | وضعیت قبلی/جدید، زمان UTC، دسته Actor، دلیل و Correlation ID اختیاری |
@@ -489,6 +509,8 @@ Taskهای عملیاتی بعدی تعلق دارد.
 - Unique insert و `findOneAndUpdate` با شرط نسخه/وضعیت برای Idempotency و Optimistic Concurrency به‌کار می‌روند.
 - TTL MongoDB حذف آنی را تضمین نمی‌کند؛ `expires_at` در Queryهای Application نیز اعمال می‌شود.
 - حذف TTL سند، فایل محلی را حذف نمی‌کند؛ Cleanup Worker مستقل Mediaهای منقضی و Orphan را پاک می‌کند.
+- TTL چهارده‌روزهٔ `posts` و queryهای Exact/Semantic Duplicate تغییر نکرده‌اند؛
+  expiration فایل Media قرارداد مستقل خود را دارد.
 - Migrationهای سازگار با عقب و ثبت نسخه Schema لازم‌اند؛ راهکار دقیق در زمان Bootstrap انتخاب می‌شود.
 
 ## 10. ذخیره Media
@@ -505,8 +527,22 @@ traversal و symlink escape رد می‌شوند.
 3. metadata پس از commit ثبت می‌شود و restart فایل سالم موجود را بدون truncate بازیابی می‌کند.
 4. permissionهای POSIX به‌صورت best-effort محدود می‌شوند؛ در Windows محرمانگی
    کامل به ACL دایرکتوری runtime وابسته است.
-5. Cleanup Worker در batch محدود candidate می‌گیرد، reference را دوباره بررسی
-   می‌کند و فقط expired/orphan خارج از grace را در همان root حذف می‌کند.
+5. زمان انقضای اولیه از Clock تزریق‌شده و
+   `media.retention_days` (پیش‌فرض دو روز) در UTC محاسبه می‌شود.
+6. Cleanup Worker در batch محدود candidate می‌گیرد، shared path و referenceهای
+   nonterminal Publication، Schedule، Native Schedule، Approval delivery،
+   Album/preparation و Advertisement را بلافاصله پیش از حذف دوباره بررسی می‌کند
+   و فقط path محصور در همان root را حذف می‌کند.
+   Approval تحویل‌شده تا وقتی Post مرجع هنوز منقضی نشده است nonterminal محسوب
+   می‌شود؛ پس از انقضای Post، صرف delivery قدیمی مانع cleanup نیست.
+
+سند جدید `media_items` فیلد authoritative مستقل `media_expires_at` دارد و فیلد
+قدیمی `expires_at` را فقط برای سازگاری readerهای موجود نیز می‌نویسد. رکورد legacy
+فاقد فیلد جدید با همان `expires_at` قبلی و به‌صورت محافظه‌کارانه cleanup می‌شود؛
+بنابراین حذف ناگهانی، backfill نامحدود startup یا index drop وجود ندارد. index
+نسخه‌دار `ix_media_retention_cleanup_v2` در کنار index قبلی ساخته می‌شود.
+رسیدن expiration اولیه deadline انتشار نیست؛ وجود reference فعال فایل را حفظ
+می‌کند و پس از terminal شدن آخرین reference، همان سند دوباره candidate می‌شود.
 
 Album با کلید canonical source + media-group ID ساخته می‌شود. arrival هر عضو پیش
 از دانلود Media ثبت می‌شود تا دانلود کند یا history قدیمی quiet window را دور نزند.
@@ -695,6 +731,9 @@ Boolean با threshold یک Provider result نامعتبر است. handler با�
   Source/Destinationها، Feature Flagها، Timezone، Logging، اسکلت AI routing و
   Advertisement routing است. bounds معتبر History page/pagination/timeout و
   Listener buffer/reconnect/FloodWait نیز typed و immutable هستند.
+- بخش Media دارای `retention_days` بین ۱ تا ۳۶۵۰ با default دو و
+  `cleanup_interval_seconds` بین ۶۰ تا ۶۰۴۸۰۰ با default ۳۶۰۰ است؛ StrictInt
+  پذیرش bool یا coercion را رد می‌کند.
 - `load_configuration(Path, environ=...)` تنها API خواندن برای Composition
   Root است و `LoadedConfiguration(settings, secrets)` برمی‌گرداند. هیچ Domain،
   Application Use Case یا Adapter فایل JSON یا Environment را مستقیم نمی‌خواند.

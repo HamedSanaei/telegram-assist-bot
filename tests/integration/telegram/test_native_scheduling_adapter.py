@@ -10,6 +10,7 @@ from telethon import types  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import PublicationMedia, PublicationPayload
 from telegram_assist_bot.domain.media import MediaType
+from telegram_assist_bot.domain.posts import TelegramUrlButton
 from telegram_assist_bot.infrastructure.telegram.media_serializer import (
     TelethonMediaSerializationError,
 )
@@ -93,12 +94,29 @@ def test_native_adapter_reads_external_schedules_and_schedules_every_payload_kin
 
         due_at = NOW + timedelta(minutes=12)
         text = await gateway.schedule(
-            PublicationPayload(-1001, "سلام", ()),
+            PublicationPayload(
+                -1001,
+                "سلام",
+                (),
+                (),
+                (
+                    (
+                        TelegramUrlButton(
+                            "Connect",
+                            "https://t.me/proxy?server=example.invalid&port=443&secret=safe",
+                        ),
+                    ),
+                ),
+            ),
             due_at=due_at,
             timeout_seconds=1,
         )
         assert text.message_ids == (51,)
         assert client.calls[-1][2]["schedule"] == due_at
+        buttons = client.calls[-1][2]["buttons"]
+        assert isinstance(buttons, list)
+        assert buttons[0][0].text == "Connect"
+        assert buttons[0][0].url.startswith("https://t.me/proxy?")
 
         for index, item in enumerate(media):
             receipt = await gateway.schedule(

@@ -16,7 +16,7 @@ from telegram_assist_bot.application.ports import (
     PublisherError,
 )
 from telegram_assist_bot.domain.media import MediaType
-from telegram_assist_bot.domain.posts import TelegramEntity
+from telegram_assist_bot.domain.posts import TelegramEntity, TelegramUrlButton
 from telegram_assist_bot.infrastructure.telegram.user_publisher import (
     TelethonPublisherGateway,
 )
@@ -86,6 +86,14 @@ def test_sends_album_in_stored_order_and_returns_all_ids(tmp_path: Path) -> None
                 original_filename="report.pdf",
             ),
         ),
+        (
+            (
+                TelegramUrlButton(
+                    "اتصال 🚀",
+                    "tg://proxy?server=example.test&port=443&secret=abcdef",
+                ),
+            ),
+        ),
     )
     client = Client()
     result = asyncio.run(
@@ -120,6 +128,10 @@ def test_sends_album_in_stored_order_and_returns_all_ids(tmp_path: Path) -> None
     ]
     assert client.kwargs["caption"] == "کپشن\u200cآلبوم🙂"
     assert cast("list[object]", client.kwargs["formatting_entities"])
+    buttons = cast("list[list[object]]", client.kwargs["buttons"])
+    button = cast("types.KeyboardButtonUrl", buttons[0][0])
+    assert button.text == "اتصال 🚀"
+    assert button.url == ("tg://proxy?server=example.test&port=443&secret=abcdef")
 
 
 def test_rejects_missing_and_outside_media(tmp_path: Path) -> None:

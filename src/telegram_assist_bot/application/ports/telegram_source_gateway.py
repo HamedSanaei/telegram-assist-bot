@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from telegram_assist_bot.domain.media import MediaType
-    from telegram_assist_bot.domain.posts import TelegramEntity
+    from telegram_assist_bot.domain.posts import TelegramEntity, TelegramUrlButton
 
 
 class TelegramGatewayError(Exception):
@@ -249,6 +249,7 @@ class TelegramTextMessage:
     is_service: bool
     has_media: bool
     media: tuple[TelegramMediaReference, ...] = ()
+    inline_keyboard: tuple[tuple[TelegramUrlButton, ...], ...] = ()
 
     def __repr__(self) -> str:
         """Hide source payload while retaining safe identity diagnostics."""

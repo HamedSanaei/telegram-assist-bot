@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from telegram_assist_bot.application.ports import (
@@ -10,6 +11,9 @@ from telegram_assist_bot.application.ports import (
 )
 from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import PostId
+from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
+    inline_keyboard_from_document,
+)
 
 if TYPE_CHECKING:
     from pymongo.asynchronous.collection import AsyncCollection
@@ -50,7 +54,11 @@ class MongoPublicationPayloadLoader:
             raise ValueError("Prepared destination artifact does not exist.")
         post = await self._posts.find_one(
             {"_id": post_id},
-            projection={"source_channel_id": 1, "source_message_id": 1},
+            projection={
+                "source_channel_id": 1,
+                "source_message_id": 1,
+                "original_content.inline_keyboard": 1,
+            },
         )
         if post is None:
             raise ValueError("Publication Post does not exist.")
@@ -84,8 +92,18 @@ class MongoPublicationPayloadLoader:
             )
             for item in documents
         )
+        original_content = post.get("original_content")
+        keyboard_document = (
+            original_content.get("inline_keyboard", [])
+            if isinstance(original_content, Mapping)
+            else []
+        )
         return PublicationPayload(
-            destination_id, artifact.text, artifact.entities, media
+            destination_id,
+            artifact.text,
+            artifact.entities,
+            media,
+            inline_keyboard_from_document(keyboard_document),
         )
 
 

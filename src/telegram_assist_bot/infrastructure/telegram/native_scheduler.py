@@ -15,7 +15,10 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.infrastructure.telegram.media_serializer import (
     TelethonMediaSerializer,
 )
-from telegram_assist_bot.infrastructure.telegram.user_publisher import _map_entity
+from telegram_assist_bot.infrastructure.telegram.user_publisher import (
+    _map_entity,
+    _map_inline_keyboard,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -89,27 +92,35 @@ class TelethonNativeSchedulerGateway:
     ) -> NativeScheduleReceipt:
         """Schedule prepared text or media at the exact aware due time."""
         entities = [_map_entity(value) for value in payload.entities]
+        buttons = _map_inline_keyboard(payload.inline_keyboard)
         async with asyncio.timeout(timeout_seconds):
             if not payload.media:
+                message_kwargs: dict[str, object] = {
+                    "formatting_entities": entities,
+                    "parse_mode": None,
+                    "schedule": due_at,
+                }
+                if buttons:
+                    message_kwargs["buttons"] = buttons
                 result = await self._client.send_message(
                     payload.destination_id,
                     payload.text or "",
-                    formatting_entities=entities,
-                    parse_mode=None,
-                    schedule=due_at,
+                    **message_kwargs,
                 )
             else:
                 uploads = await self._media.serialize(payload.media)
-                kwargs: dict[str, object] = {
+                file_kwargs: dict[str, object] = {
                     "caption": payload.text,
                     "formatting_entities": entities,
                     "parse_mode": None,
                     "schedule": due_at,
                 }
+                if buttons:
+                    file_kwargs["buttons"] = buttons
                 result = await self._client.send_file(
                     payload.destination_id,
                     uploads[0] if len(uploads) == 1 else list(uploads),
-                    **kwargs,
+                    **file_kwargs,
                 )
         values = result if isinstance(result, list | tuple) else (result,)
         identifiers = tuple(int(getattr(value, "id", 0)) for value in values)

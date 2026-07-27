@@ -1,9 +1,9 @@
 # وضعیت فعلی
 
-- **Current milestone:** Milestone 6 — تبلیغات زمان‌بندی‌شده، Completed و verified.
-- **Active task:** هیچ‌کدام؛ Milestone 6 کامل است.
-- **Last completed task:** [T054 — پذیرش End-to-end فاز دوم](tasks/T054-phase-two-end-to-end.md)
-- **Known blockers:** هیچ‌کدام.
-- **Failing tests:** هیچ‌کدام؛ تمام ۱۳۵۲ آزمون غیرزنده (non-live) پس از T054 موفق شدند. هشدار cache محلی pytest (`WinError 5`) غیرعملکردی است.
-- **Last verified commit:** `4aeeaf3`
-- **Next recommended action:** شروع T055 برای پالایش دامنهٔ محصولی فاز سوم.
+- **Current milestone:** Milestone 8 — Production Packaging and v1 Distribution.
+- **Active task:** None.
+- **Last completed task:** [T078 — Configurable Independent Media Retention](tasks/T078-configurable-independent-media-retention.md)
+- **Known blockers:** None.
+- **Failing tests:** None.
+- **Last verified commit:** `a8ff7d8` پایه، به‌همراه working tree کامل و راستی‌آزمایی‌شدهٔ T077 و T078.
+- **Next recommended action:** شروع T079 — Expired Approval Message Cleanup.

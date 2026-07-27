@@ -48,6 +48,7 @@ def build_stored_post(
             caption=message.caption,
             text_entities=message.text_entities,
             caption_entities=message.caption_entities,
+            inline_keyboard=message.inline_keyboard,
         ),
         source_published_at=message.source_published_at,
         received_at=received_at,

@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from telegram_assist_bot.application.download_post_media import (
+    calculate_media_expiration,
+)
 from telegram_assist_bot.application.ingest_post_idempotently import (
     IngestionOutcome,
     IngestionResult,
@@ -24,10 +27,7 @@ from telegram_assist_bot.application.prepare_post_pipeline import (
     PreparePostPipeline,
 )
 from telegram_assist_bot.domain.media import MediaIdentity, StoredMedia
-from telegram_assist_bot.domain.posts import (
-    POST_RETENTION_PERIOD,
-    SourceMessageIdentity,
-)
+from telegram_assist_bot.domain.posts import SourceMessageIdentity
 from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.observability import (
     CorrelationContext,
@@ -107,6 +107,14 @@ class RuntimeMessageIngestor:
     album_finalization_max_attempts: int = 3
     album_finalization_retry_delay: timedelta = timedelta(seconds=5)
     album_finalization_lease: timedelta = timedelta(minutes=5)
+    media_retention: timedelta = timedelta(days=2)
+
+    def __post_init__(self) -> None:
+        """Validate the independent bounded media-retention policy."""
+        if self.media_retention <= timedelta(0) or self.media_retention > timedelta(
+            days=3650
+        ):
+            raise ValueError("Media retention must be between one and 3650 days.")
 
     async def execute(
         self,
@@ -167,7 +175,10 @@ class RuntimeMessageIngestor:
                         opaque_reference=descriptor.opaque_reference,
                         mime_type=descriptor.mime_type,
                         original_filename=descriptor.original_filename,
-                        expires_at=now + POST_RETENTION_PERIOD,
+                        expires_at=calculate_media_expiration(
+                            now, self.media_retention
+                        ),
+                        post_id=result.post_id,
                     )
                 )
                 stored.append(media)

@@ -152,6 +152,54 @@ def test_preserves_text_url_metadata_in_prepared_publication_payload(
     asyncio.run(scenario())
 
 
+def test_loads_persisted_proxy_url_buttons_without_source_callbacks(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            repository = MongoContentPreparationRepository(
+                database["media_items"],
+                database["media_groups"],
+                database["content_preparations"],
+            )
+            loader = MongoPublicationPayloadLoader(
+                repository,
+                database["posts"],
+                database["media_items"],
+                database["media_groups"],
+                destination_names={-200: "dest"},
+            )
+            proxy_url = "https://t.me/proxy?server=example.invalid&port=443&secret=safe"
+            await database["posts"].insert_one(
+                {
+                    "_id": "proxy-button",
+                    "source_channel_id": -100,
+                    "source_message_id": 10,
+                    "original_content": {
+                        "inline_keyboard": [[{"label": "اتصال 🚀", "url": proxy_url}]]
+                    },
+                }
+            )
+            await repository.save_destination_artifact(
+                DestinationArtifact(
+                    PostId("proxy-button"), "dest", "پروکسی‌ آماده", (), 1
+                )
+            )
+
+            payload = await loader.load("proxy-button", -200)
+
+            assert payload.inline_keyboard[0][0].label == "اتصال 🚀"
+            assert payload.inline_keyboard[0][0].url == proxy_url
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_rejects_unknown_destination_missing_artifact_and_missing_post(
     mongodb_test_settings: MongoTestSettings,
 ) -> None:

@@ -572,3 +572,38 @@
   می‌شود. گزارش‌ها read-only هستند، موفقیت دارای شکست قدیمی در failures دیده نمی‌شود،
   جزئیات خام خطا/Secret/Admin ID/URL/Media path نمایش داده نمی‌شود و Config نمونه هیچ
   default پنهان ایجاد نمی‌کند.
+
+## ADR-040 — مرز حفظ Proxy و دکمه‌های قابل‌انتقال تلگرام
+
+- **Status:** Accepted
+- **Decision:** پاک‌سازی referenceهای نامرتبط تلگرام، لینک عملیاتی
+  `t.me/proxy` را فقط با `server`، `port` و `secret` غیرخالی و `t.me/socks` را
+  فقط با `server` و `port` غیرخالی حفظ می‌کند. ردیف‌های `KeyboardButtonUrl` منبع
+  به مدل مستقل `TelegramUrlButton` با schemeهای `http`، `https` یا `tg` تبدیل و
+  بدون تغییر label، target یا ترتیب در Post و Publication payload نگه‌داری می‌شوند.
+  callback، login، WebApp و دکمه‌های context-dependent منبع قابل‌انتقال تلقی
+  نمی‌شوند.
+- **Consequences:** کانال صرفاً نام‌گذاری‌شدهٔ `proxy` و Query ناقص همچنان حذف
+  می‌شوند. اسناد قدیمی Post بدون `inline_keyboard` معتبر و معادل صفحه‌کلید خالی‌اند.
+  Publisher فوری و Native Scheduler تنها در مرز Infrastructure دکمه‌ها را به
+  Telethon نگاشت می‌کنند؛ صفحه‌کلید Approval، callback tokenها و Runtime
+  Milestoneهای ۵ و ۶ تغییر نمی‌کنند.
+
+## ADR-041 — Retention مستقل Media و fallback محافظه‌کارانهٔ legacy
+
+- **Status:** Accepted
+- **Context:** TTL چهارده‌روزهٔ Post و پنجرهٔ چهارده‌روزهٔ Duplicate قراردادهای
+  پایدارند، اما نگه‌داری binary محلی باید مستقل و پیش‌فرض دو روز باشد. دادهٔ T014
+  فقط `expires_at` مبتنی بر retention قدیمی دارد.
+- **Decision:** Media جدید expiration خود را از Clock تزریق‌شده و
+  `media.retention_days` در فیلد Infrastructure-owned `media_expires_at` می‌گیرد.
+  cleanup پیش از حذف، shared path و consumerهای durable nonterminal را recheck
+  می‌کند. رکورد legacy فاقد فیلد جدید از `expires_at` موجود خود استفاده می‌کند؛
+  index نسخه ۲ کنار index نسخه ۱ ایجاد می‌شود و هیچ startup backfill یا drop
+  خودکار اجرا نمی‌شود. Config Schema نسخه ۱ می‌ماند، چون هر دو کلید جدید default
+  backward-compatible دارند.
+- **Consequences:** دادهٔ legacy ناگهان با default دو روز حذف نمی‌شود و در عین
+  حال silently دائمی نمی‌ماند. Post metadata و Duplicate history چهارده‌روزه
+  هستند. expiration اولیه Media deadline Publication نیست؛ reference فعال فایل
+  را حفظ و terminal شدن آخرین reference آن را دوباره candidate می‌کند. حذف پیام
+  Telegram و Approval فقط در T079 مجاز است.

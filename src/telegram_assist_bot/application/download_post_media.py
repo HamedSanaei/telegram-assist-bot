@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from telegram_assist_bot.application.ports import (
@@ -20,6 +21,20 @@ if TYPE_CHECKING:
     from telegram_assist_bot.shared.retry.executor import AsyncSleeper
 
 _UNSAFE_FILENAME = re.compile(r"[\\/\x00-\x1f<>:\"|?*]+")
+
+
+def calculate_media_expiration(
+    registered_at: datetime, retention: timedelta
+) -> datetime:
+    """Return the exact UTC media-retention boundary."""
+    if (
+        registered_at.tzinfo is None
+        or registered_at.utcoffset() is None
+        or retention <= timedelta(0)
+        or retention > timedelta(days=3650)
+    ):
+        raise ValueError("Media retention boundary is invalid.")
+    return registered_at.astimezone(UTC) + retention
 
 
 def sanitize_filename(value: str | None) -> str | None:
@@ -85,6 +100,7 @@ class DownloadPostMedia:
                     original_filename=sanitize_filename(spec.original_filename),
                     storage_path=path,
                     expires_at=spec.expires_at,
+                    post_id=None if spec.post_id is None else spec.post_id.value,
                 )
                 stored = await self._repository.save_media_if_absent(media)
                 await self._ensure_preview(stored)
@@ -110,3 +126,6 @@ class DownloadPostMedia:
         preview = getattr(self._storage, "ensure_preview", None)
         if preview is not None:
             await preview(media)
+
+
+__all__ = ("DownloadPostMedia", "calculate_media_expiration", "sanitize_filename")

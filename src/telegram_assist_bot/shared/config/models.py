@@ -393,10 +393,12 @@ class MediaStorageConfig(_FrozenConfigModel):
 
     root: Path = Field(default=Path("var/media"))
     preview_enabled: StrictBool = False
+    retention_days: Annotated[StrictInt, Field(ge=1, le=3650)] = 2
     maximum_bytes: Annotated[StrictInt, Field(ge=1, le=2_147_483_648)] = 104_857_600
     download_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 300
     download_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
     cleanup_batch_size: Annotated[StrictInt, Field(ge=1, le=1000)] = 100
+    cleanup_interval_seconds: Annotated[StrictInt, Field(ge=60, le=604_800)] = 3600
     orphan_grace_seconds: Annotated[StrictInt, Field(ge=60, le=604800)] = 3600
     album_quiet_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 3
     album_maximum_wait_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 30

@@ -21,7 +21,10 @@ from telegram_assist_bot.bootstrap.approval_queue import (
     recover_rejected_document_deliveries,
     retry_approval_delivery,
 )
-from telegram_assist_bot.bootstrap.media_cleanup import run_media_cleanup
+from telegram_assist_bot.bootstrap.media_cleanup import (
+    run_media_cleanup,
+    run_media_cleanup_worker,
+)
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
     inspect_publication_queue,
@@ -145,6 +148,7 @@ def _parser() -> _SafeArgumentParser:
             "ingest",
             "ingest-text",
             "media-cleanup",
+            "media-cleanup-worker",
             "schedule-worker",
             "approval-bot",
             "runtime",
@@ -160,7 +164,8 @@ def _parser() -> _SafeArgumentParser:
         help=(
             "Use 'login' for explicit authentication, 'ingest' (or the compatible "
             "'ingest-text' alias) for full ingestion, 'media-cleanup' for one "
-            "cleanup batch, 'schedule-worker' for a fail-closed legacy notice, "
+            "cleanup batch, 'media-cleanup-worker' for periodic bounded cleanup, "
+            "'schedule-worker' for a fail-closed legacy notice, "
             "'approval-bot' for Bot API polling, or 'runtime' for the single-owner "
             "ingestion and publication process; publication queue commands never "
             "open Telegram sessions; approval queue commands safely inspect or "
@@ -264,6 +269,14 @@ def main(
     elif arguments.command == "media-cleanup":
         exit_code = asyncio.run(
             run_media_cleanup(
+                configuration_path,
+                environ=environment_snapshot,
+                sink=sink,
+            )
+        )
+    elif arguments.command == "media-cleanup-worker":
+        exit_code = asyncio.run(
+            run_media_cleanup_worker(
                 configuration_path,
                 environ=environment_snapshot,
                 sink=sink,

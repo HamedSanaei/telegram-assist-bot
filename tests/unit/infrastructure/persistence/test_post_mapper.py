@@ -18,6 +18,7 @@ from telegram_assist_bot.domain.posts import (
     SourceMessageIdentity,
     StatusTransition,
     TelegramEntity,
+    TelegramUrlButton,
     TransitionActorCategory,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb.post_mapper import (
@@ -44,6 +45,14 @@ def _make_post() -> Post:
                 TelegramEntity(33, 2, "custom_emoji", "5368324170671202286"),
             ),
             caption_entities=(TelegramEntity(0, 5, "italic"),),
+            inline_keyboard=(
+                (
+                    TelegramUrlButton(
+                        "اتصال 🚀",
+                        "https://t.me/proxy?server=example.invalid&port=443&secret=safe",
+                    ),
+                ),
+            ),
         ),
         source_published_at=datetime(
             2026,
@@ -136,7 +145,22 @@ def test_document_uses_stable_version_one_schema_and_indexable_identity_fields()
         "caption",
         "text_entities",
         "caption_entities",
+        "inline_keyboard",
     ]
+
+
+def test_inline_url_keyboard_round_trip_and_legacy_default() -> None:
+    document = post_to_document(_make_post())
+
+    restored = post_from_document(document)
+
+    assert restored.original_content.inline_keyboard[0][0].label == "اتصال 🚀"
+    assert restored.original_content.inline_keyboard[0][0].url.startswith(
+        "https://t.me/proxy?"
+    )
+    content = cast("dict[str, object]", document["original_content"])
+    del content["inline_keyboard"]
+    assert post_from_document(document).original_content.inline_keyboard == ()
 
 
 def test_pre_t011_version_one_document_defaults_missing_claim_marker() -> None:

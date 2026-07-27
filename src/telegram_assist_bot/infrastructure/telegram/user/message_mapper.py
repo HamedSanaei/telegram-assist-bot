@@ -11,7 +11,11 @@ from telegram_assist_bot.application.ports import (
     TelegramTextMessage,
 )
 from telegram_assist_bot.domain.media import MediaType
-from telegram_assist_bot.domain.posts import TelegramEntity
+from telegram_assist_bot.domain.posts import (
+    PostInvariantError,
+    TelegramEntity,
+    TelegramUrlButton,
+)
 
 _CAMEL_BOUNDARY: Final[re.Pattern[str]] = re.compile(r"(?<!^)(?=[A-Z])")
 _DOWNLOADABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
@@ -61,6 +65,36 @@ def _map_entity(raw_entity: object) -> TelegramEntity:
         )
     except Exception as error:
         raise InvalidTelegramMessageError from error
+
+
+def _map_inline_keyboard(
+    raw_message: object,
+) -> tuple[tuple[TelegramUrlButton, ...], ...]:
+    """Map portable URL buttons without reinterpreting source callbacks."""
+    markup = getattr(raw_message, "reply_markup", None)
+    raw_rows = getattr(markup, "rows", ()) if markup is not None else ()
+    if not isinstance(raw_rows, list | tuple):
+        return ()
+    rows: list[tuple[TelegramUrlButton, ...]] = []
+    for raw_row in raw_rows:
+        raw_buttons = getattr(raw_row, "buttons", ())
+        if not isinstance(raw_buttons, list | tuple):
+            continue
+        buttons: list[TelegramUrlButton] = []
+        for raw_button in raw_buttons:
+            if type(raw_button).__name__ != "KeyboardButtonUrl":
+                continue
+            label = getattr(raw_button, "text", None)
+            url = getattr(raw_button, "url", None)
+            if type(label) is not str or type(url) is not str:
+                continue
+            try:
+                buttons.append(TelegramUrlButton(label, url))
+            except PostInvariantError:
+                continue
+        if buttons:
+            rows.append(tuple(buttons))
+    return tuple(rows)
 
 
 def map_telethon_message(
@@ -139,6 +173,7 @@ def map_telethon_message(
         is_service=is_service,
         has_media=has_media,
         media=media,
+        inline_keyboard=_map_inline_keyboard(raw_message),
     )
 
 

@@ -16,6 +16,7 @@ from uuid import uuid4
 from telegram_assist_bot.application.ports import (
     MediaPermanentError,
     MediaTooLargeError,
+    MediaTransientError,
 )
 
 if TYPE_CHECKING:
@@ -245,15 +246,19 @@ class LocalMediaStorage:
 
     async def delete(self, storage_path: str) -> bool:
         """Delete a confined regular file idempotently."""
-        path = self._safe(storage_path)
-        if not path.exists():
-            return False
-        if path.is_symlink() or not path.is_file():
-            raise MediaPermanentError("Only regular media files may be deleted.")
         try:
+            path = self._safe(storage_path)
+            if not path.exists():
+                return False
+            if path.is_symlink() or not path.is_file():
+                raise MediaPermanentError("Only regular media files may be deleted.")
             path.unlink()
         except FileNotFoundError:
             return False
+        except MediaPermanentError:
+            raise
+        except OSError:
+            raise MediaTransientError("Media deletion failed transiently.") from None
         return True
 
     async def delete_stale_temporary_files(

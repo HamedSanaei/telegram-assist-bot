@@ -117,6 +117,7 @@ class MediaDownloadSpec:
     mime_type: str | None
     original_filename: str | None
     expires_at: datetime
+    post_id: PostId | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Final, Self, cast
+from urllib.parse import urlsplit
 
 from telegram_assist_bot.domain.advertisement import (
     ADVERTISEMENT_MANUAL_REVIEW_REASON,
@@ -60,6 +61,10 @@ POST_RETENTION_PERIOD: Final[timedelta] = timedelta(days=14)
 _MAX_POST_ID_LENGTH: Final[int] = 128
 _MAX_SOURCE_USERNAME_LENGTH: Final[int] = 128
 _MAX_SOURCE_DISPLAY_NAME_LENGTH: Final[int] = 256
+_MAX_BUTTON_LABEL_LENGTH: Final[int] = 256
+_MAX_BUTTON_URL_LENGTH: Final[int] = 4096
+_MAX_INLINE_BUTTON_ROWS: Final[int] = 100
+_MAX_INLINE_BUTTONS_PER_ROW: Final[int] = 8
 
 
 def _is_bounded_non_blank_string(value: object, maximum_length: int) -> bool:
@@ -80,6 +85,28 @@ def _freeze_entities(value: object) -> tuple[TelegramEntity, ...]:
     if any(type(entity) is not TelegramEntity for entity in entities):
         raise PostInvariantError
     return cast("tuple[TelegramEntity, ...]", entities)
+
+
+def _freeze_inline_keyboard(
+    value: object,
+) -> tuple[tuple[TelegramUrlButton, ...], ...]:
+    """Defensively copy portable URL-button rows without changing their order."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise PostInvariantError
+    raw_rows = tuple(value)
+    if len(raw_rows) > _MAX_INLINE_BUTTON_ROWS:
+        raise PostInvariantError
+    rows: list[tuple[TelegramUrlButton, ...]] = []
+    for value_row in raw_rows:
+        if isinstance(value_row, (str, bytes)) or not isinstance(value_row, Sequence):
+            raise PostInvariantError
+        row = tuple(value_row)
+        if not row or len(row) > _MAX_INLINE_BUTTONS_PER_ROW:
+            raise PostInvariantError
+        if any(type(button) is not TelegramUrlButton for button in row):
+            raise PostInvariantError
+        rows.append(cast("tuple[TelegramUrlButton, ...]", row))
+    return tuple(rows)
 
 
 def _freeze_history(value: object) -> tuple[StatusTransition, ...]:
@@ -132,13 +159,42 @@ class SourceMessageIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class TelegramUrlButton:
+    """Preserve one portable Telegram inline URL button exactly."""
+
+    label: str
+    url: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        """Accept only bounded URL buttons with portable Telegram-safe schemes."""
+        if not _is_bounded_non_blank_string(self.label, _MAX_BUTTON_LABEL_LENGTH):
+            raise PostInvariantError
+        if not _is_bounded_non_blank_string(self.url, _MAX_BUTTON_URL_LENGTH):
+            raise PostInvariantError
+        if any(character.isspace() for character in self.url):
+            raise PostInvariantError
+        try:
+            parsed = urlsplit(self.url)
+        except ValueError:
+            raise PostInvariantError from None
+        scheme = parsed.scheme.casefold()
+        if scheme not in {"http", "https", "tg"}:
+            raise PostInvariantError
+        if scheme in {"http", "https"} and not parsed.netloc:
+            raise PostInvariantError
+        if scheme == "tg" and not (parsed.netloc or parsed.path):
+            raise PostInvariantError
+
+
+@dataclass(frozen=True, slots=True)
 class OriginalPostContent:
-    """Preserve original text, caption, and entity sequences exactly."""
+    """Preserve original text, caption, entities, and portable URL buttons."""
 
     text: str | None = field(repr=False)
     caption: str | None = field(repr=False)
     text_entities: tuple[TelegramEntity, ...] = ()
     caption_entities: tuple[TelegramEntity, ...] = ()
+    inline_keyboard: tuple[tuple[TelegramUrlButton, ...], ...] = ()
 
     def __post_init__(self) -> None:
         """Freeze entity inputs without changing any Telegram source content."""
@@ -148,12 +204,14 @@ class OriginalPostContent:
             raise PostInvariantError
         text_entities = _freeze_entities(self.text_entities)
         caption_entities = _freeze_entities(self.caption_entities)
+        inline_keyboard = _freeze_inline_keyboard(self.inline_keyboard)
         if self.text is None and text_entities:
             raise PostInvariantError
         if self.caption is None and caption_entities:
             raise PostInvariantError
         object.__setattr__(self, "text_entities", text_entities)
         object.__setattr__(self, "caption_entities", caption_entities)
+        object.__setattr__(self, "inline_keyboard", inline_keyboard)
 
 
 @dataclass(frozen=True, slots=True, eq=False)

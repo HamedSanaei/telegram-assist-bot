@@ -179,7 +179,7 @@ def test_media_album_duplicate_pipeline_and_cleanup(
             assert await preparations.count_documents({"_id": "post-1"}) == 1
 
             await media_collection.update_one(
-                {"_id": first.identity.key}, {"$set": {"expires_at": now}}
+                {"_id": first.identity.key}, {"$set": {"media_expires_at": now}}
             )
             assert (
                 await CleanupExpiredMedia(

@@ -364,6 +364,30 @@ Media به‌صورت stream و با timeout/سقف حجم زیر root خصوص�
 می‌شود و MongoDB فقط metadata و مسیر نسبی امن را نگه می‌دارد، نه bytes فایل.
 Cleanup در batch محدود و پس از recheck reference اجرا می‌شود؛ فایل referenced یا
 غیرمنقضی، shared hash دارای reference و orphan جوان در grace حذف نمی‌شوند.
+`media.retention_days` مستقل از Post TTL است، بین ۱ تا ۳۶۵۰ قرار می‌گیرد و در
+Config قدیمی به ۲ روز resolve می‌شود. Post metadata و پنجره‌های Exact/Semantic
+Duplicate همچنان ۱۴ روزه‌اند. `media.cleanup_interval_seconds` حداقل ۶۰ ثانیه و
+پیش‌فرض ۳۶۰۰ است.
+
+یک batch دستی بدون استفاده از interval:
+
+```powershell
+uv run python -m telegram_assist_bot media-cleanup `
+  --config config/configuration.local.json
+```
+
+Worker دوره‌ای همان Use Case و state پایدار MongoDB را مصرف می‌کند:
+
+```powershell
+uv run python -m telegram_assist_bot media-cleanup-worker `
+  --config config/configuration.local.json
+```
+
+Publication یا Native Schedule فعال حتی پس از expiration اولیه فایل را محافظت
+می‌کند؛ Approval تحویل‌شده نیز تا انقضای Post مرجع محافظت می‌شود و پس از terminal
+شدن آخرین reference فایل دوباره candidate است. این cleanup
+هیچ Telegram API call ندارد، پیام Approval را حذف نمی‌کند و هرگز پست Source یا
+Destination را پاک نمی‌کند؛ حذف پیام‌های Approval به T079 واگذار شده است.
 
 نام فایل ورودی مسیر ذخیره را کنترل نمی‌کند و absolute path، traversal و symlink
 escape رد می‌شوند. روی POSIX مجوزهای خصوصی best-effort اعمال می‌شوند. `chmod` در

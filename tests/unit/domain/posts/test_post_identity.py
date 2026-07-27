@@ -19,6 +19,7 @@ from telegram_assist_bot.domain.posts import (
     PostInvariantError,
     SourceMessageIdentity,
     TelegramEntity,
+    TelegramUrlButton,
 )
 
 
@@ -180,6 +181,46 @@ def test_original_content_defensively_freezes_entity_sequences() -> None:
     assert content.caption_entities == (caption_entity,)
     assert isinstance(content.text_entities, tuple)
     assert isinstance(content.caption_entities, tuple)
+
+
+def test_original_content_defensively_freezes_portable_url_button_rows() -> None:
+    button = TelegramUrlButton(
+        "اتصال 🚀",
+        "https://t.me/proxy?server=example.test&port=443&secret=abcdef",
+    )
+    mutable_row = [button]
+    mutable_keyboard = [mutable_row]
+
+    content = OriginalPostContent(
+        text="پروکسی تلگرام",
+        caption=None,
+        inline_keyboard=cast(
+            "tuple[tuple[TelegramUrlButton, ...], ...]", mutable_keyboard
+        ),
+    )
+    mutable_row.clear()
+    mutable_keyboard.clear()
+
+    assert content.inline_keyboard == ((button,),)
+    assert isinstance(content.inline_keyboard, tuple)
+    assert isinstance(content.inline_keyboard[0], tuple)
+
+
+@pytest.mark.parametrize(
+    ("label", "url"),
+    [
+        ("", "https://example.test"),
+        ("Connect", ""),
+        ("Connect", "javascript:alert(1)"),
+        ("Connect", "example.test/path"),
+        ("Connect", "https://"),
+        ("Connect", "https://example.test/has space"),
+        ("Connect", "tg://"),
+    ],
+)
+def test_url_button_rejects_blank_or_non_portable_values(label: str, url: str) -> None:
+    with pytest.raises(PostInvariantError):
+        TelegramUrlButton(label, url)
 
 
 def test_original_content_rejects_unordered_or_non_entity_collections() -> None:
