@@ -177,6 +177,7 @@ Taskها عمداً متوالی اجرا شدند و Milestone با پذیرش 
 | [T076](tasks/T076-immediate-publication-recovery.md) | Immediate publication and approval-toggle recovery | T027–T033، T060–T075 | `5.17`–`5.19`، `13`، `14`، `16` | Completed |
 | [T077](tasks/T077-preserve-telegram-proxy-links-and-buttons.md) | Preserve Telegram proxy links and source URL buttons | T008–T012، T017، T027–T033، T060–T076 | `5.2`، `5.4`، `5.10`، `5.17`–`5.19` | Completed |
 | [T083](tasks/T083-restore-repository-wide-quality-gates.md) | Restore Repository-wide Quality Gates | T078 | Quality and release gates | Completed |
+| [T091](tasks/T091-validated-github-release-publication.md) | Validated GitHub Release Publication | T090 | `18.7`، `18.8` | Completed |
 
 ## بازبینی وابستگی‌ها
 

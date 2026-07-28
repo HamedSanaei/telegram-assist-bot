@@ -20,6 +20,8 @@
 - [ ] Imageهای `linux/amd64` و `linux/arm64` با SBOM و provenance ساخته می‌شوند.
 - [ ] Digest و `SHA256SUMS` قبل از انتشار بررسی شده‌اند.
 - [ ] هیچ Config محلی، Session، Token، Password یا Private Key در Artifact نیست.
+- [ ] Job `Publish GitHub Release` پس از Package، GHCR و Release files موفق
+      شده و wheel، sdist، Bundle و `SHA256SUMS` را ضمیمه کرده است.
 - [x] `tabctl backup verify`، update rollback و repair dry-run روی Instance
       آزمایشی موفق‌اند.
 - [x] مسیر import/repair/backup/update از Instance آزمایشی `1.0.0` با basename
@@ -35,6 +37,12 @@
 Telegram login/send در CI عمداً اجرا نمی‌شود؛ این مرزها با Fake پوشش داده شده و
 smoke زنده فقط با Credential مالک Release انجام می‌شود.
 
-Commit مستندات تکمیل T090 باید پیش از ساخت Tag Push شود و Quality روی همان
-Commit نیز سبز بماند. موارد مربوط به Image، Digest، Asset، Tag و GitHub Release
-فقط پس از اجرای Workflow انتشار علامت‌گذاری می‌شوند.
+Commit مربوط به T091 باید Push و Quality آن سبز شود. سپس Tag موجود را بدون حذف
+یا جابه‌جایی می‌توان به‌صورت دستی دوباره منتشر کرد:
+
+```bash
+gh workflow run release.yml -f tag=v1.1.0
+```
+
+موارد مربوط به Image، Digest، Asset و GitHub Release فقط پس از موفقیت همین
+Workflow علامت‌گذاری می‌شوند.
