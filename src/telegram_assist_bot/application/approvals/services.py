@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from telegram_assist_bot.application.ports.admin import (
     AdminMessagingGateway,
     ApprovalContent,
+    ApprovalContentPartialDeliveryError,
     ApprovalRepository,
     BotEditOutcome,
     BotUpdate,
@@ -390,11 +391,33 @@ class DeliverApproval:
             existing = await self._repository.save_delivery_progress(
                 replace(existing, expires_at=expires_at)
             )
-        if not existing.content_message_ids:
+        content_complete = existing.delivery_state in {
+            ApprovalDeliveryState.CONTENT_SENT,
+            ApprovalDeliveryState.CONTROL_SENDING,
+            ApprovalDeliveryState.COMPLETED,
+        }
+        if not content_complete:
             existing = await self._repository.save_delivery_progress(
                 replace(existing, delivery_state=ApprovalDeliveryState.CONTENT_SENDING)
             )
-            content_ids = await self._gateway.send_content(actor_id, content)
+            try:
+                if existing.content_message_ids:
+                    content_ids = await self._gateway.send_content(
+                        actor_id,
+                        content,
+                        existing_message_ids=existing.content_message_ids,
+                    )
+                else:
+                    content_ids = await self._gateway.send_content(actor_id, content)
+            except ApprovalContentPartialDeliveryError as error:
+                await self._repository.save_delivery_progress(
+                    replace(
+                        existing,
+                        content_message_ids=error.message_ids,
+                        delivery_state=ApprovalDeliveryState.CONTENT_SENDING,
+                    )
+                )
+                raise error.cause from error
             existing = await self._repository.save_delivery_progress(
                 replace(
                     existing,

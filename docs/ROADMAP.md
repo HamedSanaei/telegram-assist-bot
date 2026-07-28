@@ -136,6 +136,22 @@ Milestone 7 در اولویت اجرا قرار گرفته است؛ شماره �
 | [T081](tasks/T081-multi-instance-linux-windows-installers.md) | Multi-instance Linux and Windows Installers | T080 | Release installation | Completed |
 | [T082](tasks/T082-ghcr-release-pipeline-v1-acceptance.md) | GHCR Release Pipeline and v1 Acceptance | T078–T081، T083 | Release `v1.0.0` | Completed |
 
+## Milestone 9 — Production Operations Hardening
+
+این Milestone شکست‌های مشاهده‌شدهٔ استقرار واقعی نسخهٔ `v1.0.0` را رفع و
+مدیریت امن چند Instance را به قرارداد عملیاتی Release `v1.1.0` تبدیل می‌کند.
+Taskها عمداً متوالی‌اند و در هر زمان فقط یکی Active خواهد بود.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T084](tasks/T084-production-installer-permission-mongodb-hardening.md) | Production Installer, Permission and MongoDB Compatibility Hardening | T082، T083 | Production operations | Completed |
+| [T085](tasks/T085-safe-multi-admin-multi-source-bootstrap.md) | Safe Multi-admin and Multi-source Bootstrap Configuration | T084 | Production bootstrap | Completed |
+| [T086](tasks/T086-typed-transactional-configuration-mutations.md) | Typed Transactional Configuration Mutations | T085 | Operator configuration | Completed |
+| [T087](tasks/T087-global-multi-instance-tabctl.md) | Global Interactive Multi-instance `tabctl` | T086 | Instance management | Completed |
+| [T088](tasks/T088-safe-lifecycle-backup-update-repair-diagnostics.md) | Safe Lifecycle, Backup, Update, Repair and Diagnostics | T087 | Production operations | Completed |
+| [T089](tasks/T089-oversized-approval-caption-fallback.md) | Oversized Approval Caption Fallback | T088 | Approval delivery | Completed |
+| [T090](tasks/T090-production-operations-acceptance-readiness.md) | Production Operations Acceptance and Release Readiness | T089 | Release hardening | Active |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |

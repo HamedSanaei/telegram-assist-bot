@@ -1,6 +1,8 @@
 param(
-    [Parameter(Position = 0)][ValidateSet("start", "stop", "restart", "status", "logs", "update", "login", "config-check", "backup", "uninstall", "purge")]
+    [Parameter(Position = 0)][ValidateSet("start", "stop", "restart", "status", "logs", "update", "login", "config-check", "repair", "backup", "uninstall", "purge")]
     [string]$Action = "status",
+    [Parameter(Position = 1)][ValidateSet("permissions")]
+    [string]$RepairTarget = "permissions",
     [switch]$Yes
 )
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,27 @@ switch ($Action) {
     "update" { & docker @Compose pull; & docker @Compose up -d }
     "login" { & docker @Compose run --rm runtime login --config /app/config/configuration.json }
     "config-check" { & docker @Compose run --rm runtime check --config /app/config/configuration.json }
+    "repair" {
+        if ($RepairTarget -ne "permissions") {
+            throw "Only 'repair permissions' is available in this release."
+        }
+        $RuntimeUidLine = Get-Content (Join-Path $Root ".env") |
+            Where-Object { $_ -like "TAB_RUNTIME_UID=*" } |
+            Select-Object -First 1
+        $RuntimeGidLine = Get-Content (Join-Path $Root ".env") |
+            Where-Object { $_ -like "TAB_RUNTIME_GID=*" } |
+            Select-Object -First 1
+        $RuntimeUid = if ($RuntimeUidLine) {
+            [int]$RuntimeUidLine.Split("=", 2)[1]
+        } else { 10001 }
+        $RuntimeGid = if ($RuntimeGidLine) {
+            [int]$RuntimeGidLine.Split("=", 2)[1]
+        } else { 10001 }
+        & (Join-Path $Root "permissions.ps1") repair `
+            -InstanceDirectory $Root `
+            -RuntimeUid $RuntimeUid `
+            -RuntimeGid $RuntimeGid
+    }
     "backup" {
         $Backup = Join-Path $Root "backups"
         New-Item -ItemType Directory -Force -Path $Backup | Out-Null

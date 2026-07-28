@@ -623,3 +623,38 @@
   Image tag انجام می‌شود. MongoDB/Media/Session با `down` حفظ و فقط purge صریح
   همان project حذف می‌شوند. Telegram live در CI اجرا نمی‌شود و Release واقعی
   پس از checklist دستی خارج از T082 است.
+
+## ADR-043 — مرز permission غیرroot و pin سازگار MongoDB
+
+- **Status:** Accepted
+- **Context:** Renderer کانتینری با UID `10001` نمی‌توانست داخل مسیر خصوصی Host
+  Config بنویسد و MongoDB 8.0.21 روی Linux Kernel 6.19+ پیش از healthcheck
+  متوقف می‌شد.
+- **Decision:** UID/GID Runtime per-instance قابل‌تنظیم ولی پیش‌فرض
+  `10001:10001` است. helper مشترک POSIX/Windows فقط ownership/ACL مسیرهای
+  deployment را audit/repair می‌کند؛ Processهای پایدار غیرroot می‌مانند و یک
+  init محدود root فقط root حجم‌های Session/Media را آماده می‌کند. MongoDB از
+  `TAB_MONGODB_IMAGE` با pin دقیق `mongo:7.0.32` انتخاب می‌شود و preflight
+  تایپ‌شده Image شناور و MongoDB 8.x روی Kernel 6.19+ را رد می‌کند.
+- **Consequences:** نصب root، sudo-user و Docker Desktop به patch دستی نیاز
+  ندارد و `.env` world-readable نمی‌شود. تغییر UID/GID یک Instance موجود باید
+  همراه repair انجام شود. پذیرش نسخهٔ آیندهٔ MongoDB نیازمند pin دقیق، تست
+  Kernel 6.19+، Compose smoke و سپس تغییر آگاهانهٔ default است.
+
+## ADR-044 — Config mutation تراکنشی در Python
+
+- **Status:** Accepted
+- **Context:** تغییر عملیاتی Config با `sed`، `jq` یا Shell inline نمی‌تواند
+  invariantهای مدل، رقابت دو operator و rollback پس از restart ناموفق را امن
+  نگه دارد.
+- **Decision:** همهٔ mutationها از boundary پایتونی `operator_config` عبور
+  می‌کنند: lock per-instance، read strict UTF-8، copy، mutation تایپ‌شده،
+  validation کامل `ApplicationConfig` و Secret reference، backup timestamped،
+  replace اتمیک و restart از Port مستقل. failure پس از replace نسخهٔ قبلی را
+  byte-for-byte restore می‌کند.
+- **Consequences:** Shell/PowerShell فقط orchestration هستند؛ MongoDB، Docker و
+  SDK وارد Config core نمی‌شوند. عملیات destructive مقصد و آخرین Admin فعال
+  fail-closed است و تاریخچهٔ Post/Audit هرگز با حذف Config پاک نمی‌شود.
+  Container یک‌بارهٔ mutation با UID صفر اجرا می‌شود تا ownership فایل bindشده
+  را دقیق نگه دارد؛ این مجوز به renderer اولیه یا سرویس‌های پایدار تعمیم ندارد
+  و تمام آن‌ها non-root باقی می‌مانند.

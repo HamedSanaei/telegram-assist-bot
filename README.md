@@ -1,6 +1,6 @@
 # Telegram Assist Bot
 
-نسخهٔ Production `1.0.0` یک دستیار Dockerized برای جمع‌آوری، تأیید،
+نسخهٔ Production `1.1.0` یک دستیار Dockerized برای جمع‌آوری، تأیید،
 زمان‌بندی و انتشار محتوای کانال‌های تلگرام با Python و معماری تمیز است.
 Scaffold معماری، سامانهٔ typed Configuration، مدل خالص چرخهٔ عمر Post و
 Repository یکتای Post با Adapter ناهمگام MongoDB آماده‌اند. Composition Root
@@ -43,9 +43,28 @@ Server collision پورت ندارد:
 bash install.sh --instance second --retention-days 7
 ```
 
+ورودی چند مدیر و چند Source در یک نصب:
+
+```bash
+bash install.sh --instance example \
+  --admin-user-ids "100000001,100000002" \
+  --source-usernames "@SourceOne,https://t.me/SourceTwo"
+```
+
 ```powershell
 .\install.ps1 -Instance second -RetentionDays 7
 ```
+
+```powershell
+.\install.ps1 -Instance example `
+  -AdminUserIds "100000001,100000002" `
+  -SourceUsernames "@SourceOne,https://t.me/SourceTwo"
+```
+
+Environmentهای plural `TAB_ADMIN_USER_IDS` و `TAB_SOURCE_USERNAMES` بر
+`TAB_ADMIN_USER_ID` و `TAB_SOURCE_USERNAME` مقدم‌اند. Config تازه هیچ
+AI provider، Advertisement campaign یا reference نمونهٔ فعالی ندارد و فقط
+Secretهای Telegram/MongoDB ضروری را درخواست می‌کند.
 
 نام Instance، Compose project، MongoDB database/volume، Network، Session،
 Media، Config و `.env` هر نصب مستقل است. مسیر پیش‌فرض Linux برابر
@@ -54,7 +73,93 @@ Media، Config و `.env` هر نصب مستقل است. مسیر پیش‌فرض
 Media مستقل و پیش‌فرض دو روز است؛ Post metadata و تاریخچهٔ Duplicate همچنان
 ۱۴ روز نگه داشته می‌شوند.
 
+Compose به‌طور پیش‌فرض از pin آزموده‌شدهٔ `mongo:7.0.32` استفاده می‌کند.
+Image پیش‌فرض نصب تازه
+`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.0` است؛ Instance importشده Image
+ثبت‌شدهٔ خودش را تا update صریح حفظ می‌کند.
+Installer Linux Kernel تشخیص‌داده‌شده، Image انتخاب‌شده و تصمیم سازگاری را پیش
+از startup چاپ می‌کند؛ انتخاب صریح MongoDB 8.x روی Kernel 6.19+ رد می‌شود.
+Override پشتیبانی‌شده با `--mongodb-image mongo:X.Y.Z` یا
+`TAB_MONGODB_IMAGE` انجام می‌شود و rerun آن را حفظ می‌کند. سرویس‌های Application
+همچنان non-root هستند؛ آماده‌سازی permission خودکار است و به `chmod`/`chown`
+دستی نیاز ندارد.
+
 ## مدیریت Instance
+
+اولین نصب، مدیر سراسری `tabctl` را در `/usr/local/bin/tabctl` برای root یا
+`~/.local/bin/tabctl` برای کاربر Linux نصب می‌کند. Windows فایل
+`%LOCALAPPDATA%\TelegramAssistBot\bin\tabctl.ps1` را نصب و مسیر آن را به PATH
+کاربر اضافه می‌کند؛ shell بازِ فعلی ممکن است یک‌بار بازگشایی شود. اجرای بدون
+آرگومان menu تعاملی می‌دهد:
+
+```bash
+tabctl
+tabctl instance list
+tabctl --instance example status
+tabctl --instance example admin add "100000002,100000003"
+tabctl --instance example source add "@SourceTwo,https://t.me/SourceThree"
+tabctl --instance example logs --service runtime --tail 200
+tabctl --instance example update --check
+tabctl --instance example backup create
+tabctl --instance example repair --dry-run
+```
+
+نصب موجود با path دلخواه و نام متفاوت بدون حذف داده import می‌شود:
+
+```bash
+tabctl instance import --path /opt/telegram-assist-bot/instances/admin1 \
+  --name example
+```
+
+metadata نسخه‌دار هیچ Secretی ندارد؛ `unregister` فقط registry را تغییر می‌دهد
+و container، volume، Config، Session و Media را دست‌نخورده می‌گذارد.
+
+Backup شامل dump فشردهٔ MongoDB، Config فاقد Secret مستقیم و metadata است؛
+`.env` و Telegram Session/Media عمداً داخل آن نیستند:
+
+```bash
+tabctl --instance example backup list
+tabctl --instance example backup verify BACKUP_ID
+tabctl --instance example backup restore BACKUP_ID --yes
+```
+
+Update فقط SemVer دقیق را می‌پذیرد، پیش از تغییر backup می‌گیرد و failure را
+به Image/Config قبلی rollback می‌کند:
+
+```bash
+tabctl --instance example update --version 1.1.0
+tabctl --instance example update --rollback
+tabctl --instance example diagnostics
+tabctl --instance example diagnostics export
+```
+
+برای adoption و upgrade نصب Production موجود با نام واقعی `kingofilter` ولی
+دایرکتوری legacy به نام `admin1`:
+
+```bash
+tabctl instance import \
+  --path /opt/telegram-assist-bot/instances/admin1 \
+  --name kingofilter
+
+tabctl --instance kingofilter repair --dry-run
+tabctl --instance kingofilter repair --apply
+tabctl --instance kingofilter backup create
+tabctl --instance kingofilter update --check
+tabctl --instance kingofilter update --version 1.1.0
+tabctl --instance kingofilter status
+```
+
+در صورت نیاز به rollback:
+
+```bash
+tabctl --instance kingofilter update --rollback
+```
+
+repair ابتدا backup می‌سازد، volume/Session/Media را حذف نمی‌کند و `.env` را
+regenerate نمی‌کند. `repair --apply` تأیید تعاملی می‌خواهد؛ برای اجرای
+non-interactive فقط پس از بازبینی plan می‌توان `--yes` افزود. Import نام Instance
+را از basename مسیر حدس نمی‌زند و Image ثبت‌شدهٔ `1.0.0` تا اجرای صریح update
+حفظ می‌شود. `diagnostics export` فقط گزارش redacted را archive می‌کند.
 
 از پوشهٔ Instance در Linux:
 
@@ -68,6 +173,7 @@ Media مستقل و پیش‌فرض دو روز است؛ Post metadata و تار
 ./manage.sh update
 ./manage.sh backup
 ./manage.sh config-check
+./manage.sh repair permissions
 ./manage.sh uninstall
 ./manage.sh purge --yes
 ```
@@ -90,10 +196,15 @@ Cleanup هرگز پیام یا پست کانال Source یا Destination را ح
 - Docker Desktop در Windows: WSL2/virtualization را فعال و پس از Restart همان
   فرمان نصب را دوباره اجرا کنید.
 - خطای Config: `manage.sh config-check` یا `manage.ps1 config-check`.
+- audit/repair permission: `manage.sh repair permissions` یا
+  `manage.ps1 repair permissions`؛ این فرمان محتویات Config، `.env`، Session،
+  Media یا MongoDB را تغییر نمی‌دهد.
 - وضعیت MongoDB و Workerها: `status` و سپس `logs`.
 - Login ناقص: `login` را دوباره اجرا کنید؛ داده‌های Instance حفظ می‌شوند.
 - Update ناموفق: Image tag و دسترسی به `ghcr.io` را بررسی و از backup استفاده
   کنید.
+- Backup خراب: پیش از restore فرمان `backup verify BACKUP_ID` را اجرا کنید.
+- Update rollback: `tabctl --instance NAME update --rollback`.
 
 ## ساخت Release و GHCR
 
@@ -101,7 +212,7 @@ Gate Pull Request علاوه بر Quality کامل، Image، Compose، Installer
 Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workflow Release با Tag
 `v*.*.*` Image چندسکویی `linux/amd64` و `linux/arm64` را به
 `ghcr.io/hamedsanaei/telegram-assist-bot` می‌فرستد؛ برای Release پایدار
-`v1.0.0` Tagهای `1.0.0`، `1.0`، `1`، Git SHA و `latest` تولید می‌شوند. مراحل
+`v1.1.0` Tagهای `1.1.0`، `1.1`، `1`، Git SHA و `latest` تولید می‌شوند. مراحل
 دستی و کنترل Artifact در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده
 است. Tag و GitHub Release باید فقط پس از موفقیت تمام Gateها به‌صورت دستی ساخته
 شوند.
@@ -122,6 +233,12 @@ Confirm جدا dispatch می‌کند؛ Handler هیچ User API Session یا ا�
 
 هر مدیر یک header و content مستقل می‌گیرد. Sync حداکثر سه attempt برای شکست موقت
 دارد، پیام حذف‌شده را inactive می‌کند و stale version را روی UI جدید نمی‌نویسد.
+Caption رسانهٔ Approval با طول دقیق ۱۰۲۴ واحد UTF-16 همان Caption باقی می‌ماند؛
+اگر بزرگ‌تر باشد، Bot ابتدا Photo/Video/Animation/Document یا preview آلبوم را
+بدون Caption می‌فرستد و سپس متن کامل فارسی/Emoji/Entity را پیام جدا می‌کند.
+progress رسانه پیش از retry ذخیره می‌شود تا failure پیام متن، رسانه را دوباره
+ارسال نکند. این fallback فقط Approval Bot است و publication مقصد را تغییر
+نمی‌دهد.
 
 ## پیش‌نیاز توسعه
 

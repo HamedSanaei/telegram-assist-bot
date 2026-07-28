@@ -10,7 +10,7 @@ from zipfile import BadZipFile, ZipFile
 
 EXPECTED_DISTRIBUTION = "telegram-assist-bot"
 EXPECTED_IMPORT_PACKAGE = "telegram_assist_bot"
-EXPECTED_VERSION = "1.0.0"
+EXPECTED_VERSION = "1.1.0"
 EXPECTED_PYTHON_SPECIFIERS = frozenset({">=3.12", "<3.15"})
 EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
     {
@@ -282,6 +282,8 @@ def validate_wheel(wheel_path: Path) -> None:
                 "application/use_cases/categorize_with_ai.py",
                 "application/use_cases/schedule_ai_scoring.py",
                 "bootstrap/instance_config.py",
+                "bootstrap/deployment_compatibility.py",
+                "bootstrap/operator_config.py",
                 "domain/advertisement.py",
                 "domain/advertisement_slot.py",
                 "domain/advertisement_source.py",

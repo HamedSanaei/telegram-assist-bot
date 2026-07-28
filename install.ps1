@@ -3,7 +3,12 @@ param(
     [Parameter(Mandatory = $true)][string]$Instance,
     [ValidateRange(1, 3650)][int]$RetentionDays = 2,
     [string]$InstallDirectory,
-    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.0.0",
+    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.0",
+    [string]$MongoDbImage = "mongo:7.0.32",
+    [ValidateRange(1, 2147483647)][int]$RuntimeUid = 10001,
+    [ValidateRange(1, 2147483647)][int]$RuntimeGid = 10001,
+    [string]$AdminUserIds,
+    [string]$SourceUsernames,
     [switch]$NonInteractive,
     [switch]$Update,
     [switch]$DryRun,
@@ -18,7 +23,7 @@ $BaseUrl = if ($env:TAB_INSTALL_BASE_URL) {
 }
 
 if ($Help) {
-    Write-Output "install.ps1 -Instance NAME [-RetentionDays 2] [-InstallDirectory PATH] [-Image IMAGE:TAG] [-NonInteractive] [-Update] [-DryRun]"
+    Write-Output "install.ps1 -Instance NAME [-RetentionDays 2] [-InstallDirectory PATH] [-Image IMAGE:TAG] [-MongoDbImage mongo:7.0.32] [-NonInteractive] [-Update] [-DryRun]"
     exit 0
 }
 if ($PSVersionTable.PSVersion.Major -lt 5) {
@@ -38,15 +43,61 @@ $InstallDirectory = if ($InstallDirectory) {
 }
 $Project = "telegram-assist-$Instance"
 $Database = "telegram_assist_$($Instance.Replace('-', '_'))"
+$EnvPath = Join-Path $InstallDirectory ".env"
+
+function Get-EnvValue([string]$Path, [string]$Name) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $Prefix = "$Name="
+    $Line = Get-Content -LiteralPath $Path -Encoding utf8 |
+        Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) } |
+        Select-Object -First 1
+    if (-not $Line) { return $null }
+    return $Line.Substring($Prefix.Length)
+}
+
+if (Test-Path -LiteralPath $EnvPath -PathType Leaf) {
+    $ExistingMongoDbImage = Get-EnvValue $EnvPath "TAB_MONGODB_IMAGE"
+    $MongoDbImage = if ($ExistingMongoDbImage) {
+        $ExistingMongoDbImage
+    } else {
+        "mongo:7.0.32"
+    }
+    $RuntimeUidText = Get-EnvValue $EnvPath "TAB_RUNTIME_UID"
+    $RuntimeGidText = Get-EnvValue $EnvPath "TAB_RUNTIME_GID"
+    if ($RuntimeUidText) { $RuntimeUid = [int]$RuntimeUidText }
+    if ($RuntimeGidText) { $RuntimeGid = [int]$RuntimeGidText }
+}
 
 if ($DryRun) {
+    if (-not $AdminUserIds) {
+        $AdminUserIds = if ($env:TAB_ADMIN_USER_IDS) {
+            $env:TAB_ADMIN_USER_IDS
+        } else {
+            $env:TAB_ADMIN_USER_ID
+        }
+    }
+    if (-not $SourceUsernames) {
+        $SourceUsernames = if ($env:TAB_SOURCE_USERNAMES) {
+            $env:TAB_SOURCE_USERNAMES
+        } else {
+            $env:TAB_SOURCE_USERNAME
+        }
+    }
     [ordered]@{
         instance = $Instance
         project = $Project
         database = $Database
         install_directory = $InstallDirectory
         image = $Image
+        mongodb_image = $MongoDbImage
+        runtime_uid = $RuntimeUid
+        runtime_gid = $RuntimeGid
         retention_days = $RetentionDays
+        admin_count = @($AdminUserIds -split ",").Count
+        admin_user_ids = $AdminUserIds
+        source_count = @($SourceUsernames -split ",").Count
+        source_usernames = $SourceUsernames
+        planned_manager_command = "tabctl --instance $Instance status"
     } | ConvertTo-Json
     exit 0
 }
@@ -104,21 +155,49 @@ New-Item -ItemType Directory -Force -Path (Join-Path $InstallDirectory "config")
 Invoke-WebRequest "$BaseUrl/compose.yaml" -OutFile (Join-Path $InstallDirectory "compose.yaml")
 Invoke-WebRequest "$BaseUrl/config/configuration.example.json" -OutFile (Join-Path $InstallDirectory "configuration.example.json")
 Invoke-WebRequest "$BaseUrl/deploy/manage.ps1" -OutFile (Join-Path $InstallDirectory "manage.ps1")
+Invoke-WebRequest "$BaseUrl/deploy/permissions.ps1" -OutFile (
+    Join-Path $InstallDirectory "permissions.ps1"
+)
+& (Join-Path $InstallDirectory "permissions.ps1") repair `
+    -InstanceDirectory $InstallDirectory `
+    -RuntimeUid $RuntimeUid `
+    -RuntimeGid $RuntimeGid
 
 $ConfigPath = Join-Path $InstallDirectory "config\configuration.json"
 if ((Test-Path $ConfigPath) -and -not $Update) {
     throw "Instance already exists; use -Update to refresh assets without overwriting Config."
 }
 
-$EnvPath = Join-Path $InstallDirectory ".env"
 if (-not (Test-Path $EnvPath)) {
     $ApiId = Read-Required "TAB_TELEGRAM_API_ID" "Telegram API ID" -Secret
     $ApiHash = Read-Required "TAB_TELEGRAM_API_HASH" "Telegram API Hash" -Secret
     $Phone = Read-Required "TAB_TELEGRAM_PHONE_NUMBER" "Telegram phone number" -Secret
     $BotToken = Read-Required "TAB_TELEGRAM_BOT_TOKEN" "Telegram Bot Token" -Secret
     $ApprovalChat = Read-Required "TAB_APPROVAL_CHAT_ID" "Approval chat ID"
-    $AdminUser = Read-Required "TAB_ADMIN_USER_ID" "Admin user ID"
-    $Source = Read-Required "TAB_SOURCE_USERNAME" "Source channel username"
+    if (-not $AdminUserIds) {
+        $AdminUserIds = if ($env:TAB_ADMIN_USER_IDS) {
+            $env:TAB_ADMIN_USER_IDS
+        } elseif ($env:TAB_ADMIN_USER_ID) {
+            $env:TAB_ADMIN_USER_ID
+        } elseif ($NonInteractive) {
+            throw "Missing required value: TAB_ADMIN_USER_IDS"
+        } else {
+            Read-Host "Administrator IDs (comma-separated)"
+        }
+    }
+    if (-not $SourceUsernames) {
+        $SourceUsernames = if ($env:TAB_SOURCE_USERNAMES) {
+            $env:TAB_SOURCE_USERNAMES
+        } elseif ($env:TAB_SOURCE_USERNAME) {
+            $env:TAB_SOURCE_USERNAME
+        } elseif ($NonInteractive) {
+            throw "Missing required value: TAB_SOURCE_USERNAMES"
+        } else {
+            Read-Host "Source channels (comma-separated)"
+        }
+    }
+    if (-not $AdminUserIds) { throw "Missing required value: TAB_ADMIN_USER_IDS" }
+    if (-not $SourceUsernames) { throw "Missing required value: TAB_SOURCE_USERNAMES" }
     $DestinationName = Read-Required "TAB_DESTINATION_NAME" "Destination name"
     $DestinationId = Read-Required "TAB_DESTINATION_ID" "Destination channel ID"
     $DestinationUsername = $env:TAB_DESTINATION_USERNAME
@@ -128,6 +207,9 @@ if (-not (Test-Path $EnvPath)) {
         "COMPOSE_PROJECT_NAME=$Project"
         "TAB_INSTANCE_DIR=$InstallDirectory"
         "TAB_IMAGE=$Image"
+        "TAB_RUNTIME_UID=$RuntimeUid"
+        "TAB_RUNTIME_GID=$RuntimeGid"
+        "TAB_MONGODB_IMAGE=$MongoDbImage"
         "TAB_MONGODB_DATABASE=$Database"
         "TAB_MONGODB_USERNAME=telegram_assist"
         "TAB_MONGODB_PASSWORD=$MongoPassword"
@@ -139,24 +221,41 @@ if (-not (Test-Path $EnvPath)) {
     ) | Set-Content -Encoding utf8 -Path $EnvPath
     & icacls $EnvPath /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
 }
+& (Join-Path $InstallDirectory "permissions.ps1") repair `
+    -InstanceDirectory $InstallDirectory `
+    -RuntimeUid $RuntimeUid `
+    -RuntimeGid $RuntimeGid
 
 $Compose = @("compose", "--project-name", $Project, "--env-file", $EnvPath, "-f", (Join-Path $InstallDirectory "compose.yaml"))
+$DockerKernel = (& docker info --format "{{.KernelVersion}}").Trim()
+& docker pull $Image
+& docker run --rm $Image deployment-preflight `
+    --kernel-version $DockerKernel `
+    --mongodb-image $MongoDbImage
+if ($LASTEXITCODE -ne 0) {
+    throw "MongoDB image is incompatible with the Docker Linux kernel."
+}
 & docker @Compose config | Out-Null
 & docker @Compose pull
 & docker @Compose up -d mongodb
 if (-not (Test-Path $ConfigPath)) {
     $Render = @(
-        "run", "--rm", "--env-file", $EnvPath,
+        "run", "--rm", "--user", "${RuntimeUid}:${RuntimeGid}",
+        "--env-file", $EnvPath,
         "-v", "${InstallDirectory}:/instance", $Image,
         "render-instance-config", "--template", "/instance/configuration.example.json",
         "--output", "/instance/config/configuration.json", "--instance", $Instance,
         "--retention-days", "$RetentionDays", "--approval-chat-id", $ApprovalChat,
-        "--admin-user-id", $AdminUser, "--source-username", $Source,
+        "--admin-user-ids", $AdminUserIds, "--source-usernames", $SourceUsernames,
         "--destination-name", $DestinationName, "--destination-id", $DestinationId,
         "--timezone", $Timezone
     )
     if ($DestinationUsername) { $Render += @("--destination-username", $DestinationUsername) }
     & docker @Render
+    & (Join-Path $InstallDirectory "permissions.ps1") repair `
+        -InstanceDirectory $InstallDirectory `
+        -RuntimeUid $RuntimeUid `
+        -RuntimeGid $RuntimeGid
 }
 & docker @Compose run --rm runtime check --config /app/config/configuration.json
 & docker @Compose run --rm runtime login --config /app/config/configuration.json
@@ -164,4 +263,30 @@ if ($LASTEXITCODE -ne 0) {
     throw "Login was not completed. MongoDB and instance files were preserved."
 }
 & docker @Compose up -d
-Write-Output "Installed $Instance. Run: $InstallDirectory\manage.ps1 status"
+$ManagerBin = Join-Path $env:LOCALAPPDATA "TelegramAssistBot\bin"
+New-Item -ItemType Directory -Force -Path $ManagerBin | Out-Null
+if (
+    -not (Get-Command py -ErrorAction SilentlyContinue) -and
+    -not (Get-Command python -ErrorAction SilentlyContinue) -and
+    -not (Test-Path (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"))
+) {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Python 3.12 is required for the global tabctl manager."
+    }
+    winget install --exact --id Python.Python.3.12 `
+        --accept-package-agreements --accept-source-agreements
+}
+Invoke-WebRequest "$BaseUrl/deploy/tabctl.py" -OutFile (Join-Path $ManagerBin "tabctl.py")
+Invoke-WebRequest "$BaseUrl/deploy/tabctl.ps1" -OutFile (Join-Path $ManagerBin "tabctl.ps1")
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($UserPath -split ";") -notcontains $ManagerBin) {
+    [Environment]::SetEnvironmentVariable(
+        "Path",
+        "$ManagerBin;$UserPath",
+        "User"
+    )
+}
+& (Join-Path $ManagerBin "tabctl.ps1") instance import `
+    --path $InstallDirectory `
+    --name $Instance | Out-Null
+Write-Output "Installed $Instance. Run: tabctl --instance $Instance status"
