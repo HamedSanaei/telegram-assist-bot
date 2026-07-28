@@ -83,6 +83,13 @@ Active
   Config، Session، Compose project و volume declarations را در repair/update/
   rollback بررسی می‌کند.
 - Telegram login/send واقعی عمداً بدون credential صریح مالک اجرا نشده است.
+- Run شمارهٔ `30327861603` تأیید کرد Job
+  `Quality / Docker and installer acceptance` موفق است. هر سه Job ماتریس
+  Python فقط در secret-detection شکست خوردند: fixture تست diagnostics یک URI
+  Basic Auth جعلی برای اثبات redaction دارد و scanner روی Ubuntu آن را finding
+  جدید تشخیص داد. همان literal تستی با allowlist درون‌خطی و محدود علامت‌گذاری
+  شد و line number قدیمی Baseline با اسکن UTF-8 کامل refresh شد؛ هیچ detector،
+  مسیر اسکن یا Gate تضعیف نشده است. T090 تا سبزشدن اجرای بعدی CI فعال می‌ماند.
 
 ## توالی upgrade مورد انتظار
 

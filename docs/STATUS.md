@@ -3,12 +3,13 @@
 - **Current milestone:** Milestone 9 — Production Operations Hardening.
 - **Active task:** [T090 — Production Operations Acceptance and Release Readiness](tasks/T090-production-operations-acceptance-readiness.md)
 - **Last completed task:** [T089 — Oversized Approval Caption Fallback](tasks/T089-oversized-approval-caption-fallback.md)
-- **Known blockers:** Docker و Docker Compose روی میزبان توسعه در دسترس نیستند؛
-  Job `Quality / Docker and installer acceptance` پس از Push باید
-  `scripts/v1_acceptance.sh` را روی Ubuntu اجرا و موفق کند.
-- **Failing tests:** None.
-- **Last verified commit:** `6aa38a4` پایه، به‌همراه working tree کامل Milestone 9؛
-  Release آماده‌شده `1.1.0` و Suite غیرزندهٔ `1855 passed` با Coverage
-  `90.14%` و Gateهای محلی در 2026-07-28 موفق‌اند.
-- **Next recommended action:** Push کردن Commit آماده‌شده توسط مالک و پیگیری Job
-  `Quality / Docker and installer acceptance`؛ T090 تا سبزشدن آن Active است.
+- **Known blockers:** Run شمارهٔ `30327861603` در Jobهای Python به‌دلیل finding
+  عمدی fixture در Gate مربوط به `detect-secrets` ناموفق شد؛ اصلاح محلی باید
+  Push شود و Quality matrix دوباره سبز شود.
+- **Failing tests:** None؛ Job `Quality / Docker and installer acceptance` روی
+  Ubuntu موفق شده است.
+- **Last verified commit:** `9908420`؛ Suite و Gateهای Python پیش از
+  secret-detection موفق شدند و Docker/Compose multi-instance acceptance نیز
+  در 2026-07-28 موفق شد.
+- **Next recommended action:** Push کردن اصلاح محلی finding تستی و پیگیری مجدد
+  Quality matrix؛ T090 تا سبزشدن کامل CI فعال است.
