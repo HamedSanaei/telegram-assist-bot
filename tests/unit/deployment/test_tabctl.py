@@ -559,6 +559,7 @@ def test_diagnostics_export_contains_only_redacted_report(
         "_capture",
         lambda command: (
             0,
+            # pragma: allowlist nextline secret
             'mongodb://user:password@host {"level":"ERROR","token":"123456:'
             + ("A" * 35)
             + '"}',
