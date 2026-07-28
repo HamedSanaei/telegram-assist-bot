@@ -1,4 +1,4 @@
-# v1.1.1 Release Checklist
+# v1.1.2 Release Checklist
 
 ## شواهد Release پایه
 
@@ -12,12 +12,18 @@
 - Release Run موفق `v1.1.0`:
   [`30332245031`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30332245031)
   روی Commit `272e7e7162cda6508da31d4411c4041fbb384f44`.
+- Quality Run موفق T092:
+  [`30335865206`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30335865206)
+  روی Commit `f367ac31a87051ca91d92b78ed3808143f9b6715`.
 
-- [ ] همهٔ Gateهای `quality.yml` برای نسخهٔ `1.1.1` موفق‌اند.
-- [ ] Workflow پذیرش Docker روی Linux برای نسخهٔ `1.1.1` موفق است.
+- [ ] همهٔ Gateهای `quality.yml` برای نسخهٔ `1.1.2` موفق‌اند.
+- [ ] Workflow پذیرش Docker روی Linux برای نسخهٔ `1.1.2` موفق است.
 - [ ] Job دقیق `Quality / Docker and installer acceptance` دو Instance مستقل،
       mutationهای `tabctl`، rollback و cleanup منابع را با موفقیت اجرا کرده است.
-- [ ] نسخه در Package، Wheel، OCI label و مستندات `1.1.1` است.
+- [ ] نسخه در Package، Wheel، OCI label و مستندات `1.1.2` است.
+- [x] دو دکمهٔ URL پروکسی منبع در متن مقصد با ترتیب و target دقیق دیده می‌شوند.
+- [x] Publisher فوری و Native Scheduler هیچ keyboard از User account ارسال
+      نمی‌کنند و overflow پیام/Caption پیش از Telegram رد می‌شود.
 - [ ] permission repair روی UID/GID فاقد passwd/group entry موفق است.
 - [ ] update نصب موجود در Linux و Windows هیچ Telegram login اجرا نمی‌کند.
 - [x] قرارداد Bundle فقط Compose، Installerها، Config نمونه و این checklist
@@ -36,16 +42,16 @@
 - [ ] Kernel 6.19+ با `mongo:7.0.32` و permission non-root در Ubuntu acceptance
       موفق است.
 - [ ] Release notes تغییرات Milestone 9 و محدودیت Telegram live را بیان می‌کند.
-- [ ] Tag امضاشدهٔ `v1.1.1` فقط پس از تأیید دستی ساخته می‌شود.
-- [ ] GitHub Release پایدار و Tagهای GHCR `1.1.1`، `1.1`، `1` و `latest` بررسی می‌شوند.
+- [ ] Tag امضاشدهٔ `v1.1.2` فقط پس از تأیید دستی ساخته می‌شود.
+- [ ] GitHub Release پایدار و Tagهای GHCR `1.1.2`، `1.1`، `1` و `latest` بررسی می‌شوند.
 
 Telegram login/send در CI عمداً اجرا نمی‌شود؛ این مرزها با Fake پوشش داده شده و
 smoke زنده فقط با Credential مالک Release انجام می‌شود.
 
-پس از موفقیت T092 و Quality، Tag جدید فقط با اقدام صریح مالک منتشر می‌شود:
+پس از موفقیت T093 و Quality، Tag جدید فقط با اقدام صریح مالک منتشر می‌شود:
 
 ```bash
-gh workflow run release.yml -f tag=v1.1.1
+gh workflow run release.yml -f tag=v1.1.2
 ```
 
 موارد مربوط به Image، Digest، Asset و GitHub Release فقط پس از موفقیت همین

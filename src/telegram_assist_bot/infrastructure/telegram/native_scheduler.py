@@ -15,10 +15,10 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.infrastructure.telegram.media_serializer import (
     TelethonMediaSerializer,
 )
-from telegram_assist_bot.infrastructure.telegram.user_publisher import (
-    _map_entity,
-    _map_inline_keyboard,
+from telegram_assist_bot.infrastructure.telegram.url_button_fallback import (
+    materialize_url_buttons,
 )
+from telegram_assist_bot.infrastructure.telegram.user_publisher import _map_entity
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -91,8 +91,13 @@ class TelethonNativeSchedulerGateway:
         timeout_seconds: float,
     ) -> NativeScheduleReceipt:
         """Schedule prepared text or media at the exact aware due time."""
-        entities = [_map_entity(value) for value in payload.entities]
-        buttons = _map_inline_keyboard(payload.inline_keyboard)
+        content = materialize_url_buttons(
+            payload.text,
+            payload.entities,
+            payload.inline_keyboard,
+            has_media=bool(payload.media),
+        )
+        entities = [_map_entity(value) for value in content.entities]
         async with asyncio.timeout(timeout_seconds):
             if not payload.media:
                 message_kwargs: dict[str, object] = {
@@ -100,23 +105,19 @@ class TelethonNativeSchedulerGateway:
                     "parse_mode": None,
                     "schedule": due_at,
                 }
-                if buttons:
-                    message_kwargs["buttons"] = buttons
                 result = await self._client.send_message(
                     payload.destination_id,
-                    payload.text or "",
+                    content.text or "",
                     **message_kwargs,
                 )
             else:
                 uploads = await self._media.serialize(payload.media)
                 file_kwargs: dict[str, object] = {
-                    "caption": payload.text,
+                    "caption": content.text,
                     "formatting_entities": entities,
                     "parse_mode": None,
                     "schedule": due_at,
                 }
-                if buttons:
-                    file_kwargs["buttons"] = buttons
                 result = await self._client.send_file(
                     payload.destination_id,
                     uploads[0] if len(uploads) == 1 else list(uploads),

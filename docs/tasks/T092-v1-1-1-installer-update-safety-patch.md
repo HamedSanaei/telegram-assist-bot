@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -109,5 +109,9 @@ git diff --check
   build نسخهٔ `1.1.1`، distribution check، clean-wheel import، Bash syntax،
   dry-run هر دو Installer و `git diff --check` موفق‌اند.
 - Docker روی Host Windows در دسترس نیست؛ در نتیجه Ubuntu permission/update
-  harness و Docker/Compose acceptance اجرا نشده‌اند و Task تا Quality CI
-  `Active` می‌ماند.
+  harness و Docker/Compose acceptance محلی اجرا نشدند.
+- Quality Run شمارهٔ
+  [`30335865206`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30335865206)
+  برای Commit
+  `f367ac31a87051ca91d92b78ed3808143f9b6715` با Python 3.12، 3.13، 3.14 و
+  `Docker and installer acceptance` موفق شد و محدودیت Host را تعیین تکلیف کرد.

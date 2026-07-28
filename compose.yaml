@@ -1,7 +1,7 @@
 name: ${COMPOSE_PROJECT_NAME:-telegram-assist-default}
 
 x-application: &application
-  image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1}
+  image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2}
   user: ${TAB_RUNTIME_UID:-10001}:${TAB_RUNTIME_GID:-10001}
   restart: unless-stopped
   init: true
@@ -37,7 +37,7 @@ x-application: &application
 
 services:
   volume-permissions:
-    image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1}
+    image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2}
     user: "0:0"
     restart: "no"
     entrypoint: ["/bin/sh", "-eu", "-c"]

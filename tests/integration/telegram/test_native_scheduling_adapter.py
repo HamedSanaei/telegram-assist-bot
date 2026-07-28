@@ -113,10 +113,12 @@ def test_native_adapter_reads_external_schedules_and_schedules_every_payload_kin
         )
         assert text.message_ids == (51,)
         assert client.calls[-1][2]["schedule"] == due_at
-        buttons = client.calls[-1][2]["buttons"]
-        assert isinstance(buttons, list)
-        assert buttons[0][0].text == "Connect"
-        assert buttons[0][0].url.startswith("https://t.me/proxy?")
+        assert client.calls[-1][1] == (
+            "سلام\n\n"
+            "Connect: "
+            "https://t.me/proxy?server=example.invalid&port=443&secret=safe"
+        )
+        assert "buttons" not in client.calls[-1][2]
 
         for index, item in enumerate(media):
             receipt = await gateway.schedule(

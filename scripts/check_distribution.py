@@ -10,7 +10,7 @@ from zipfile import BadZipFile, ZipFile
 
 EXPECTED_DISTRIBUTION = "telegram-assist-bot"
 EXPECTED_IMPORT_PACKAGE = "telegram_assist_bot"
-EXPECTED_VERSION = "1.1.1"
+EXPECTED_VERSION = "1.1.2"
 EXPECTED_PYTHON_SPECIFIERS = frozenset({">=3.12", "<3.15"})
 EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
     {
@@ -208,6 +208,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/user_publisher.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/media_serializer.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/native_scheduler.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/telegram/url_button_fallback.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/crawl_once.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/live_text_listener.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/media/__init__.py",

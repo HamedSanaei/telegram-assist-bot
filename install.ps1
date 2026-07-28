@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Instance,
     [ValidateRange(1, 3650)][int]$RetentionDays = 2,
     [string]$InstallDirectory,
-    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1",
+    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2",
     [string]$MongoDbImage = "mongo:7.0.32",
     [ValidateRange(1, 2147483647)][int]$RuntimeUid = 10001,
     [ValidateRange(1, 2147483647)][int]$RuntimeGid = 10001,

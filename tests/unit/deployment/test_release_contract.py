@@ -23,7 +23,7 @@ def test_release_workflow_has_safe_ghcr_multi_platform_contract() -> None:
     assert isinstance(triggers, dict)
     dispatch = triggers["workflow_dispatch"]
     assert dispatch["inputs"]["tag"] == {
-        "description": "Release tag مثل v1.1.1",
+        "description": "Release tag مثل v1.1.2",
         "required": True,
         "type": "string",
     }
@@ -149,7 +149,7 @@ def test_quality_workflow_runs_docker_and_installer_acceptance_without_push() ->
     assert "packages: write" not in workflow
 
 
-def test_release_versions_and_assets_are_exactly_v1_1_1() -> None:
+def test_release_versions_and_assets_are_exactly_v1_1_2() -> None:
     package = (ROOT / "src/telegram_assist_bot/__init__.py").read_text(encoding="utf-8")
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -160,15 +160,15 @@ def test_release_versions_and_assets_are_exactly_v1_1_1() -> None:
     distribution = (ROOT / "scripts/check_distribution.py").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
-    assert '__version__: Final[str] = "1.1.1"' in package
-    assert 'version = "1.1.1"' in project
-    assert "ARG VERSION=1.1.1" in dockerfile
-    release_image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1"
+    assert '__version__: Final[str] = "1.1.2"' in package
+    assert 'version = "1.1.2"' in project
+    assert "ARG VERSION=1.1.2" in dockerfile
+    release_image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2"
     assert compose.count(release_image) == 2
     assert release_image in linux_installer
     assert release_image in windows_installer
-    assert 'DEFAULT_RELEASE_VERSION: Final = "1.1.1"' in manager
-    assert 'EXPECTED_VERSION = "1.1.1"' in distribution
+    assert 'DEFAULT_RELEASE_VERSION: Final = "1.1.2"' in manager
+    assert 'EXPECTED_VERSION = "1.1.2"' in distribution
     assert 'bundle_dir="telegram-assist-bot-$RELEASE_TAG"' in workflow
     assert 'tar -czf "$bundle_dir.tar.gz" "$bundle_dir"' in workflow
     for public_asset in (

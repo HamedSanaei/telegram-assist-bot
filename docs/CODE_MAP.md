@@ -288,8 +288,9 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/telegram/user/live_adapter.py` | subscription bounded، backpressure، خطای mapping امن per-message و unsubscribe cancellation-safe |
 | `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
-| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji/URL-button، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
-| `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` همراه دکمه‌های URL با serializer مشترک همان client Runtime |
+| `infrastructure/telegram/url_button_fallback.py` | تبدیل bounded ردیف‌های URL منبع به خطوط متنی مرتب برای محدودیت keyboard در User API |
+| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji، fallback متنی URL-button، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
+| `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` همراه fallback متنی URL با serializer مشترک همان client Runtime |
 | `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API، upload نوع‌صحیح Media زیر root محصور و نگاشت امن network/rate-limit/server failures به retry Application |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |
 | `presentation/` | Scaffold Handlerها و View modelهای مدیریتی آینده |
@@ -675,4 +676,4 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
 | `.github/workflows/release.yml` | validation Tag/نسخه، Build wheel/sdist و Bundle، GHCR چندسکویی، SBOM/provenance و ایجاد/تکمیل idempotent GitHub Release |
 | `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
-| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.1` |
+| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.2` |

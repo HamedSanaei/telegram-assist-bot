@@ -674,3 +674,20 @@
   باشد. نصب تازه همچنان login اولیه دارد. login مجدد نیازمند اقدام صریح
   operator با ترتیب `stop`، `login`، `start` است؛ Config، Session، Media،
   MongoDB و volumeها در update مهاجرت یا بازنویسی نمی‌شوند.
+
+## ADR-046 — fallback متنی دکمه‌های URL در مرز User API
+
+- **Status:** Accepted
+- **Context:** T077 دکمه‌های `KeyboardButtonUrl` را تا Publication payload حفظ
+  می‌کرد، اما Fakeهای Adapter فقط دریافت آرگومان `buttons` را می‌سنجیدند.
+  Telegram/Telethon keyboard را فقط برای Bot account پشتیبانی می‌کند؛ انتشار
+  نهایی پروژه عمداً با User account انجام می‌شود تا Entity و Premium/Custom
+  Emoji حفظ شوند، پس markup در مقصد ظاهر نمی‌شد.
+- **Decision:** مدل و persistence مستقل `TelegramUrlButton` حفظ می‌شود، اما
+  Publisher فوری و Native Scheduler ردیف‌های آن را درست پیش از User API به
+  خطوط مرتب `label: URL` در انتهای متن یا Caption تبدیل می‌کنند و `buttons`
+  ارسال نمی‌کنند. حد UTF-16 پیام/Caption پیش از شبکه fail-closed کنترل می‌شود.
+- **Consequences:** لینک proxy در مقصد قابل‌مشاهده و قابل‌کلیک می‌ماند و
+  offset Entityهای قبلی تغییر نمی‌کند. callback، Login، WebApp و دادهٔ opaque
+  منبع همچنان تفسیر نمی‌شوند. Post legacy فاقد `inline_keyboard` چیزی برای
+  بازیابی ندارد و migration یا refetch خودکار انجام نمی‌شود.

@@ -1,14 +1,14 @@
 # وضعیت فعلی
 
-- **Current milestone:** Milestone 10 — v1.1.1 Installer Stability Patch.
-- **Active task:** [T092 — v1.1.1 Installer Update Safety Patch](tasks/T092-v1-1-1-installer-update-safety-patch.md)
-- **Last completed task:** [T091 — Validated GitHub Release Publication](tasks/T091-validated-github-release-publication.md)
-- **Known blockers:** Docker روی Host فعلی در دسترس نیست؛ Ubuntu
-  Docker/installer acceptance باید در Quality CI اجرا شود.
+- **Current milestone:** Milestone 11 — v1.1.2 Portable Proxy Link Publication.
+- **Active task:** [T093 — v1.1.2 Portable Proxy Link Publication](tasks/T093-v1-1-2-portable-proxy-link-publication.md)
+- **Last completed task:** [T092 — v1.1.1 Installer Update Safety Patch](tasks/T092-v1-1-1-installer-update-safety-patch.md)
+- **Known blockers:** Bash و Docker روی Host فعلی در دسترس نیستند؛ Bash syntax
+  و Docker/Compose acceptance نسخهٔ `1.1.2` باید در Ubuntu Quality CI اجرا شود.
 - **Failing tests:** None.
-- **Last verified commit:** `272e7e7162cda6508da31d4411c4041fbb384f44`؛
-  Release Run شمارهٔ
-  [`30332245031`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30332245031)
-  با Validate، Package، Release files، GHCR و GitHub Release موفق شد.
-- **Next recommended action:** بازبینی نهایی T092، سپس Push و اجرای Quality CI
-  برای تعیین تکلیف Ubuntu acceptance؛ Tag و Release هنوز مجاز نیستند.
+- **Last verified commit:** `f367ac31a87051ca91d92b78ed3808143f9b6715`؛
+  Quality Run شمارهٔ
+  [`30335865206`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30335865206)
+  با هر سه Python matrix و Docker/installer acceptance موفق شد.
+- **Next recommended action:** بازبینی diff و سپس Commit/Push جداگانهٔ T093 برای
+  اجرای Quality CI؛ Tag و Release فقط با دستور جداگانهٔ مالک مجاز است.

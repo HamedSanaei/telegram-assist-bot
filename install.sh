@@ -4,7 +4,7 @@ set -euo pipefail
 INSTANCE=""
 RETENTION_DAYS="2"
 INSTALL_DIR=""
-IMAGE="ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1"
+IMAGE="ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2"
 MONGODB_IMAGE="${TAB_MONGODB_IMAGE:-mongo:7.0.32}"
 MONGODB_IMAGE_EXPLICIT=0
 RUNTIME_UID="${TAB_RUNTIME_UID:-10001}"

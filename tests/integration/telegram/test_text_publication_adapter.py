@@ -152,14 +152,21 @@ def test_maps_text_url_with_persian_utf16_offsets(tmp_path: Path) -> None:
     assert mapped[0].url == "https://example.invalid/path"
 
 
-def test_maps_source_proxy_url_buttons_with_rows_unchanged(tmp_path: Path) -> None:
+def test_materializes_source_proxy_url_buttons_for_user_api(tmp_path: Path) -> None:
     client = Client()
     gateway = TelethonPublisherGateway(client, media_root=tmp_path)
-    proxy_url = "tg://proxy?server=example.invalid&port=443&secret=safe"
+    first_proxy = (
+        "https://t.me/proxy?server=cloud.neoqua.pro&port=443&"
+        "secret=ee3fa2666ad08eb559375e0772a379be32636c6f75642e6e656f7175612e70726f"
+    )
+    second_proxy = (
+        "https://t.me/proxy?server=gate.soluqent.pro&port=443&"
+        "secret=ee96a8aa8b9bb29061b2edc1b0821fd5d5676174652e736f6c7571656e742e70726f"
+    )
     keyboard = (
         (
-            TelegramUrlButton("اتصال 🚀", proxy_url),
-            TelegramUrlButton("راهنما", "https://example.invalid/help"),
+            TelegramUrlButton("Connect", first_proxy),
+            TelegramUrlButton("Connect", second_proxy),
         ),
     )
 
@@ -171,12 +178,19 @@ def test_maps_source_proxy_url_buttons_with_rows_unchanged(tmp_path: Path) -> No
     )
 
     assert client.call is not None
-    rows = client.call[2]["buttons"]
-    assert isinstance(rows, list)
-    assert [button.text for button in rows[0]] == ["اتصال 🚀", "راهنما"]
-    assert [button.url for button in rows[0]] == [
-        proxy_url,
-        "https://example.invalid/help",
+    assert client.call[1] == (
+        f"پروکسی‌ آماده ✨\n\nConnect: {first_proxy}\nConnect: {second_proxy}"
+    )
+    assert "buttons" not in client.call[2]
+    mapped = client.call[2]["formatting_entities"]
+    assert isinstance(mapped, list)
+    assert [type(entity) for entity in mapped] == [
+        types.MessageEntityUrl,
+        types.MessageEntityUrl,
+    ]
+    assert [entity.length for entity in mapped] == [
+        len(first_proxy),
+        len(second_proxy),
     ]
 
 

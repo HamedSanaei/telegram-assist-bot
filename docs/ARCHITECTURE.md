@@ -232,10 +232,13 @@ application-owned تبدیل و به‌صورت tupleهای frozen و مرتب �
 خالی نگاشت می‌شوند.
 
 `MongoPublicationPayloadLoader` فقط این مقدار مستقل از SDK را به payload انتشار
-می‌افزاید. Publisher فوری و Native Scheduler آن را در آخرین مرز به `Button.url`
-Telethon تبدیل می‌کنند و همان ردیف، label و target را برای متن، Media یا Album
-می‌فرستند. callback، login، WebApp و سایر دکمه‌های وابسته به context منبع عمداً
-عبور داده نمی‌شوند و هیچ callback token مدیریتی تغییر نمی‌کند.
+می‌افزاید. Publisher فوری و Native Scheduler در مرز User API، ردیف‌ها را به
+خطوط `label: URL` در انتهای متن یا Caption تبدیل می‌کنند؛ Entityهای قبلی چون
+append در انتهای متن است offset خود را حفظ می‌کنند. حد 4096 واحد UTF-16 پیام و
+1024 واحد Caption پیش از تماس Telegram کنترل می‌شود. هیچ `buttons` به User
+client داده نمی‌شود، زیرا keyboard فقط قرارداد Bot account است. callback،
+login، WebApp و سایر دکمه‌های وابسته به context منبع عمداً عبور داده نمی‌شوند
+و هیچ callback token مدیریتی تغییر نمی‌کند.
 
 ## 4. مدل Domain
 
@@ -968,7 +971,7 @@ Post و DestinationSelection اجرا می‌کند. refresh اجباری metada
 task Worker عمومی، startup wiring، Telegram handler یا ویرایش پیام مقصد اضافه نمی‌کند؛
 فعال‌سازی عملیاتی کامل به T046 واگذار شده است.
 
-## 18. استقرار Production نسخهٔ 1.1.1
+## 18. استقرار Production نسخهٔ 1.1.2
 
 یک Image مشترک و immutable از Wheel قفل‌شده ساخته می‌شود و Processهای
 `runtime`، `approval-bot` و `media-cleanup-worker` در کنار MongoDB به‌صورت
@@ -1028,7 +1031,7 @@ legacy را گزارش/اصلاح می‌کند. diagnostics report شامل mod
 redacted است و export فقط `diagnostics.json` را archive می‌کند.
 Import یک Instance موجود، slug صریح و Compose project ذخیره‌شده را مستقل از
 basename مسیر ثبت می‌کند و `.env`، Config، Session و volumeها را بازنویسی
-نمی‌کند. مسیر upgrade تا `1.1.1` ابتدا repair/backup و سپس تغییر
+نمی‌کند. مسیر upgrade تا `1.1.2` ابتدا repair/backup و سپس تغییر
 اتمیک `TAB_IMAGE` را انجام می‌دهد؛ failure، Image و Config و rollback صریح،
 metadata/registry را نیز به نسخهٔ قبلی بازمی‌گرداند.
 

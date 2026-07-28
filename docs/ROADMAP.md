@@ -159,7 +159,16 @@ Taskها عمداً متوالی اجرا شدند و Milestone با پذیرش 
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T092](tasks/T092-v1-1-1-installer-update-safety-patch.md) | v1.1.1 Installer Update Safety Patch | T091 | `18`، `19.1`، `19.4`، `19.7`، `19.8` | Active |
+| [T092](tasks/T092-v1-1-1-installer-update-safety-patch.md) | v1.1.1 Installer Update Safety Patch | T091 | `18`، `19.1`، `19.4`، `19.7`، `19.8` | Completed |
+
+## Milestone 11 — v1.1.2 Portable Proxy Link Publication
+
+این Milestone محدودیت واقعی Telegram User API در ارسال inline keyboard را با
+fallback متنی قطعی برای URLهای قابل‌انتقال منبع رفع می‌کند.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T093](tasks/T093-v1-1-2-portable-proxy-link-publication.md) | v1.1.2 Portable Proxy Link Publication | T077، T092 | `5.10`، `5.17`–`5.19`، `18` | Active |
 
 ## Maintenance
 
