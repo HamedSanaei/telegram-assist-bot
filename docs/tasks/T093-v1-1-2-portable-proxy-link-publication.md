@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -107,10 +107,16 @@ git diff --check
 - `uv lock --check`، Ruff، format، mypy، text integrity changed/all،
   detect-secrets، Build wheel/sdist نسخهٔ `1.1.2`، distribution check،
   clean-wheel import، PowerShell syntax و `git diff --check` موفق‌اند.
-- Bash و Docker روی Host فعلی در دسترس نیستند؛ Bash syntax و Docker/Compose
-  acceptance نسخهٔ `1.1.2` باید در Ubuntu Quality CI موفق شوند و Task تا آن
-  زمان `Active` می‌ماند.
-- هیچ Telegram live، Push، Tag، GitHub Release یا انتشار GHCR اجرا نشده است.
+- Ubuntu Quality Run
+  [`30398566783`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30398566783)
+  روی Commit `837f6837f6df022c7937696c18945ef28cbd70b1` با نتیجهٔ `success`
+  کامل شد؛ Python `3.12`، `3.13` و `3.14` و Job
+  `Docker and installer acceptance` همگی موفق بودند.
+- محدودیت نبود Bash و Docker روی Host محلی با اجرای موفق Bash، Docker و
+  Installer acceptance در Ubuntu Quality CI رفع و راستی‌آزمایی شد.
+- Telegram live test اجرا نشده است؛ مسیرهای Telegram با Fakeهای non-live
+  پوشش داده شدند.
+- هیچ Tag، GitHub Release یا انتشار GHCR اجرا نشده است.
 
 ## تعریف انجام‌شدن
 
