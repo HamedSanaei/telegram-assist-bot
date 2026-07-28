@@ -448,7 +448,7 @@ def test_update_check_reports_current_release_without_mutation(
 
     output = capsys.readouterr().out
     assert "old_image=example.invalid/app:1.0.0" in output
-    assert "new_image=example.invalid/app:1.1.0" in output
+    assert "new_image=example.invalid/app:1.1.1" in output
     assert (path / ".env").read_bytes() == original_env
 
 

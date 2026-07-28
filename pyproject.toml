@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "telegram-assist-bot"
-version = "1.1.0"
+version = "1.1.1"
 description = "A modular Telegram channel administration assistant."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

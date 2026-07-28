@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Instance,
     [ValidateRange(1, 3650)][int]$RetentionDays = 2,
     [string]$InstallDirectory,
-    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.0",
+    [Alias("Version")][string]$Image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1",
     [string]$MongoDbImage = "mongo:7.0.32",
     [ValidateRange(1, 2147483647)][int]$RuntimeUid = 10001,
     [ValidateRange(1, 2147483647)][int]$RuntimeGid = 10001,
@@ -44,6 +44,8 @@ $InstallDirectory = if ($InstallDirectory) {
 $Project = "telegram-assist-$Instance"
 $Database = "telegram_assist_$($Instance.Replace('-', '_'))"
 $EnvPath = Join-Path $InstallDirectory ".env"
+$ConfigPath = Join-Path $InstallDirectory "config\configuration.json"
+$ExistingInstance = Test-Path -LiteralPath $ConfigPath -PathType Leaf
 
 function Get-EnvValue([string]$Path, [string]$Name) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
@@ -163,8 +165,7 @@ Invoke-WebRequest "$BaseUrl/deploy/permissions.ps1" -OutFile (
     -RuntimeUid $RuntimeUid `
     -RuntimeGid $RuntimeGid
 
-$ConfigPath = Join-Path $InstallDirectory "config\configuration.json"
-if ((Test-Path $ConfigPath) -and -not $Update) {
+if ($ExistingInstance -and -not $Update) {
     throw "Instance already exists; use -Update to refresh assets without overwriting Config."
 }
 
@@ -258,9 +259,13 @@ if (-not (Test-Path $ConfigPath)) {
         -RuntimeGid $RuntimeGid
 }
 & docker @Compose run --rm runtime check --config /app/config/configuration.json
-& docker @Compose run --rm runtime login --config /app/config/configuration.json
-if ($LASTEXITCODE -ne 0) {
-    throw "Login was not completed. MongoDB and instance files were preserved."
+if ($ExistingInstance) {
+    Write-Output "Existing Telegram session preserved; login was skipped during update."
+} else {
+    & docker @Compose run --rm runtime login --config /app/config/configuration.json
+    if ($LASTEXITCODE -ne 0) {
+        throw "Login was not completed. MongoDB and instance files were preserved."
+    }
 }
 & docker @Compose up -d
 $ManagerBin = Join-Path $env:LOCALAPPDATA "TelegramAssistBot\bin"

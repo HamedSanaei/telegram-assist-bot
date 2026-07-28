@@ -4,7 +4,7 @@ set -euo pipefail
 INSTANCE=""
 RETENTION_DAYS="2"
 INSTALL_DIR=""
-IMAGE="ghcr.io/hamedsanaei/telegram-assist-bot:1.1.0"
+IMAGE="ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1"
 MONGODB_IMAGE="${TAB_MONGODB_IMAGE:-mongo:7.0.32}"
 MONGODB_IMAGE_EXPLICIT=0
 RUNTIME_UID="${TAB_RUNTIME_UID:-10001}"
@@ -71,6 +71,10 @@ INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/share/telegram-assist-bot/${INSTANCE}
 PROJECT="telegram-assist-${INSTANCE}"
 DATABASE="telegram_assist_${INSTANCE//-/_}"
 KERNEL_RELEASE="${TAB_TEST_KERNEL_RELEASE:-$(uname -r)}"
+EXISTING_INSTANCE=0
+if [[ -f "$INSTALL_DIR/config/configuration.json" ]]; then
+  EXISTING_INSTANCE=1
+fi
 
 env_value() {
   local key="$1" file="$2"
@@ -220,7 +224,7 @@ curl -fsSL "$BASE_URL/config/configuration.example.json" \
 curl -fsSL "$BASE_URL/deploy/manage.sh" -o "$INSTALL_DIR/manage.sh"
 install -m 0700 "$permission_helper" "$INSTALL_DIR/permissions.sh"
 
-if [[ -f "$INSTALL_DIR/config/configuration.json" && "$UPDATE" -eq 0 ]]; then
+if ((EXISTING_INSTANCE && UPDATE == 0)); then
   echo "Instance already exists; use --update to refresh assets without overwriting Config." >&2
   exit 5
 fi
@@ -296,9 +300,14 @@ if [[ ! -f "$INSTALL_DIR/config/configuration.json" ]]; then
 fi
 
 "${compose[@]}" run --rm runtime check --config /app/config/configuration.json
-if ! "${compose[@]}" run --rm runtime login --config /app/config/configuration.json; then
-  echo "Login was not completed. MongoDB and instance files were preserved." >&2
-  exit 6
+if ((EXISTING_INSTANCE)); then
+  echo "Existing Telegram session preserved; login was skipped during update."
+else
+  if ! "${compose[@]}" run --rm runtime login \
+    --config /app/config/configuration.json; then
+    echo "Login was not completed. MongoDB and instance files were preserved." >&2
+    exit 6
+  fi
 fi
 "${compose[@]}" up -d
 

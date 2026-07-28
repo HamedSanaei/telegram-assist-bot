@@ -152,6 +152,15 @@ Taskها عمداً متوالی اجرا شدند و Milestone با پذیرش 
 | [T089](tasks/T089-oversized-approval-caption-fallback.md) | Oversized Approval Caption Fallback | T088 | Approval delivery | Completed |
 | [T090](tasks/T090-production-operations-acceptance-readiness.md) | Production Operations Acceptance and Release Readiness | T089 | Release hardening | Completed |
 
+## Milestone 10 — v1.1.1 Installer Stability Patch
+
+این Milestone دو failure مشاهده‌شده در upgrade واقعی `v1.1.0` را بدون تغییر
+داده یا قرارداد Runtime برای patch release `v1.1.1` رفع می‌کند.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T092](tasks/T092-v1-1-1-installer-update-safety-patch.md) | v1.1.1 Installer Update Safety Patch | T091 | `18`، `19.1`، `19.4`، `19.7`، `19.8` | Active |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
@@ -177,7 +186,7 @@ Taskها عمداً متوالی اجرا شدند و Milestone با پذیرش 
 | [T076](tasks/T076-immediate-publication-recovery.md) | Immediate publication and approval-toggle recovery | T027–T033، T060–T075 | `5.17`–`5.19`، `13`، `14`، `16` | Completed |
 | [T077](tasks/T077-preserve-telegram-proxy-links-and-buttons.md) | Preserve Telegram proxy links and source URL buttons | T008–T012، T017، T027–T033، T060–T076 | `5.2`، `5.4`، `5.10`، `5.17`–`5.19` | Completed |
 | [T083](tasks/T083-restore-repository-wide-quality-gates.md) | Restore Repository-wide Quality Gates | T078 | Quality and release gates | Completed |
-| [T091](tasks/T091-validated-github-release-publication.md) | Validated GitHub Release Publication | T090 | `18.7`، `18.8` | Active |
+| [T091](tasks/T091-validated-github-release-publication.md) | Validated GitHub Release Publication | T090 | `18.7`، `18.8` | Completed |
 
 ## بازبینی وابستگی‌ها
 
