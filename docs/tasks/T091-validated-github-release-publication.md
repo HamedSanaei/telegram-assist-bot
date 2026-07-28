@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Completed
+Active
 
 ## هدف
 
@@ -95,6 +95,11 @@ git diff --check
 
 ## نتیجهٔ راستی‌آزمایی
 
+- Release Run شمارهٔ
+  [`30331348535`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30331348535)
+  پیش‌نیازهای Validate، Package، GHCR و Release files را موفق اجرا کرد، اما
+  Job انتشار به‌دلیل نبود checkout مخزن شکست خورد؛ تأیید نهایی منتظر Push و
+  اجرای مجدد Workflow است.
 - Workflow از Tag push و dispatch دستی Tag موجود پشتیبانی می‌کند.
 - `Publish GitHub Release` به Validate، Build package، GHCR و Bundle وابسته است.
 - Tag موجود `v1.1.0` به Commit

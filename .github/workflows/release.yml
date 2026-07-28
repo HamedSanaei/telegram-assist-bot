@@ -257,6 +257,13 @@ jobs:
       contents: write
       packages: read
     steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Download release files
         uses: actions/download-artifact@v4
         with:
@@ -264,13 +271,38 @@ jobs:
           path: release-files
           merge-multiple: true
 
+      - name: Validate release files
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          require_one() {
+            local label="$1"
+            local pattern="$2"
+            local matches=()
+            shopt -s nullglob
+            matches=(release-files/$pattern)
+            shopt -u nullglob
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              echo "Expected exactly one $label matching release-files/$pattern; found ${#matches[@]}." >&2
+              exit 1
+            fi
+          }
+          require_one "wheel" "*.whl"
+          require_one "source distribution" "telegram_assist_bot-*.tar.gz"
+          require_one "release bundle" "telegram-assist-bot-$RELEASE_TAG.tar.gz"
+
       - name: Create checksums
         shell: bash
         run: |
           set -euo pipefail
           cd release-files
           sha256sum ./*.whl ./*.tar.gz | sed 's#  \./#  #' >SHA256SUMS
-          test -s SHA256SUMS
+          if [[ ! -s SHA256SUMS ]]; then
+            echo "Expected non-empty release checksum file release-files/SHA256SUMS." >&2
+            exit 1
+          fi
 
       - name: Confirm published Docker image
         uses: docker/setup-buildx-action@v3
@@ -298,20 +330,33 @@ jobs:
           title="Telegram Assist Bot $RELEASE_TAG"
           gh api \
             "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-files/* --clobber
-            gh release edit "$RELEASE_TAG" --title "$title" --draft=false
+          if gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-files/* \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" \
+              --title "$title" \
+              --draft=false \
+              --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" release-files/* \
               --verify-tag \
               --title "$title" \
-              --generate-notes
+              --generate-notes \
+              --repo "$GITHUB_REPOSITORY"
           fi
           release_url="$(
-            gh release view "$RELEASE_TAG" --json url --jq '.url'
+            gh release view "$RELEASE_TAG" \
+              --json url \
+              --jq '.url' \
+              --repo "$GITHUB_REPOSITORY"
           )"
           is_draft="$(
-            gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
+            gh release view "$RELEASE_TAG" \
+              --json isDraft \
+              --jq '.isDraft' \
+              --repo "$GITHUB_REPOSITORY"
           )"
           test "$is_draft" = "false"
           echo "url=$release_url" >>"$GITHUB_OUTPUT"
@@ -339,6 +384,8 @@ jobs:
             echo "| Image digest | \`$IMAGE_DIGEST\` |"
             echo
             echo "### Attached files"
-            gh release view "$RELEASE_TAG" --json assets \
+            gh release view "$RELEASE_TAG" \
+              --json assets \
+              --repo "$GITHUB_REPOSITORY" \
               --jq '.assets[].name' | sed 's/^/- `/' | sed 's/$/`/'
           } >>"$GITHUB_STEP_SUMMARY"

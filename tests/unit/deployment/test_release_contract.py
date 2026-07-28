@@ -92,6 +92,46 @@ def test_release_workflow_publishes_idempotent_github_release_after_dependencies
     assert "needs.image.outputs.digest" in workflow
 
 
+def test_release_job_checks_out_tag_and_targets_repository_explicitly() -> None:
+    _, parsed = _release_workflow()
+    publish = parsed["jobs"]["publish-release"]
+    steps = publish["steps"]
+
+    checkout = steps[0]
+    assert checkout == {
+        "name": "Check out release tag",
+        "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "with": {
+            "ref": "${{ needs.validate.outputs.tag }}",
+            "fetch-depth": 0,
+            "persist-credentials": False,
+        },
+    }
+    download = next(step for step in steps if step["name"] == "Download release files")
+    assert download["with"]["path"] == "release-files"
+
+    validation = next(
+        step for step in steps if step["name"] == "Validate release files"
+    )
+    assert 'require_one "wheel" "*.whl"' in validation["run"]
+    assert (
+        'require_one "source distribution" "telegram_assist_bot-*.tar.gz"'
+        in validation["run"]
+    )
+    assert (
+        'require_one "release bundle" "telegram-assist-bot-$RELEASE_TAG.tar.gz"'
+        in validation["run"]
+    )
+
+    shell = "\n".join(str(step.get("run", "")) for step in steps)
+    logical_shell = shell.replace("\\\n", " ")
+    release_commands = [
+        line.strip() for line in logical_shell.splitlines() if "gh release " in line
+    ]
+    assert len(release_commands) == 7
+    assert all('--repo "$GITHUB_REPOSITORY"' in line for line in release_commands)
+
+
 def test_quality_workflow_runs_docker_and_installer_acceptance_without_push() -> None:
     workflow = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
 
