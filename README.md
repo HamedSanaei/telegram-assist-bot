@@ -1,6 +1,6 @@
 # Telegram Assist Bot
 
-نسخهٔ Production `1.1.1` یک دستیار Dockerized برای جمع‌آوری، تأیید،
+نسخهٔ Production `1.1.2` یک دستیار Dockerized برای جمع‌آوری، تأیید،
 زمان‌بندی و انتشار محتوای کانال‌های تلگرام با Python و معماری تمیز است.
 Scaffold معماری، سامانهٔ typed Configuration، مدل خالص چرخهٔ عمر Post و
 Repository یکتای Post با Adapter ناهمگام MongoDB آماده‌اند. Composition Root
@@ -75,7 +75,7 @@ Media مستقل و پیش‌فرض دو روز است؛ Post metadata و تار
 
 Compose به‌طور پیش‌فرض از pin آزموده‌شدهٔ `mongo:7.0.32` استفاده می‌کند.
 Image پیش‌فرض نصب تازه
-`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.1` است؛ Instance importشده Image
+`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.2` است؛ Instance importشده Image
 ثبت‌شدهٔ خودش را تا update صریح حفظ می‌کند.
 Installer Linux Kernel تشخیص‌داده‌شده، Image انتخاب‌شده و تصمیم سازگاری را پیش
 از startup چاپ می‌کند؛ انتخاب صریح MongoDB 8.x روی Kernel 6.19+ رد می‌شود.
@@ -127,7 +127,7 @@ Update فقط SemVer دقیق را می‌پذیرد، پیش از تغییر ba
 به Image/Config قبلی rollback می‌کند:
 
 ```bash
-tabctl --instance example update --version 1.1.1
+tabctl --instance example update --version 1.1.2
 tabctl --instance example update --rollback
 tabctl --instance example diagnostics
 tabctl --instance example diagnostics export
@@ -145,7 +145,7 @@ tabctl --instance kingofilter repair --dry-run
 tabctl --instance kingofilter repair --apply
 tabctl --instance kingofilter backup create
 tabctl --instance kingofilter update --check
-tabctl --instance kingofilter update --version 1.1.1
+tabctl --instance kingofilter update --version 1.1.2
 tabctl --instance kingofilter status
 ```
 
@@ -217,7 +217,7 @@ Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workfl
 Tag `v*.*.*` یا dispatch دستی یک Tag موجود اجرا می‌شود:
 
 ```bash
-gh workflow run release.yml -f tag=v1.1.1
+gh workflow run release.yml -f tag=v1.1.2
 ```
 
 Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJOR.MINOR.PATCH` و تطبیق آن
@@ -228,7 +228,7 @@ Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJO
 Release عمومی را با notes خودکار ایجاد می‌کند؛ اگر Release همان Tag موجود باشد
 آن را duplicate نمی‌کند و Assetها را با checksum تکمیل یا جایگزین می‌کند.
 
-برای Release پایدار `v1.1.1` Tagهای Image برابر `1.1.1`، `1.1`، `1`، Git SHA
+برای Release پایدار `v1.1.2` Tagهای Image برابر `1.1.2`، `1.1`، `1`، Git SHA
 و `latest` تولید می‌شوند. Tag باید فقط پس از موفقیت تمام Gateها به‌صورت دستی
 ساخته شود؛ Workflow Tag موجود را حذف یا جابه‌جا نمی‌کند. مراحل کنترل Artifact
 در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده است.
@@ -449,6 +449,11 @@ JSON خطی UTF-8 و redacted روی stderr نوشته می‌شوند.
 ساخته می‌شود. claim و unique index در MongoDB مانع ارسال هم‌زمان تکراری‌اند.
 خطای قطعی پیش از send با backoff/jitter محدود retry می‌شود؛ نتیجهٔ مبهم پس از send
 در `OutcomeUnknown` متوقف می‌ماند و خودکار دوباره ارسال نمی‌شود.
+
+Inline keyboard فقط توسط Bot account قابل ارسال است. به همین دلیل URLهای
+دکمه‌های قابل‌انتقال منبع، از جمله `t.me/proxy`، با حفظ ترتیب به‌صورت
+`label: URL` در انتهای متن یا Caption مقصد افزوده می‌شوند. callbackهای منبع
+اجرا یا حدس زده نمی‌شوند و هیچ `buttons` از User session ارسال نمی‌شود.
 
 انتشار فوری همچنان از outbox پایدار و due worker پایتون استفاده می‌کند. انتخاب‌های
 زمان‌بندی‌شدهٔ جدید در collection مستقل `native_schedule_commands` قرار می‌گیرند و

@@ -73,7 +73,7 @@ trap finish EXIT
 
 docker --version
 docker compose version
-docker build --build-arg VERSION=1.1.1 --tag "$IMAGE" "$ROOT"
+docker build --build-arg VERSION=1.1.2 --tag "$IMAGE" "$ROOT"
 test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = "10001:10001"
 docker run --rm --user 10001:10001 "$IMAGE" --help >/dev/null
 

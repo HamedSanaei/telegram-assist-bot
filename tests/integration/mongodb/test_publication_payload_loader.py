@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -19,9 +20,39 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.content_repository i
 from telegram_assist_bot.infrastructure.persistence.mongodb.publication_payload_loader import (  # noqa: E501
     MongoPublicationPayloadLoader,
 )
+from telegram_assist_bot.infrastructure.telegram.user_publisher import (
+    TelethonPublisherGateway,
+)
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
+
+
+@dataclass(frozen=True)
+class _PublishedMessage:
+    id: int
+
+
+class _DestinationClient:
+    def __init__(self) -> None:
+        self.text: str | None = None
+        self.kwargs: dict[str, object] = {}
+
+    async def send_message(
+        self, entity: int, message: str, **kwargs: object
+    ) -> _PublishedMessage:
+        assert entity == -200
+        self.text = message
+        self.kwargs = kwargs
+        return _PublishedMessage(99)
+
+    async def send_file(self, entity: int, file: object, **kwargs: object) -> object:
+        raise AssertionError((entity, file, kwargs))
+
+    async def upload_file(self, file: object, **kwargs: object) -> object:
+        raise AssertionError((file, kwargs))
 
 
 def media_document(message_id: int, path: str, now: datetime) -> dict[str, object]:
@@ -96,6 +127,7 @@ def test_loads_text_single_media_and_ordered_album(
             single = await loader.load("single", -200)
             album = await loader.load("album", -200)
             assert text.media == ()
+            assert text.inline_keyboard == ()
             assert [item.storage_path for item in single.media] == ["single.jpg"]
             assert [item.storage_path for item in album.media] == [
                 "first.jpg",
@@ -154,6 +186,7 @@ def test_preserves_text_url_metadata_in_prepared_publication_payload(
 
 def test_loads_persisted_proxy_url_buttons_without_source_callbacks(
     mongodb_test_settings: MongoTestSettings,
+    tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
         client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
@@ -194,6 +227,15 @@ def test_loads_persisted_proxy_url_buttons_without_source_callbacks(
 
             assert payload.inline_keyboard[0][0].label == "اتصال 🚀"
             assert payload.inline_keyboard[0][0].url == proxy_url
+            destination = _DestinationClient()
+            result = await TelethonPublisherGateway(
+                destination, media_root=tmp_path
+            ).publish(payload, timeout_seconds=1)
+            assert result.message_ids == (99,)
+            assert destination.text == (
+                f"پروکسی‌ آماده\n\nاتصال 🚀: {proxy_url}"  # noqa: RUF001
+            )
+            assert "buttons" not in destination.kwargs
         finally:
             await client.close()
 

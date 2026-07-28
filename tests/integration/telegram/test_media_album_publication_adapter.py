@@ -126,12 +126,12 @@ def test_sends_album_in_stored_order_and_returns_all_ids(tmp_path: Path) -> None
         (str(paths[2].resolve()), {"file_name": "motion.mp4"}),
         (str(paths[3].resolve()), {"file_name": "report.pdf"}),
     ]
-    assert client.kwargs["caption"] == "کپشن\u200cآلبوم🙂"
+    assert client.kwargs["caption"] == (
+        "کپشن\u200cآلبوم🙂\n\n"
+        "اتصال 🚀: tg://proxy?server=example.test&port=443&secret=abcdef"
+    )
     assert cast("list[object]", client.kwargs["formatting_entities"])
-    buttons = cast("list[list[object]]", client.kwargs["buttons"])
-    button = cast("types.KeyboardButtonUrl", buttons[0][0])
-    assert button.text == "اتصال 🚀"
-    assert button.url == ("tg://proxy?server=example.test&port=443&secret=abcdef")
+    assert "buttons" not in client.kwargs
 
 
 def test_rejects_missing_and_outside_media(tmp_path: Path) -> None:
