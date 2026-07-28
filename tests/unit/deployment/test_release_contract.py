@@ -2,18 +2,37 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).parents[3]
 
 
-def test_release_workflow_has_safe_ghcr_multi_platform_contract() -> None:
+def _release_workflow() -> tuple[str, dict[object, Any]]:
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    yaml: Any = import_module("yaml")
+    parsed = yaml.safe_load(workflow)
+    assert isinstance(parsed, dict)
+    return workflow, cast("dict[object, Any]", parsed)
+
+
+def test_release_workflow_has_safe_ghcr_multi_platform_contract() -> None:
+    workflow, parsed = _release_workflow()
+    triggers = parsed.get("on", parsed.get(True))
+    assert isinstance(triggers, dict)
+    dispatch = triggers["workflow_dispatch"]
+    assert dispatch["inputs"]["tag"] == {
+        "description": "Release tag مثل v1.1.0",
+        "required": True,
+        "type": "string",
+    }
 
     assert 'tags:\n      - "v*.*.*"' in workflow
-    assert "workflow_dispatch:" in workflow
-    assert "packages: write" in workflow
-    assert "contents: read" in workflow
+    assert parsed["permissions"] == {
+        "contents": "write",
+        "packages": "write",
+    }
     assert "ghcr.io/hamedsanaei/telegram-assist-bot" in workflow
     assert "linux/amd64,linux/arm64" in workflow
     assert "sbom: true" in workflow
@@ -21,9 +40,56 @@ def test_release_workflow_has_safe_ghcr_multi_platform_contract() -> None:
     assert "type=semver,pattern={{version}}" in workflow
     assert "type=semver,pattern={{major}}.{{minor}}" in workflow
     assert "type=semver,pattern={{major}}" in workflow
-    assert "type=sha,prefix=sha-" in workflow
+    assert "type=raw,value=sha-${{ needs.validate.outputs.short_sha }}" in workflow
     assert "GITHUB_TOKEN" in workflow
     assert "pull_request" not in workflow
+    assert "inputs.publish" not in workflow
+    assert "push: true" in workflow
+
+
+def test_release_workflow_validates_existing_exact_version_tag() -> None:
+    workflow, parsed = _release_workflow()
+    jobs = parsed["jobs"]
+
+    assert jobs["validate"]["name"] == "Validate release tag"
+    assert "fetch-depth: 0" in workflow
+    assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in workflow
+    assert 'git show-ref --verify --quiet "refs/tags/$tag"' in workflow
+    assert 'git checkout --detach "$commit_sha"' in workflow
+    assert 'Path("pyproject.toml").read_text(encoding="utf-8")' in workflow
+    assert 'if [[ "$tag" != "v$version" ]]' in workflow
+    assert jobs["package"]["needs"] == "validate"
+    assert jobs["image"]["needs"] == "validate"
+    assert jobs["release-assets"]["needs"] == "validate"
+
+
+def test_release_workflow_publishes_idempotent_github_release_after_dependencies() -> (
+    None
+):
+    workflow, parsed = _release_workflow()
+    publish = parsed["jobs"]["publish-release"]
+
+    assert publish["name"] == "Publish GitHub Release"
+    assert publish["needs"] == [
+        "validate",
+        "package",
+        "image",
+        "release-assets",
+    ]
+    assert "gh release create" in workflow
+    assert "gh release upload" in workflow
+    assert "--clobber" in workflow
+    assert "--verify-tag" in workflow
+    assert "--generate-notes" in workflow
+    assert "--draft=false" in workflow
+    assert 'title="Telegram Assist Bot $RELEASE_TAG"' in workflow
+    assert '"repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"' in workflow
+    assert 'test "$is_draft" = "false"' in workflow
+    assert "docker buildx imagetools inspect" in workflow
+    assert "SHA256SUMS" in workflow
+    assert "release-files/*" in workflow
+    assert "$GITHUB_STEP_SUMMARY" in workflow
+    assert "needs.image.outputs.digest" in workflow
 
 
 def test_quality_workflow_runs_docker_and_installer_acceptance_without_push() -> None:
@@ -52,7 +118,8 @@ def test_release_versions_and_assets_are_exactly_v1_1() -> None:
     assert '__version__: Final[str] = "1.1.0"' in package
     assert 'version = "1.1.0"' in project
     assert "ARG VERSION=1.1.0" in dockerfile
-    assert "telegram-assist-bot-v1.1.0.tar.gz" in workflow
+    assert 'bundle_dir="telegram-assist-bot-$RELEASE_TAG"' in workflow
+    assert 'tar -czf "$bundle_dir.tar.gz" "$bundle_dir"' in workflow
     for public_asset in (
         "compose.yaml",
         "install.sh",

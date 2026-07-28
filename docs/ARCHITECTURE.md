@@ -1030,9 +1030,14 @@ basename مسیر ثبت می‌کند و `.env`، Config، Session و volumeه�
 metadata/registry را نیز به نسخهٔ قبلی بازمی‌گرداند.
 
 PR Image را بدون Push می‌سازد و دو Instance را smoke می‌کند. Release workflow
-فقط برای Tag یا dispatch صریح با `GITHUB_TOKEN` و permission حداقلی به GHCR
-می‌نویسد و Imageهای amd64/arm64 دارای OCI metadata، SBOM و provenance تولید
-می‌کند. MongoDB منبع حقیقت Workerها باقی می‌ماند. Cleanup Approval فقط
+فقط برای Tag یا dispatch صریح یک Tag موجود اجرا می‌شود و پیش از انتشار، وجود
+Tag، SemVer دقیق و تطبیق نسخهٔ Package را fail-closed اعتبارسنجی می‌کند. Package
+و Bundle از Commit همان Tag ساخته می‌شوند و Imageهای amd64/arm64 با OCI
+metadata، SBOM و provenance به GHCR می‌روند. پس از موفقیت Build Package، GHCR
+و Assetها، Job مستقل `Publish GitHub Release` با `GITHUB_TOKEN` و
+`contents: write` Release عمومی را می‌سازد؛ اجرای تکراری Assetها را با
+`--clobber` تکمیل می‌کند و Tag را تغییر نمی‌دهد. MongoDB منبع حقیقت Workerها
+باقی می‌ماند. Cleanup Approval فقط
 reference پیام Bot را حذف می‌کند؛ source/destination message ID هرگز ورودی حذف
 نیست. Cleanup Media نیز هیچ Telegram API call ندارد.
 

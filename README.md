@@ -209,13 +209,25 @@ Cleanup هرگز پیام یا پست کانال Source یا Destination را ح
 ## ساخت Release و GHCR
 
 Gate Pull Request علاوه بر Quality کامل، Image، Compose، Installerهای Linux و
-Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workflow Release با Tag
-`v*.*.*` Image چندسکویی `linux/amd64` و `linux/arm64` را به
-`ghcr.io/hamedsanaei/telegram-assist-bot` می‌فرستد؛ برای Release پایدار
-`v1.1.0` Tagهای `1.1.0`، `1.1`، `1`، Git SHA و `latest` تولید می‌شوند. مراحل
-دستی و کنترل Artifact در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده
-است. Tag و GitHub Release باید فقط پس از موفقیت تمام Gateها به‌صورت دستی ساخته
-شوند.
+Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workflow Release با Push
+Tag `v*.*.*` یا dispatch دستی یک Tag موجود اجرا می‌شود:
+
+```bash
+gh workflow run release.yml -f tag=v1.1.0
+```
+
+Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJOR.MINOR.PATCH` و تطبیق آن
+با نسخهٔ `pyproject.toml` را می‌سنجد. سپس wheel، source distribution و Bundle
+نصب را می‌سازد، Image چندسکویی `linux/amd64` و `linux/arm64` را به
+`ghcr.io/hamedsanaei/telegram-assist-bot` می‌فرستد و Image نسخه را inspect
+می‌کند. Job `Publish GitHub Release` پس از موفقیت همهٔ این مراحل، GitHub
+Release عمومی را با notes خودکار ایجاد می‌کند؛ اگر Release همان Tag موجود باشد
+آن را duplicate نمی‌کند و Assetها را با checksum تکمیل یا جایگزین می‌کند.
+
+برای Release پایدار `v1.1.0` Tagهای Image برابر `1.1.0`، `1.1`، `1`، Git SHA
+و `latest` تولید می‌شوند. Tag باید فقط پس از موفقیت تمام Gateها به‌صورت دستی
+ساخته شود؛ Workflow Tag موجود را حذف یا جابه‌جا نمی‌کند. مراحل کنترل Artifact
+در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده است.
 
 ## تعامل مدیران و تأیید
 

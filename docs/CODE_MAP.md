@@ -673,6 +673,6 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `infrastructure/telegram/bot/adapter.py` | preflight UTF-16 Caption و fallback Media + متن کامل با partial-delivery ID |
 | `application/approvals/services.py` | persistence/restart-safe resume پیام متن پس از Media موفق |
 | `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
-| `.github/workflows/release.yml` | GHCR چندسکویی، SemVer/SHA tags، SBOM/provenance و Asset checksum |
+| `.github/workflows/release.yml` | validation Tag/نسخه، Build wheel/sdist و Bundle، GHCR چندسکویی، SBOM/provenance و ایجاد/تکمیل idempotent GitHub Release |
 | `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
 | `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.0` |

@@ -6,24 +6,140 @@ on:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
-      publish:
-        description: Push the image to GHCR
+      tag:
+        description: "Release tag مثل v1.1.0"
         required: true
-        type: boolean
-        default: false
+        type: string
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: >-
+    release-${{
+      github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name
+    }}
   cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/hamedsanaei/telegram-assist-bot
 
 jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      major_minor: ${{ steps.release.outputs.major_minor }}
+      major: ${{ steps.release.outputs.major }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      short_sha: ${{ steps.release.outputs.short_sha }}
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag and project version
+        id: release
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${DISPATCH_TAG}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR.PATCH: $tag" >&2
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "Release tag does not exist in the repository: $tag" >&2
+            exit 1
+          fi
+
+          commit_sha="$(git rev-list -n 1 "$tag")"
+          git checkout --detach "$commit_sha"
+          version="$(
+            python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          project = tomllib.loads(
+              Path("pyproject.toml").read_text(encoding="utf-8")
+          )
+          print(project["project"]["version"])
+          PY
+          )"
+          if [[ "$tag" != "v$version" ]]; then
+            echo "Tag $tag does not match pyproject.toml version $version." >&2
+            exit 1
+          fi
+
+          IFS=. read -r major minor patch <<<"$version"
+          test -n "$major" && test -n "$minor" && test -n "$patch"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "major_minor=$major.$minor"
+            echo "major=$major"
+            echo "commit_sha=$commit_sha"
+            echo "short_sha=${commit_sha:0:7}"
+          } >>"$GITHUB_OUTPUT"
+
+  package:
+    name: Build package
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out validated tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install exact uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Install locked build environment
+        run: uv sync --locked --group dev
+
+      - name: Build wheel and source distribution
+        run: |
+          uv build --no-build-isolation
+          uv run python scripts/check_distribution.py dist
+          test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
   image:
+    name: Publish GHCR image
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -31,10 +147,13 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Check out repository
+      - name: Check out validated tag
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
 
       - name: Set up QEMU
@@ -44,7 +163,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -57,35 +175,35 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{version}},value=${{ needs.validate.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ needs.validate.outputs.tag }}
+            type=raw,value=sha-${{ needs.validate.outputs.short_sha }}
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.title=Telegram Assist Bot
             org.opencontainers.image.description=Telegram channel administration assistant
-            org.opencontainers.image.version=1.1.0
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.commit_sha }}
 
-      - name: Build and optionally publish multi-platform image
+      - name: Build and publish multi-platform image
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+          push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
-            VERSION=1.1.0
-            VCS_REF=${{ github.sha }}
+            VERSION=${{ needs.validate.outputs.version }}
+            VCS_REF=${{ needs.validate.outputs.commit_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           sbom: true
           provenance: mode=max
 
       - name: Attest published image
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE_NAME }}
@@ -93,27 +211,134 @@ jobs:
           push-to-registry: true
 
   release-assets:
+    name: Build release files
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - name: Check out repository
+      - name: Check out validated tag
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
+
       - name: Assemble public release bundle
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          mkdir telegram-assist-bot-v1.1.0
-          cp compose.yaml install.sh install.ps1 telegram-assist-bot-v1.1.0/
-          cp config/configuration.example.json telegram-assist-bot-v1.1.0/
-          cp docs/RELEASE_CHECKLIST.md telegram-assist-bot-v1.1.0/RELEASE_CHECKLIST.md
-          tar -czf telegram-assist-bot-v1.1.0.tar.gz telegram-assist-bot-v1.1.0
-          sha256sum telegram-assist-bot-v1.1.0.tar.gz > SHA256SUMS
+          set -euo pipefail
+          bundle_dir="telegram-assist-bot-$RELEASE_TAG"
+          mkdir "$bundle_dir"
+          cp compose.yaml install.sh install.ps1 "$bundle_dir/"
+          cp config/configuration.example.json "$bundle_dir/"
+          cp docs/RELEASE_CHECKLIST.md "$bundle_dir/RELEASE_CHECKLIST.md"
+          tar -czf "$bundle_dir.tar.gz" "$bundle_dir"
+
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
         with:
-          name: telegram-assist-bot-v1.1.0-release-assets
-          path: |
-            telegram-assist-bot-v1.1.0.tar.gz
-            SHA256SUMS
+          name: release-bundle
+          path: telegram-assist-bot-${{ needs.validate.outputs.tag }}.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - package
+      - image
+      - release-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-files
+          merge-multiple: true
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-files
+          sha256sum ./*.whl ./*.tar.gz | sed 's#  \./#  #' >SHA256SUMS
+          test -s SHA256SUMS
+
+      - name: Confirm published Docker image
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR for verification
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect published Docker image
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_VERSION"
+
+      - name: Create or update GitHub Release
+        id: github_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Telegram Assist Bot $RELEASE_TAG"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-files/* --clobber
+            gh release edit "$RELEASE_TAG" --title "$title" --draft=false
+          else
+            gh release create "$RELEASE_TAG" release-files/* \
+              --verify-tag \
+              --title "$title" \
+              --generate-notes
+          fi
+          release_url="$(
+            gh release view "$RELEASE_TAG" --json url --jq '.url'
+          )"
+          is_draft="$(
+            gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
+          )"
+          test "$is_draft" = "false"
+          echo "url=$release_url" >>"$GITHUB_OUTPUT"
+
+      - name: Write release summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_SHA: ${{ needs.validate.outputs.commit_sha }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          RELEASE_URL: ${{ steps.github_release.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## GitHub Release"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Tag | \`$RELEASE_TAG\` |"
+            echo "| Commit SHA | \`$RELEASE_SHA\` |"
+            echo "| Release | $RELEASE_URL |"
+            echo "| Docker image | \`$IMAGE_NAME:$RELEASE_VERSION\` |"
+            echo "| Image digest | \`$IMAGE_DIGEST\` |"
+            echo
+            echo "### Attached files"
+            gh release view "$RELEASE_TAG" --json assets \
+              --jq '.assets[].name' | sed 's/^/- `/' | sed 's/$/`/'
+          } >>"$GITHUB_STEP_SUMMARY"
