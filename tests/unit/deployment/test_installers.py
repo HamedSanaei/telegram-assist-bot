@@ -21,7 +21,7 @@ def test_linux_installer_has_strict_inputs_and_safe_uninstall() -> None:
     assert "--source-usernames" in installer
     assert "TAB_ADMIN_USER_IDS" in installer
     assert "TAB_SOURCE_USERNAMES" in installer
-    assert 'configuration.json" && "$UPDATE" -eq 0' in installer
+    assert "if ((EXISTING_INSTANCE && UPDATE == 0)); then" in installer
     assert "chmod 600" in installer
     assert "TAB_MONGODB_IMAGE" in installer
     assert "mongo:7.0.32" in installer
@@ -92,12 +92,43 @@ def test_permission_helpers_are_centralized_and_content_preserving() -> None:
     assert "chmod 0600" in linux
     assert "chmod 0640" in linux
     assert "chmod 0700" in linux
+    assert 'chown "$HOST_UID:$RUNTIME_GID" "$INSTANCE_DIR"' in linux
+    assert 'chown "$RUNTIME_UID:$HOST_GID" "$INSTANCE_DIR/config"' in linux
+    assert 'install -d -m 0700 "$INSTANCE_DIR"' in linux
+    assert ' -o "$' not in linux
+    assert ' -g "$' not in linux
     assert "chmod 777" not in linux
     assert "rm " not in linux
     assert "truncate" not in linux
     assert "icacls" in windows
     assert "Remove-Item" not in windows
     assert "Set-Content" not in windows
+
+
+def test_existing_instance_updates_skip_telegram_login_on_both_platforms() -> None:
+    linux = (ROOT / "install.sh").read_text(encoding="utf-8")
+    windows = (ROOT / "install.ps1").read_text(encoding="utf-8")
+
+    linux_flow = linux.rpartition(
+        '"${compose[@]}" run --rm runtime check --config /app/config/configuration.json'
+    )[2]
+    assert "if ((EXISTING_INSTANCE)); then" in linux_flow
+    assert linux_flow.index("login was skipped during update") < linux_flow.index(
+        "runtime login"
+    )
+    assert '"${compose[@]}" stop' not in linux_flow
+    assert '"${compose[@]}" down' not in linux_flow
+
+    windows_flow = windows.rpartition(
+        "& docker @Compose run --rm runtime check "
+        "--config /app/config/configuration.json"
+    )[2]
+    assert "if ($ExistingInstance)" in windows_flow
+    assert windows_flow.index("login was skipped during update") < windows_flow.index(
+        "runtime login"
+    )
+    assert "& docker @Compose stop" not in windows_flow
+    assert "& docker @Compose down" not in windows_flow
 
 
 def test_acceptance_covers_nonroot_plural_config_and_two_instance_registry() -> None:
@@ -111,3 +142,5 @@ def test_acceptance_covers_nonroot_plural_config_and_two_instance_registry() -> 
     assert "acceptance-one" in acceptance
     assert "acceptance-two" in acceptance
     assert "runtime check" in acceptance
+    assert "Update unexpectedly invoked Telegram login" in acceptance
+    assert "getent group" in acceptance

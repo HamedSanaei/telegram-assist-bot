@@ -73,7 +73,7 @@ trap finish EXIT
 
 docker --version
 docker compose version
-docker build --build-arg VERSION=1.1.0 --tag "$IMAGE" "$ROOT"
+docker build --build-arg VERSION=1.1.1 --tag "$IMAGE" "$ROOT"
 test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = "10001:10001"
 docker run --rm --user 10001:10001 "$IMAGE" --help >/dev/null
 
@@ -88,6 +88,81 @@ pwsh -NoProfile -File "$ROOT/install.ps1" -Instance acceptance \
   -AdminUserIds "700000001,700000002,700000003" \
   -SourceUsernames "@SourceOne,https://t.me/SourceTwo,t.me/SourceThree" \
   -MongoDbImage mongo:7.0.32 -NonInteractive -DryRun >/dev/null
+
+unmapped_id=20001
+while getent passwd "$unmapped_id" >/dev/null \
+  || getent group "$unmapped_id" >/dev/null; do
+  unmapped_id=$((unmapped_id + 1))
+done
+permission_probe="$TMP_ROOT/unmapped-permission"
+sudo bash "$ROOT/deploy/permissions.sh" repair \
+  --instance-dir "$permission_probe" \
+  --runtime-uid "$unmapped_id" --runtime-gid "$unmapped_id" \
+  --host-uid "$(id -u)" --host-gid "$(id -g)" >/dev/null
+test "$(stat -c '%g' "$permission_probe")" = "$unmapped_id"
+test "$(stat -c '%u' "$permission_probe/config")" = "$unmapped_id"
+test "$(stat -c '%a' "$permission_probe")" = "710"
+test "$(stat -c '%a' "$permission_probe/config")" = "2750"
+test "$(stat -c '%a' "$permission_probe/backups")" = "700"
+test "$(stat -c '%a' "$permission_probe/metadata")" = "700"
+if getent passwd "$unmapped_id" >/dev/null \
+  || getent group "$unmapped_id" >/dev/null; then
+  echo "Permission repair unexpectedly created a host account or group." >&2
+  exit 1
+fi
+
+update_probe="$TMP_ROOT/update-probe"
+mkdir -p "$update_probe/instance/config" "$update_probe/bin" "$update_probe/home"
+cat >"$update_probe/instance/.env" <<EOF
+COMPOSE_PROJECT_NAME=telegram-assist-update-probe
+TAB_INSTANCE_DIR=$update_probe/instance
+TAB_IMAGE=$IMAGE
+TAB_RUNTIME_UID=10001
+TAB_RUNTIME_GID=10001
+TAB_MONGODB_IMAGE=mongo:7.0.32
+TAB_MONGODB_DATABASE=telegram_assist_update_probe
+TAB_MONGODB_USERNAME=acceptance
+TAB_MONGODB_PASSWORD=$ACCEPTANCE_MONGO_AUTH
+TAB_MONGODB_URI=mongodb://acceptance:$ACCEPTANCE_MONGO_AUTH@mongodb:27017/?authSource=admin&directConnection=true
+TAB_TELEGRAM_API_ID=12345
+TAB_TELEGRAM_API_HASH=00000000000000000000000000000000
+TAB_TELEGRAM_PHONE_NUMBER=+10000000000
+TAB_TELEGRAM_BOT_TOKEN=$ACCEPTANCE_BOT_FIXTURE
+EOF
+printf '{"existing":true}\n' \
+  >"$update_probe/instance/config/configuration.json"
+printf 'session-preserved\n' >"$update_probe/instance/session.sentinel"
+cat >"$update_probe/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$TAB_DOCKER_LOG"
+exit 0
+EOF
+cat >"$update_probe/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 0700 "$update_probe/bin/docker" "$update_probe/bin/python3"
+TAB_DOCKER_LOG="$update_probe/docker.log" \
+  TAB_INSTALL_BASE_URL="file://$ROOT" \
+  TAB_TEST_KERNEL_RELEASE="6.14.0" \
+  HOME="$update_probe/home" \
+  PATH="$update_probe/bin:$PATH" \
+  bash "$ROOT/install.sh" --instance update-probe \
+    --install-dir "$update_probe/instance" \
+    --image "$IMAGE" --update >/dev/null
+grep -F "run --rm runtime check --config /app/config/configuration.json" \
+  "$update_probe/docker.log"
+grep -F "up -d" "$update_probe/docker.log"
+if grep -F "runtime login" "$update_probe/docker.log"; then
+  echo "Update unexpectedly invoked Telegram login." >&2
+  exit 1
+fi
+if grep -E '(^| )(stop|down)( |$)' "$update_probe/docker.log"; then
+  echo "Update unexpectedly stopped existing services." >&2
+  exit 1
+fi
+test "$(cat "$update_probe/instance/session.sentinel")" = "session-preserved"
 
 for instance in "${INSTANCES[@]}"; do
   mkdir -p "$TMP_ROOT/$instance/config"

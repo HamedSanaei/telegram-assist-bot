@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -95,6 +95,11 @@ git diff --check
 
 ## نتیجهٔ راستی‌آزمایی
 
+- Release Run نهایی شمارهٔ
+  [`30332245031`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30332245031)
+  روی Commit `272e7e7162cda6508da31d4411c4041fbb384f44` با نتیجهٔ `success`
+  پایان یافت؛ Validate، Package، Release files، GHCR و
+  `Publish GitHub Release` همگی موفق شدند.
 - Release Run شمارهٔ
   [`30331348535`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30331348535)
   پیش‌نیازهای Validate، Package، GHCR و Release files را موفق اجرا کرد، اما

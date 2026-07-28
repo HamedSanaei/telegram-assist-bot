@@ -658,3 +658,19 @@
   Container یک‌بارهٔ mutation با UID صفر اجرا می‌شود تا ownership فایل bindشده
   را دقیق نگه دارد؛ این مجوز به renderer اولیه یا سرویس‌های پایدار تعمیم ندارد
   و تمام آن‌ها non-root باقی می‌مانند.
+
+## ADR-045 — Update بدون Session و مالکیت عددی مستقل از Host identity
+
+- **Status:** Accepted
+- **Context:** `install -g 10001` روی Host فاقد group متناظر قابل‌حمل نبود و
+  اجرای login توسط Installer هنگام update، هم‌زمان با Runtime فعال یک Session
+  Telegram را از دو process باز می‌کرد.
+- **Decision:** helper Linux دایرکتوری‌ها را بدون owner/group lookup می‌سازد و
+  سپس UID/GID عددی و mode نهایی را جداگانه اعمال می‌کند. Installerهای Linux و
+  Windows روی Instance دارای Config، update را session-neutral اجرا می‌کنند:
+  Config check و rollout باقی می‌ماند، اما login، session validation و
+  stop/down خودکار انجام نمی‌شود.
+- **Consequences:** Runtime identity لازم نیست account یا group محلی Host داشته
+  باشد. نصب تازه همچنان login اولیه دارد. login مجدد نیازمند اقدام صریح
+  operator با ترتیب `stop`، `login`، `start` است؛ Config، Session، Media،
+  MongoDB و volumeها در update مهاجرت یا بازنویسی نمی‌شوند.

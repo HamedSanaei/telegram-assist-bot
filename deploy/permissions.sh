@@ -84,10 +84,18 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 3
 fi
 
-install -d -m 0710 -o "$HOST_UID" -g "$RUNTIME_GID" "$INSTANCE_DIR"
-install -d -m 2750 -o "$RUNTIME_UID" -g "$HOST_GID" "$INSTANCE_DIR/config"
-install -d -m 0700 -o "$HOST_UID" -g "$HOST_GID" \
+install -d -m 0700 "$INSTANCE_DIR"
+chown "$HOST_UID:$RUNTIME_GID" "$INSTANCE_DIR"
+chmod 0710 "$INSTANCE_DIR"
+
+install -d -m 0700 "$INSTANCE_DIR/config"
+chown "$RUNTIME_UID:$HOST_GID" "$INSTANCE_DIR/config"
+chmod 2750 "$INSTANCE_DIR/config"
+
+install -d -m 0700 "$INSTANCE_DIR/backups" "$INSTANCE_DIR/metadata"
+chown "$HOST_UID:$HOST_GID" \
   "$INSTANCE_DIR/backups" "$INSTANCE_DIR/metadata"
+chmod 0700 "$INSTANCE_DIR/backups" "$INSTANCE_DIR/metadata"
 
 if [[ -f "$INSTANCE_DIR/.env" && ! -L "$INSTANCE_DIR/.env" ]]; then
   chown "$HOST_UID:$HOST_GID" "$INSTANCE_DIR/.env"

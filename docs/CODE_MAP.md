@@ -675,4 +675,4 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
 | `.github/workflows/release.yml` | validation Tag/نسخه، Build wheel/sdist و Bundle، GHCR چندسکویی، SBOM/provenance و ایجاد/تکمیل idempotent GitHub Release |
 | `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
-| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.0` |
+| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.1` |

@@ -968,7 +968,7 @@ Post و DestinationSelection اجرا می‌کند. refresh اجباری metada
 task Worker عمومی، startup wiring، Telegram handler یا ویرایش پیام مقصد اضافه نمی‌کند؛
 فعال‌سازی عملیاتی کامل به T046 واگذار شده است.
 
-## 18. استقرار Production نسخهٔ 1.1.0
+## 18. استقرار Production نسخهٔ 1.1.1
 
 یک Image مشترک و immutable از Wheel قفل‌شده ساخته می‌شود و Processهای
 `runtime`، `approval-bot` و `media-cleanup-worker` در کنار MongoDB به‌صورت
@@ -981,7 +981,10 @@ Media را آماده می‌کند و هیچ Process طولانی‌مدت root
 `deploy/permissions.*` قرارداد Host را متمرکز می‌کنند: `.env` و metadata با
 mode `0600` متعلق به Host، Config با `0640` متعلق به UID Runtime و گروه Host،
 دایرکتوری Config با `2750`، backup/metadata با `0700` و rootهای volume با
-`0700` متعلق به Runtime هستند. repair فقط metadata فایل‌سیستم را تغییر می‌دهد.
+`0700` متعلق به Runtime هستند. repair ابتدا دایرکتوری را بدون owner/group
+lookup می‌سازد، سپس UID/GID عددی را با `chown` و mode نهایی را با `chmod`
+اعمال می‌کند؛ بنابراین وجود account یا group محلی برای Runtime لازم نیست.
+repair فقط metadata فایل‌سیستم را تغییر می‌دهد.
 
 MongoDB Image از `TAB_MONGODB_IMAGE` می‌آید و default ثابت
 `mongo:7.0.32` است. `deployment-preflight` نسخه‌های عددی Kernel و Image را
@@ -1025,9 +1028,16 @@ legacy را گزارش/اصلاح می‌کند. diagnostics report شامل mod
 redacted است و export فقط `diagnostics.json` را archive می‌کند.
 Import یک Instance موجود، slug صریح و Compose project ذخیره‌شده را مستقل از
 basename مسیر ثبت می‌کند و `.env`، Config، Session و volumeها را بازنویسی
-نمی‌کند. مسیر upgrade از `1.0.0` به `1.1.0` ابتدا repair/backup و سپس تغییر
+نمی‌کند. مسیر upgrade تا `1.1.1` ابتدا repair/backup و سپس تغییر
 اتمیک `TAB_IMAGE` را انجام می‌دهد؛ failure، Image و Config و rollback صریح،
 metadata/registry را نیز به نسخهٔ قبلی بازمی‌گرداند.
+
+Installerهای Linux و Windows پیش از هر mutation تشخیص می‌دهند Config موجود
+است یا نه. نصب تازه پس از Config check فقط یک login صریح اولیه اجرا می‌کند؛
+حالت `--update`/`-Update` روی Instance موجود Session را باز یا validate
+نمی‌کند، login را skip می‌کند و بدون stop/down، Compose rollout را ادامه
+می‌دهد. اگر login مجدد لازم باشد، operator باید جداگانه `stop`، سپس `login` و
+بعد `start` را اجرا کند تا تنها یک process مالک Session باشد.
 
 PR Image را بدون Push می‌سازد و دو Instance را smoke می‌کند. Release workflow
 فقط برای Tag یا dispatch صریح یک Tag موجود اجرا می‌شود و پیش از انتشار، وجود

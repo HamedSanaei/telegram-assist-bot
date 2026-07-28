@@ -1649,8 +1649,8 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 
 ## 18. توزیع Production نسخهٔ اول
 
-1. نسخهٔ Package و Image Release جاری برابر `1.1.0` است؛ Instanceهای نصب‌شدهٔ
-   `1.0.0` تا update صریح همان Image قبلی را حفظ می‌کنند.
+1. نسخهٔ Package و Image Release جاری برابر `1.1.1` است؛ Instanceهای نصب‌شدهٔ
+   قدیمی تا update صریح همان Image قبلی را حفظ می‌کنند.
 2. Linux و Windows نصب هدایت‌شده و چند Instance مستقل دارند.
 3. Config، Session، Media، MongoDB volume/database و Network هر Instance مستقل
    است و هیچ Host port collision وجود ندارد.
@@ -1680,3 +1680,7 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 6. Config تولیدشدهٔ Production حداقلی است: AI/Scoring/Categorization،
    Advertisement و Duplicate detection غیرفعال و provider/route/campaignهای
    demo خالی‌اند؛ Config کامل نمونه فقط مرجع Schema است.
+7. repair permission در Linux باید UID/GID عددی Runtime را بدون نیاز به وجود
+   user یا group متناظر روی Host اعمال کند.
+8. اجرای Installer در حالت update روی Instance موجود نباید Telegram login یا
+   هر اتصال موازی به Session فعال ایجاد کند؛ login مجدد عملیاتی جدا و صریح است.
