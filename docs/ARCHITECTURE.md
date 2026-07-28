@@ -968,14 +968,66 @@ Post و DestinationSelection اجرا می‌کند. refresh اجباری metada
 task Worker عمومی، startup wiring، Telegram handler یا ویرایش پیام مقصد اضافه نمی‌کند؛
 فعال‌سازی عملیاتی کامل به T046 واگذار شده است.
 
-## 18. استقرار Production نسخهٔ 1.0.0
+## 18. استقرار Production نسخهٔ 1.1.0
 
 یک Image مشترک و immutable از Wheel قفل‌شده ساخته می‌شود و Processهای
 `runtime`، `approval-bot` و `media-cleanup-worker` در کنار MongoDB به‌صورت
 سرویس‌های جدا اجرا می‌شوند. هر Instance با Compose project مستقل، Config
 read-only، Session/Media/Mongo volume و Network اختصاصی جداسازی می‌شود؛ هیچ
 Host port یا `container_name` سراسری وجود ندارد. Processهای Python با
-UID/GID `10001:10001` و shutdown grace اجرا می‌شوند.
+UID/GID غیرroot قابل‌تنظیم (پیش‌فرض `10001:10001`) و shutdown grace اجرا
+می‌شوند. سرویس one-shot محدود `volume-permissions` فقط root حجم‌های Session و
+Media را آماده می‌کند و هیچ Process طولانی‌مدت root نیست. helperهای
+`deploy/permissions.*` قرارداد Host را متمرکز می‌کنند: `.env` و metadata با
+mode `0600` متعلق به Host، Config با `0640` متعلق به UID Runtime و گروه Host،
+دایرکتوری Config با `2750`، backup/metadata با `0700` و rootهای volume با
+`0700` متعلق به Runtime هستند. repair فقط metadata فایل‌سیستم را تغییر می‌دهد.
+
+MongoDB Image از `TAB_MONGODB_IMAGE` می‌آید و default ثابت
+`mongo:7.0.32` است. `deployment-preflight` نسخه‌های عددی Kernel و Image را
+پیش از startup بررسی می‌کند؛ MongoDB 8.x روی Linux 6.19+ تا زمان آزمون صریح
+نسخهٔ اصلاح‌شده رد می‌شود و هیچ Image شناوری پذیرفته نیست.
+
+`instance_config` یک boundary تایپ‌شدهٔ مستقل از Shell است. parser آن IDهای
+Admin را بدون coercion و Sourceهای `username`، `@username` و URL عمومی `t.me`
+را به username lowercase canonical تبدیل می‌کند. factory دادهٔ نمونه را فقط
+برای defaults ساختاری می‌خواند، سپس همهٔ featureهای AI/Duplicate/Advertisement
+را خاموش و provider/route/failure-policy/campaign demo را خالی می‌کند؛ خروجی
+با `ApplicationConfig` validate و در همان دایرکتوری atomically جایگزین می‌شود.
+
+`operator_config` مرز mutation نصب‌شده است. یک advisory lock per-instance را
+تا پایان transaction نگه می‌دارد، JSON را strict UTF-8 می‌خواند، mutation
+تایپ‌شده را روی copy اعمال می‌کند، هم مدل و هم Secret referenceهای لازم را
+پیش از replace validate می‌کند، backup timestamped می‌سازد و candidate همان
+دایرکتوری را با mode/owner قبلی atomically جایگزین می‌کند. restart فقط از Port
+`ServiceController` انجام می‌شود؛ failure یا health ناموفق Config قبلی را
+byte-for-byte بازمی‌گرداند. Docker در این boundary وارد نشده است.
+`tabctl` این mutation کوتاه‌عمر را به‌صورت یک Container یک‌باره با UID صفر
+اجرا می‌کند تا mode، owner و group فایل Host دقیقاً حفظ شوند؛ این استثنا شامل
+renderer اولیه یا هیچ‌یک از سرویس‌های پایدار Application نمی‌شود و آن‌ها
+همچنان non-root هستند.
+
+`deploy/tabctl.py` مدیر global و cross-platform با exit codeهای ثابت است.
+registry اتمیک فقط slug، absolute path، Compose project، database و Imageهای
+غیرحساس را نگه می‌دارد؛ metadata نسخه‌دار هر Instance همان identity را در
+`metadata/instance.json` ثبت می‌کند. discovery هرگز basename مسیر را هویت
+نمی‌گیرد. lifecycle/logها به Compose project ثبت‌شده dispatch می‌شوند و
+mutationها با اجرای command تایپ‌شدهٔ Image به `operator_config` واگذار
+می‌شوند. unregister فقط registry است و purge یک عملیات جدا می‌ماند.
+
+Lifecycle manager برای هر backup یک manifest نسخه‌دار با checksum Config،
+metadata و `mongodump` می‌سازد؛ `.env`، Session و Media هرگز component پیش‌فرض
+نیستند و Config دارای Secret مستقیم fail-closed است. restore ابتدا checksum و
+identity را می‌سنجد و pre-restore backup می‌گیرد. Update فقط SemVer دقیق،
+backup-before-change، Compose validation و rollback Image/Config دارد.
+Repair plan فقط issueهای شناخته‌شدهٔ permission، metadata، MongoDB pin و asset
+legacy را گزارش/اصلاح می‌کند. diagnostics report شامل mode/owner و state
+redacted است و export فقط `diagnostics.json` را archive می‌کند.
+Import یک Instance موجود، slug صریح و Compose project ذخیره‌شده را مستقل از
+basename مسیر ثبت می‌کند و `.env`، Config، Session و volumeها را بازنویسی
+نمی‌کند. مسیر upgrade از `1.0.0` به `1.1.0` ابتدا repair/backup و سپس تغییر
+اتمیک `TAB_IMAGE` را انجام می‌دهد؛ failure، Image و Config و rollback صریح،
+metadata/registry را نیز به نسخهٔ قبلی بازمی‌گرداند.
 
 PR Image را بدون Push می‌سازد و دو Instance را smoke می‌کند. Release workflow
 فقط برای Tag یا dispatch صریح با `GITHUB_TOKEN` و permission حداقلی به GHCR
@@ -983,3 +1035,12 @@ PR Image را بدون Push می‌سازد و دو Instance را smoke می‌�
 می‌کند. MongoDB منبع حقیقت Workerها باقی می‌ماند. Cleanup Approval فقط
 reference پیام Bot را حذف می‌کند؛ source/destination message ID هرگز ورودی حذف
 نیست. Cleanup Media نیز هیچ Telegram API call ندارد.
+
+Approval Bot پیش از media API طول Caption را با واحد UTF-16 واقعی Bot API
+می‌سنجد. تا ۱۰۲۴ واحد Caption/Entity مستقیم ارسال می‌شود؛ مقدار بزرگ‌تر Media
+را بدون Caption و متن کامل را پیام مستقل می‌فرستد. Adapter در شکست قطعی مرحلهٔ
+متن، ID رسانه را با `ApprovalContentPartialDeliveryError` به Application
+می‌دهد؛ `DeliverApproval` آن را در state `content_sending` ذخیره و علت اصلی را
+برای taxonomy/retry بازمی‌گرداند. پس از restart فقط متن باقی‌مانده ارسال و
+control card به اولین content ID متصل می‌شود. این policy به User API
+publication سرایت نمی‌کند.

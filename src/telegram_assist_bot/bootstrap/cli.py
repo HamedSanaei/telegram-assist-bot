@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from contextlib import suppress
@@ -21,13 +22,35 @@ from telegram_assist_bot.bootstrap.approval_queue import (
     recover_rejected_document_deliveries,
     retry_approval_delivery,
 )
+from telegram_assist_bot.bootstrap.deployment_compatibility import (
+    DeploymentCompatibilityError,
+    require_mongodb_compatibility,
+)
 from telegram_assist_bot.bootstrap.instance_config import (
     InstanceConfigurationError,
+    parse_admin_user_ids,
+    parse_source_usernames,
     render_instance_configuration,
 )
 from telegram_assist_bot.bootstrap.media_cleanup import (
     run_media_cleanup,
     run_media_cleanup_worker,
+)
+from telegram_assist_bot.bootstrap.operator_config import (
+    ConfigMutationConflictError,
+    ConfigTransactionError,
+    add_administrators,
+    add_destination,
+    add_sources,
+    mutate_configuration_transaction,
+    remove_administrator,
+    remove_destination,
+    remove_source,
+    set_administrator_active,
+    set_destination_active,
+    set_logging_level,
+    set_media_retention,
+    set_source_active,
 )
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
@@ -163,7 +186,9 @@ def _parser() -> _SafeArgumentParser:
             "approval-queue",
             "approval-retry",
             "approval-recover-documents",
+            "deployment-preflight",
             "render-instance-config",
+            "operator-config",
         ),
         default="check",
         help=(
@@ -203,12 +228,37 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument("--retention-days", type=int, default=2)
     parser.add_argument("--approval-chat-id", type=int)
     parser.add_argument("--admin-user-id", type=int)
+    parser.add_argument("--admin-user-ids")
     parser.add_argument("--source-username")
+    parser.add_argument("--source-usernames")
     parser.add_argument("--destination-name")
     parser.add_argument("--destination-id", type=int)
     parser.add_argument("--destination-username")
     parser.add_argument("--timezone", default="UTC")
+    parser.add_argument("--kernel-version")
+    parser.add_argument("--mongodb-image")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--operation",
+        choices=(
+            "admin-add",
+            "admin-remove",
+            "admin-enable",
+            "admin-disable",
+            "source-add",
+            "source-remove",
+            "source-enable",
+            "source-disable",
+            "destination-add",
+            "destination-remove",
+            "destination-enable",
+            "destination-disable",
+            "retention-set",
+            "logging-set",
+        ),
+    )
+    parser.add_argument("--value")
+    parser.add_argument("--destinations")
     return parser
 
 
@@ -257,14 +307,41 @@ def main(
 
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.command == "deployment-preflight":
+            if arguments.kernel_version is None or arguments.mongodb_image is None:
+                raise CliUsageError
+            report = require_mongodb_compatibility(
+                kernel_release=arguments.kernel_version,
+                mongodb_image=arguments.mongodb_image,
+            )
+            sys.stdout.write(f"{report}\n")
+            return int(FoundationExitCode.SUCCESS)
         if arguments.command == "render-instance-config":
+            admin_values = (
+                parse_admin_user_ids(arguments.admin_user_ids)
+                if arguments.admin_user_ids is not None
+                else (
+                    (arguments.admin_user_id,)
+                    if arguments.admin_user_id is not None
+                    else None
+                )
+            )
+            source_values = (
+                parse_source_usernames(arguments.source_usernames)
+                if arguments.source_usernames is not None
+                else (
+                    parse_source_usernames(arguments.source_username)
+                    if arguments.source_username is not None
+                    else None
+                )
+            )
             required = (
                 arguments.template,
                 arguments.output,
                 arguments.instance,
                 arguments.approval_chat_id,
-                arguments.admin_user_id,
-                arguments.source_username,
+                admin_values,
+                source_values,
                 arguments.destination_name,
                 arguments.destination_id,
             )
@@ -276,14 +353,88 @@ def main(
                 instance=arguments.instance,
                 retention_days=arguments.retention_days,
                 approval_chat_id=arguments.approval_chat_id,
-                admin_user_id=arguments.admin_user_id,
-                source_username=arguments.source_username,
+                admin_user_ids=admin_values,
+                source_usernames=source_values,
                 destination_name=arguments.destination_name,
                 destination_id=arguments.destination_id,
                 destination_username=arguments.destination_username,
                 timezone=arguments.timezone,
                 force=arguments.force,
             )
+            return int(FoundationExitCode.SUCCESS)
+        if arguments.command == "operator-config":
+            if (
+                arguments.config is None
+                or arguments.operation is None
+                or arguments.value is None
+            ):
+                raise CliUsageError
+            destinations = tuple(
+                item.strip()
+                for item in (arguments.destinations or "").split(",")
+                if item.strip()
+            )
+            operation = arguments.operation
+            if operation == "admin-add":
+                mutator = add_administrators(
+                    arguments.value, allowed_destinations=destinations
+                )
+            elif operation == "admin-remove":
+                mutator = remove_administrator(int(arguments.value))
+            elif operation in {"admin-enable", "admin-disable"}:
+                mutator = set_administrator_active(
+                    int(arguments.value), active=operation.endswith("enable")
+                )
+            elif operation == "source-add":
+                mutator = add_sources(
+                    arguments.value, allowed_destinations=destinations
+                )
+            elif operation == "source-remove":
+                mutator = remove_source(arguments.value)
+            elif operation in {"source-enable", "source-disable"}:
+                mutator = set_source_active(
+                    arguments.value, active=operation.endswith("enable")
+                )
+            elif operation == "destination-add":
+                destination = json.loads(arguments.value)
+                mutator = add_destination(
+                    name=destination["name"],
+                    telegram_channel_id=destination["telegram_channel_id"],
+                    username=destination.get("username"),
+                    enabled=destination.get("enabled", True),
+                )
+            elif operation == "destination-remove":
+                mutator = remove_destination(arguments.value)
+            elif operation in {"destination-enable", "destination-disable"}:
+                mutator = set_destination_active(
+                    arguments.value, active=operation.endswith("enable")
+                )
+            elif operation == "retention-set":
+                mutator = set_media_retention(int(arguments.value))
+            else:
+                mutator = set_logging_level(arguments.value)
+            config_path = Path(arguments.config)
+            backup_path = mutate_configuration_transaction(
+                config_path=config_path,
+                backup_directory=config_path.parent.parent / "backups" / "config",
+                environ=environment_snapshot,
+                mutator=mutator,
+                affected_services=(
+                    "runtime",
+                    "approval-bot",
+                    "media-cleanup-worker",
+                ),
+            )
+            sys.stdout.write(f"configuration_backup={backup_path}\n")
+            if operation == "admin-add":
+                sys.stdout.write(
+                    "reminder=each new administrator must send /start to the bot\n"
+                )
+            if operation == "source-add":
+                sys.stdout.write(
+                    "warning=enabled sources may trigger the current-day "
+                    "history crawl\n"
+                )
             return int(FoundationExitCode.SUCCESS)
         configuration_path = resolve_configuration_path(
             arguments.config,
@@ -293,6 +444,10 @@ def main(
         CliUsageError,
         FoundationConfigurationError,
         InstanceConfigurationError,
+        DeploymentCompatibilityError,
+        ConfigMutationConflictError,
+        ConfigTransactionError,
+        ValueError,
     ) as error:
         with suppress(Exception):
             _report_cli_failure(sink=sink, redactor=redactor, error=error)

@@ -22,6 +22,7 @@ from aiogram.types import (
 
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalContentPartialDeliveryError,
     ApprovalDeleteOutcome,
     ApprovalDeleteRateLimitError,
     ApprovalDeleteTransientError,
@@ -180,9 +181,14 @@ class AiogramAdminMessagingGateway:
         return message.message_id
 
     async def send_content(
-        self, chat_id: int, content: ApprovalContent
+        self,
+        chat_id: int,
+        content: ApprovalContent,
+        *,
+        existing_message_ids: tuple[int, ...] = (),
     ) -> tuple[int, ...]:
         """Send prepared content without adding managerial metadata."""
+        partial_ids = existing_message_ids
         try:
             media = self._approval_media(content)
             if media:
@@ -190,15 +196,28 @@ class AiogramAdminMessagingGateway:
                     preview = self._preview_member(media)
                     path = self._resolve_media(preview.storage_path)
                     caption = content.caption or ""
-                    if _utf16_length(caption) > _MAXIMUM_CAPTION_UTF16_UNITS:
-                        raise ApprovalMediaRejectedError(
-                            ApprovalMediaRejectionReason.CAPTION_TOO_LONG
-                        )
                     caption_entities = _entities(caption, content.caption_entities)
                     kind, extension = self._preview_kind(preview, path)
                     filename = preview.original_filename or (
                         f"approval-{kind}.{extension}"
                     )
+                    if _utf16_length(caption) > _MAXIMUM_CAPTION_UTF16_UNITS:
+                        if not partial_ids:
+                            media_message = await self._send_preview_media(
+                                chat_id,
+                                path=path,
+                                filename=filename,
+                                kind=kind,
+                                caption=None,
+                                caption_entities=[],
+                            )
+                            partial_ids = (media_message.message_id,)
+                        text_message = await self._bot.send_message(
+                            chat_id,
+                            caption,
+                            entities=caption_entities,
+                        )
+                        return (*partial_ids, text_message.message_id)
                     try:
                         message = await self._send_preview_media(
                             chat_id,
@@ -244,12 +263,26 @@ class AiogramAdminMessagingGateway:
                 return (message.message_id,)
         except TimeoutError as error:
             if content.media or content.media_paths:
+                timeout_failure = ApprovalMediaUploadTimeoutError(
+                    "Approval media upload timed out."
+                )
+                if partial_ids:
+                    raise ApprovalContentPartialDeliveryError(
+                        partial_ids, timeout_failure
+                    ) from error
                 raise ApprovalMediaUploadTimeoutError(
                     "Approval media upload timed out."
                 ) from error
             raise
         except OSError:
             if content.media or content.media_paths:
+                path_failure = ApprovalMediaPathError(
+                    ApprovalMediaRejectionReason.FILE_UNREADABLE
+                )
+                if partial_ids:
+                    raise ApprovalContentPartialDeliveryError(
+                        partial_ids, path_failure
+                    ) from None
                 raise ApprovalMediaPathError(
                     ApprovalMediaRejectionReason.FILE_UNREADABLE
                 ) from None
@@ -263,9 +296,14 @@ class AiogramAdminMessagingGateway:
             TelegramServerError,
             TelegramBadRequest,
         ) as error:
-            raise self._delivery_error(
+            delivery_failure = self._delivery_error(
                 error, media=bool(content.media or content.media_paths)
-            ) from None
+            )
+            if partial_ids:
+                raise ApprovalContentPartialDeliveryError(
+                    partial_ids, delivery_failure
+                ) from None
+            raise delivery_failure from None
 
     async def _send_preview_media(
         self,

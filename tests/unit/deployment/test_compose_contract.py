@@ -28,11 +28,16 @@ def test_compose_has_required_services_and_no_global_collision_resources() -> No
 
     for service in ("mongodb:", "runtime:", "approval-bot:", "media-cleanup-worker:"):
         assert service in compose
+    assert "volume-permissions:" in compose
     assert "container_name:" not in compose
     assert "\n    ports:" not in compose
     assert "\n  ports:" not in compose
     assert "name:" not in compose.partition("volumes:")[2]
-    assert "mongo:8.0.21" in compose
+    assert "${TAB_MONGODB_IMAGE:-mongo:7.0.32}" in compose
+    assert "mongo:8.0.21" not in compose
+    assert "user: ${TAB_RUNTIME_UID:-10001}:${TAB_RUNTIME_GID:-10001}" in compose
+    assert 'user: "0:0"' in compose
+    assert "service_completed_successfully" in compose
     assert "condition: service_healthy" in compose
     assert "read_only: true" in compose
     assert "restart: unless-stopped" in compose
@@ -61,6 +66,21 @@ def test_two_projects_resolve_independent_database_and_project_scopes() -> None:
     assert "${TAB_INSTANCE_DIR" in compose
     for volume in ("mongodb_data", "telegram_session", "media"):
         assert f"source: {volume}" in compose
+
+
+def test_only_bounded_volume_initializer_runs_as_root() -> None:
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    application = compose.partition("x-application:")[2].partition("services:")[0]
+    initializer = compose.partition("  volume-permissions:")[2].partition(
+        "\n  mongodb:"
+    )[0]
+
+    assert "10001" in application
+    assert 'user: "0:0"' not in application
+    assert 'user: "0:0"' in initializer
+    assert "chown" in initializer
+    assert "/volumes/sessions" in initializer
+    assert "/volumes/media" in initializer
 
 
 def test_dockerignore_excludes_local_secrets_runtime_and_test_output() -> None:

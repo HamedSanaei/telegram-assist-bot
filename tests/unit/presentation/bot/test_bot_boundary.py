@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from telegram_assist_bot.application.approvals import AuthorizeAdminAction
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalContentPartialDeliveryError,
     ApprovalDeleteOutcome,
     ApprovalDeleteTransientError,
     ApprovalDeleteUnavailableError,
@@ -61,11 +62,13 @@ class FakeBot:
     def __init__(self) -> None:
         self.session = FakeSession()
         self.answers: list[str] = []
+        self.text_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         self.media_count = 0
         self.media_calls: list[tuple[str, object, dict[str, object]]] = []
         self.deleted: list[tuple[int, int]] = []
 
     async def send_message(self, *_args: object, **_kwargs: object) -> Result:
+        self.text_calls.append((_args, _kwargs))
         return Result()
 
     async def send_document(self, *_args: object, **_kwargs: object) -> Result:
@@ -485,7 +488,7 @@ def test_document_bad_request_classification_is_safe_and_stable(
     assert AiogramAdminMessagingGateway._bad_request_reason(error) is expected
 
 
-def test_document_caption_and_upload_size_are_checked_before_bot_api(
+def test_oversized_document_caption_falls_back_before_upload_size_check(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "valid.npvt").write_bytes(b"synthetic")
@@ -498,16 +501,17 @@ def test_document_caption_and_upload_size_are_checked_before_bot_api(
         gateway = AiogramAdminMessagingGateway(
             cast("Any", fake), timeout_seconds=1, media_root=tmp_path
         )
-        with pytest.raises(ApprovalMediaRejectedError) as caption:
-            await gateway.send_content(
-                7,
-                ApprovalContent(
-                    None,
-                    "الف" * 1025,
-                    media=(ApprovalMedia("document", "valid.npvt"),),
-                ),
-            )
-        assert caption.value.reason is ApprovalMediaRejectionReason.CAPTION_TOO_LONG
+        caption = "الف" * 1025
+        assert await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                caption,
+                media=(ApprovalMedia("document", "valid.npvt"),),
+            ),
+        ) == (7, 7)
+        assert fake.media_calls[-1][2]["caption"] is None
+        assert fake.text_calls[-1][0][1] == caption
 
         with pytest.raises(ApprovalMediaRejectedError) as upload:
             await gateway.send_content(
@@ -519,7 +523,129 @@ def test_document_caption_and_upload_size_are_checked_before_bot_api(
                 ),
             )
         assert upload.value.reason is ApprovalMediaRejectionReason.FILE_TOO_LARGE
-        assert not fake.media_calls
+        assert len(fake.media_calls) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("media_type", "filename"),
+    [
+        ("photo", "photo.jpg"),
+        ("video", "video.mp4"),
+        ("animation", "animation.gif"),
+        ("document", "document.bin"),
+    ],
+)
+def test_caption_boundary_and_utf16_fallback_preserve_full_text(
+    tmp_path: Path, media_type: str, filename: str
+) -> None:
+    (tmp_path / filename).write_bytes(b"synthetic")
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        at_limit = ("م" * 1022) + "😀"
+        assert len(at_limit.encode("utf-16-le")) // 2 == 1024
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                at_limit,
+                caption_entities=(TelegramEntity(1022, 2, "bold"),),
+                media=(ApprovalMedia(media_type, filename),),
+            ),
+        )
+        first_kwargs = fake.media_calls[-1][2]
+        assert first_kwargs["caption"] == at_limit
+
+        over_limit = f"{at_limit}ب"
+        await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                over_limit,
+                caption_entities=(TelegramEntity(1022, 2, "bold"),),
+                media=(ApprovalMedia(media_type, filename),),
+            ),
+        )
+        second_kwargs = fake.media_calls[-1][2]
+        assert second_kwargs["caption"] is None
+        assert fake.text_calls[-1][0][1] == over_limit
+        entities = cast("list[Any]", fake.text_calls[-1][1]["entities"])
+        assert entities[0].offset == 1022
+        assert entities[0].length == 2
+
+    asyncio.run(scenario())
+
+
+def test_oversized_album_caption_uses_preview_then_full_text(tmp_path: Path) -> None:
+    (tmp_path / "document.bin").write_bytes(b"document")
+    (tmp_path / "photo.jpg").write_bytes(b"photo")
+
+    async def scenario() -> None:
+        fake = FakeBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        caption = ("متن فارسی\n" * 110) + "😀"
+        identifiers = await gateway.send_content(
+            7,
+            ApprovalContent(
+                None,
+                caption,
+                media=(
+                    ApprovalMedia("document", "document.bin"),
+                    ApprovalMedia("photo", "photo.jpg"),
+                ),
+            ),
+        )
+        assert identifiers == (7, 7)
+        assert fake.media_calls[-1][0] == "photo"
+        assert fake.media_calls[-1][2]["caption"] is None
+        assert fake.text_calls[-1][0][1] == caption
+
+    asyncio.run(scenario())
+
+
+def test_partial_oversized_delivery_retry_does_not_resend_media(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "video.mp4").write_bytes(b"video")
+
+    class FailingTextBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_once = True
+
+        async def send_message(self, *_args: object, **_kwargs: object) -> Result:
+            if self.fail_once:
+                self.fail_once = False
+                raise TelegramNetworkError(
+                    cast("Any", object()), "synthetic network failure"
+                )
+            return await super().send_message(*_args, **_kwargs)
+
+    async def scenario() -> None:
+        fake = FailingTextBot()
+        gateway = AiogramAdminMessagingGateway(
+            cast("Any", fake), timeout_seconds=1, media_root=tmp_path
+        )
+        content = ApprovalContent(
+            None,
+            "ف" * 1025,
+            media=(ApprovalMedia("video", "video.mp4"),),
+        )
+        with pytest.raises(ApprovalContentPartialDeliveryError) as partial:
+            await gateway.send_content(7, content)
+        assert partial.value.message_ids == (7,)
+        assert len(fake.media_calls) == 1
+        assert await gateway.send_content(
+            7, content, existing_message_ids=partial.value.message_ids
+        ) == (7, 7)
+        assert len(fake.media_calls) == 1
 
     asyncio.run(scenario())
 

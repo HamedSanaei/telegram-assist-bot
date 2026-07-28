@@ -1649,7 +1649,8 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
 
 ## 18. توزیع Production نسخهٔ اول
 
-1. نسخهٔ Package و Image برابر `1.0.0` است.
+1. نسخهٔ Package و Image Release جاری برابر `1.1.0` است؛ Instanceهای نصب‌شدهٔ
+   `1.0.0` تا update صریح همان Image قبلی را حفظ می‌کنند.
 2. Linux و Windows نصب هدایت‌شده و چند Instance مستقل دارند.
 3. Config، Session، Media، MongoDB volume/database و Network هر Instance مستقل
    است و هیچ Host port collision وجود ندارد.
@@ -1662,3 +1663,20 @@ Retry باید محدود و دارای فاصله افزایشی باشد.
    به `ghcr.io/hamedsanaei/telegram-assist-bot` آمادهٔ انتشار می‌کند.
 8. Tag، GitHub Release و انتشار Production فقط پس از checklist و اقدام صریح
    مالک انجام می‌شود.
+
+## 19. سخت‌سازی عملیات Production
+
+1. Processهای Application همیشه با UID/GID غیرroot اجرا می‌شوند؛ helper متمرکز
+   permission مسیر Config را برای renderer قابل‌نوشتن و برای Runtime قابل‌خواندن
+   می‌کند، درحالی‌که `.env` فقط برای مالک Host خواندنی می‌ماند.
+2. Compose متغیر `TAB_MONGODB_IMAGE` را مصرف می‌کند و default ثابت و آزموده‌شده
+   تا زمان پذیرش آگاهانهٔ نسخهٔ جدید `mongo:7.0.32` است.
+3. Installer Linux پیش از startup نسخهٔ Kernel و MongoDB را گزارش می‌کند و
+   MongoDB 8.x را روی Kernel 6.19+ به‌عنوان ترکیب اثبات‌نشده رد می‌کند.
+4. repair permission باید idempotent باشد و محتوای Config، Secret، Session،
+   Media یا MongoDB را تغییر ندهد.
+5. نصب تازه Adminها و Sourceهای comma-separated را می‌پذیرد، URLهای عمومی
+   `t.me` را canonical می‌کند و plural را بر singular مقدم می‌داند.
+6. Config تولیدشدهٔ Production حداقلی است: AI/Scoring/Categorization،
+   Advertisement و Duplicate detection غیرفعال و provider/route/campaignهای
+   demo خالی‌اند؛ Config کامل نمونه فقط مرجع Schema است.

@@ -23,9 +23,9 @@ def test_distribution_checker_rejects_an_unexpected_top_level_member(
     with ZipFile(wheel, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr(f"{EXPECTED_IMPORT_PACKAGE}/__init__.py", "")
         archive.writestr("unexpected_payload/config.json", "{}")
-        archive.writestr("package-1.0.0.dist-info/METADATA", "")
-        archive.writestr("package-1.0.0.dist-info/WHEEL", "")
-        archive.writestr("package-1.0.0.dist-info/RECORD", "")
+        archive.writestr("package-1.1.0.dist-info/METADATA", "")
+        archive.writestr("package-1.1.0.dist-info/WHEEL", "")
+        archive.writestr("package-1.1.0.dist-info/RECORD", "")
 
     with pytest.raises(
         DistributionValidationError,

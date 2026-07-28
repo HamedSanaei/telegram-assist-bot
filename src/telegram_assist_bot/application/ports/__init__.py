@@ -3,6 +3,7 @@
 from telegram_assist_bot.application.ports.admin import (
     AdminMessagingGateway,
     ApprovalContent,
+    ApprovalContentPartialDeliveryError,
     ApprovalDeliveryError,
     ApprovalDeliveryRateLimitError,
     ApprovalDeliveryRejectedError,
@@ -223,6 +224,7 @@ __all__ = (
     "ApprovalCleanupClaim",
     "ApprovalCleanupRepository",
     "ApprovalContent",
+    "ApprovalContentPartialDeliveryError",
     "ApprovalDeleteError",
     "ApprovalDeleteOutcome",
     "ApprovalDeleteRateLimitError",

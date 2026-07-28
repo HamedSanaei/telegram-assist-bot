@@ -123,6 +123,21 @@ class ApprovalDeliveryRejectedError(ApprovalDeliveryError):
     error_category = "bad_request"
 
 
+class ApprovalContentPartialDeliveryError(ApprovalDeliveryError):
+    """Carry persisted media identifiers while preserving the original failure."""
+
+    def __init__(
+        self,
+        message_ids: tuple[int, ...],
+        cause: ApprovalDeliveryError,
+    ) -> None:
+        """Retain only Bot message identifiers and one safe application error."""
+        self.message_ids = message_ids
+        self.cause = cause
+        self.error_category = cause.error_category
+        super().__init__("Approval content delivery is partially complete.")
+
+
 class ApprovalMediaRejectionReason(StrEnum):
     """Expose only safe, stable reasons for rejected approval preview media."""
 
@@ -182,7 +197,11 @@ class AdminMessagingGateway(Protocol):
         ...
 
     async def send_content(
-        self, chat_id: int, content: ApprovalContent
+        self,
+        chat_id: int,
+        content: ApprovalContent,
+        *,
+        existing_message_ids: tuple[int, ...] = (),
     ) -> tuple[int, ...]:
         """Send prepared content separately and return identifiers."""
         ...

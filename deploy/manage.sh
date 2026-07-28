@@ -17,6 +17,25 @@ case "$ACTION" in
   update) "${COMPOSE[@]}" pull; "${COMPOSE[@]}" up -d ;;
   login) "${COMPOSE[@]}" run --rm runtime login --config /app/config/configuration.json ;;
   config-check) "${COMPOSE[@]}" run --rm runtime check --config /app/config/configuration.json ;;
+  repair)
+    if [[ "${2:-permissions}" != "permissions" ]]; then
+      echo "Only 'repair permissions' is available in this release." >&2
+      exit 2
+    fi
+    repair_args=(
+      repair
+      --instance-dir "$ROOT"
+      --runtime-uid "${TAB_RUNTIME_UID:-10001}"
+      --runtime-gid "${TAB_RUNTIME_GID:-10001}"
+      --host-uid "${SUDO_UID:-$(id -u)}"
+      --host-gid "${SUDO_GID:-$(id -g)}"
+    )
+    if [[ "$(id -u)" -eq 0 ]]; then
+      bash "$ROOT/permissions.sh" "${repair_args[@]}"
+    else
+      sudo bash "$ROOT/permissions.sh" "${repair_args[@]}"
+    fi
+    ;;
   backup)
     mkdir -p "$ROOT/backups"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -33,6 +52,6 @@ case "$ACTION" in
     "${COMPOSE[@]}" down --volumes --remove-orphans
     ;;
   *)
-    echo "Usage: manage.sh {start|stop|restart|status|logs|update|login|config-check|backup|uninstall|purge --yes}"
+    echo "Usage: manage.sh {start|stop|restart|status|logs|update|login|config-check|repair permissions|backup|uninstall|purge --yes}"
     ;;
 esac

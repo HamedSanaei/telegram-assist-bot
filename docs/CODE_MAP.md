@@ -664,8 +664,15 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `compose.yaml` و `deploy/compose.env.example` | MongoDB و سه Process برنامه با resourceهای per-instance |
 | `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
 | `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
-| `bootstrap/instance_config.py` | تولید typed و اتمیک Config از template بدون persistence وابسته به OS |
+| `deploy/permissions.sh` و `deploy/permissions.ps1` | audit/repair متمرکز و idempotent مالکیت و permission بدون تغییر محتوای Instance |
+| `deploy/tabctl.py` و `deploy/tabctl.ps1` | registry/metadata سراسری، menu و dispatch چند Instance با exit code پایدار |
+| `deploy/tabctl.py` lifecycle | backup manifest/checksum، restore، update rollback، repair plan و diagnostics export redacted |
+| `bootstrap/deployment_compatibility.py` | policy تایپ‌شدهٔ Kernel/MongoDB و رد Image شناور یا ترکیب اثبات‌نشده |
+| `bootstrap/instance_config.py` | تولید typed و اتمیک Config مینیمال Production و parser چند Admin/Source بدون persistence وابسته به OS |
+| `bootstrap/operator_config.py` | mutation lockدار Admin/Source/Destination/retention/logging با backup، validation و rollback |
+| `infrastructure/telegram/bot/adapter.py` | preflight UTF-16 Caption و fallback Media + متن کامل با partial-delivery ID |
+| `application/approvals/services.py` | persistence/restart-safe resume پیام متن پس از Media موفق |
 | `.github/workflows/quality.yml` | Quality Python و Docker/Compose/installer acceptance بدون Push |
 | `.github/workflows/release.yml` | GHCR چندسکویی، SemVer/SHA tags، SBOM/provenance و Asset checksum |
 | `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
-| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.0.0` |
+| `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.0` |

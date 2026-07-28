@@ -101,9 +101,13 @@ class Gateway:
         return len(self.sent)
 
     async def send_content(
-        self, chat_id: int, content: ApprovalContent
+        self,
+        chat_id: int,
+        content: ApprovalContent,
+        *,
+        existing_message_ids: tuple[int, ...] = (),
     ) -> tuple[int, ...]:
-        del chat_id, content
+        del chat_id, content, existing_message_ids
         return (2,)
 
     async def edit_header(
@@ -692,9 +696,13 @@ def test_delivery_worker_persists_each_admin_reference_and_completes_once() -> N
 def test_delivery_worker_releases_transient_partial_delivery() -> None:
     class FailingGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
-            del chat_id, content
+            del chat_id, content, existing_message_ids
             raise TimeoutError
 
     async def scenario() -> None:
@@ -729,16 +737,24 @@ def test_delivery_worker_releases_transient_partial_delivery() -> None:
 def test_approval_delivery_uses_real_structured_logger_for_success_and_retry() -> None:
     class FailingGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
-            del chat_id, content
+            del chat_id, content, existing_message_ids
             raise TimeoutError
 
     class RejectedDocumentGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
-            del chat_id, content
+            del chat_id, content, existing_message_ids
             raise ApprovalMediaRejectedError(
                 ApprovalMediaRejectionReason.ENTITY_PARSE_FAILED
             )
@@ -934,11 +950,19 @@ def test_failed_retries_do_not_consume_historical_success_budget() -> None:
 
     class SelectiveGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
             if content.text == "fail":
                 raise TimeoutError
-            return await super().send_content(chat_id, content)
+            return await super().send_content(
+                chat_id,
+                content,
+                existing_message_ids=existing_message_ids,
+            )
 
     async def scenario() -> None:
         approvals = MemoryRepository()
@@ -981,11 +1005,19 @@ def test_failed_retries_do_not_consume_historical_success_budget() -> None:
 def test_per_administrator_failure_preserves_other_successful_reference() -> None:
     class OneAdminFails(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
             if chat_id == 7:
                 raise TimeoutError
-            return await super().send_content(chat_id, content)
+            return await super().send_content(
+                chat_id,
+                content,
+                existing_message_ids=existing_message_ids,
+            )
 
     async def scenario() -> None:
         approvals = MemoryRepository()
@@ -1028,9 +1060,13 @@ def test_content_kind_failures_are_isolated_and_safely_diagnosed(
 
     class FailingGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
-            del chat_id, content
+            del chat_id, content, existing_message_ids
             raise TimeoutError
 
     async def scenario() -> None:
@@ -1220,9 +1256,13 @@ def test_deferred_terminal_recovered_and_idle_delivery_paths() -> None:
 
     class RateLimitedGateway(Gateway):
         async def send_content(
-            self, chat_id: int, content: ApprovalContent
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
         ) -> tuple[int, ...]:
-            del chat_id, content
+            del chat_id, content, existing_message_ids
             raise ApprovalDeliveryRateLimitError(2)
 
     async def run_case(
@@ -1286,9 +1326,13 @@ def test_deferred_terminal_recovered_and_idle_delivery_paths() -> None:
 
         class UnavailableGateway(Gateway):
             async def send_content(
-                self, chat_id: int, content: ApprovalContent
+                self,
+                chat_id: int,
+                content: ApprovalContent,
+                *,
+                existing_message_ids: tuple[int, ...] = (),
             ) -> tuple[int, ...]:
-                del chat_id, content
+                del chat_id, content, existing_message_ids
                 raise ApprovalDeliveryUnavailableError
 
         unavailable_result, unavailable_events, _ = await run_case(

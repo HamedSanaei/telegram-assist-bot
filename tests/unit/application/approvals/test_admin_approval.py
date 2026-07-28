@@ -21,6 +21,8 @@ from telegram_assist_bot.application.approvals import (
 )
 from telegram_assist_bot.application.ports import (
     ApprovalContent,
+    ApprovalContentPartialDeliveryError,
+    ApprovalDeliveryTransientError,
     BotEditOutcome,
     BotUpdate,
     InlineKeyboard,
@@ -185,9 +187,13 @@ class FakeGateway:
         return 10
 
     async def send_content(
-        self, chat_id: int, content: ApprovalContent
+        self,
+        chat_id: int,
+        content: ApprovalContent,
+        *,
+        existing_message_ids: tuple[int, ...] = (),
     ) -> tuple[int, ...]:
-        del chat_id
+        del chat_id, existing_message_ids
         self.content_sends += 1
         self.contents.append(content)
         if self.fail_content:
@@ -505,6 +511,64 @@ def test_partial_delivery_reuses_content_after_restart() -> None:
         assert gateway.header_sends == 2
         assert gateway.content_sends == 1
         assert gateway.reply_message_ids == [11, 11]
+
+    asyncio.run(scenario())
+
+
+def test_partial_caption_fallback_progress_resumes_without_media_duplicate() -> None:
+    class PartialGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.partial = True
+            self.resumed_with: tuple[int, ...] = ()
+
+        async def send_content(
+            self,
+            chat_id: int,
+            content: ApprovalContent,
+            *,
+            existing_message_ids: tuple[int, ...] = (),
+        ) -> tuple[int, ...]:
+            del chat_id
+            self.content_sends += 1
+            self.contents.append(content)
+            self.resumed_with = existing_message_ids
+            if self.partial:
+                self.partial = False
+                raise ApprovalContentPartialDeliveryError(
+                    (31,),
+                    ApprovalDeliveryTransientError("Synthetic separate-text failure."),
+                )
+            return (*existing_message_ids, 32)
+
+    async def scenario() -> None:
+        repository = MemoryRepository()
+        gateway = PartialGateway()
+        delivery = DeliverApproval(gateway, repository)
+        content = ApprovalContent(None, "کپشن کامل" * 200, media_paths=("video.mp4",))
+        with pytest.raises(ApprovalDeliveryTransientError):
+            await delivery.execute(
+                reference_id="caption-partial",
+                actor_id=1001,
+                post_id="post",
+                header="کارت کنترل",
+                content=content,
+            )
+        partial = repository.references["caption-partial"]
+        assert partial.content_message_ids == (31,)
+        assert partial.delivery_state is ApprovalDeliveryState.CONTENT_SENDING
+
+        completed = await delivery.execute(
+            reference_id="caption-partial",
+            actor_id=1001,
+            post_id="post",
+            header="کارت کنترل",
+            content=content,
+        )
+        assert completed.content_message_ids == (31, 32)
+        assert gateway.resumed_with == (31,)
+        assert gateway.content_sends == 2
+        assert gateway.reply_message_ids == [31]
 
     asyncio.run(scenario())
 
