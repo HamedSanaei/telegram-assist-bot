@@ -2,7 +2,7 @@
 
 ## وضعیت
 
-Active
+Completed
 
 ## هدف
 
@@ -63,16 +63,25 @@ Active
 
 - Milestone runnable، documented، secret-free و با Gate کامل سبز باشد.
 
-## نتیجهٔ فعلی راست‌آزمایی
+## نتیجهٔ نهایی راست‌آزمایی
 
 - سناریوهای typed configuration، rollback، registry/import، دو هویت مستقل،
   update failure و Approval fallback با تست‌های واحد و Integration موفق‌اند.
 - Suite غیرزنده: `1855 passed` با Branch Coverage برابر `90.14%`.
 - lock، Ruff، format، mypy، text integrity، detect-secrets، build،
   Distribution check، clean-wheel import و syntax اسکریپت‌ها موفق‌اند.
-- اجرای واقعی `scripts/v1_acceptance.sh` و Docker/Compose multi-instance smoke
-  روی این میزبان Windows ممکن نبود، چون Docker/Compose نصب نیست؛ این Gate باید
-  در Ubuntu CI اجرا شود. بنابراین Task تا دریافت نتیجهٔ CI فعال می‌ماند.
+- Quality Run شمارهٔ
+  [`30329250841`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30329250841)
+  روی Commit
+  `4a5d63c1d60305c1949adbf811d25c3d9fd319c1` با status برابر `completed` و
+  conclusion برابر `success` پایان یافت.
+- Jobهای `Python 3.12`، `Python 3.13` و `Python 3.14` همگی موفق شدند؛ در هر
+  Matrix Job تست با Branch Coverage، Ruff، format، mypy، text integrity،
+  detect-secrets، build، Distribution check، clean-wheel import و whitespace
+  check موفق بود.
+- Job `Docker and installer acceptance` نیز موفق شد؛ Docker/Compose،
+  syntax نصب‌کننده‌های Linux و PowerShell، manager و اجرای واقعی
+  `scripts/v1_acceptance.sh` روی Ubuntu تأیید شدند.
 - Release آماده‌شده `1.1.0` است و default Image نصب تازه
   `ghcr.io/hamedsanaei/telegram-assist-bot:1.1.0` است؛ import نصب قدیمی Image
   `1.0.0` را تا update صریح حفظ می‌کند.
@@ -83,13 +92,11 @@ Active
   Config، Session، Compose project و volume declarations را در repair/update/
   rollback بررسی می‌کند.
 - Telegram login/send واقعی عمداً بدون credential صریح مالک اجرا نشده است.
-- Run شمارهٔ `30327861603` تأیید کرد Job
-  `Quality / Docker and installer acceptance` موفق است. هر سه Job ماتریس
-  Python فقط در secret-detection شکست خوردند: fixture تست diagnostics یک URI
-  Basic Auth جعلی برای اثبات redaction دارد و scanner روی Ubuntu آن را finding
-  جدید تشخیص داد. همان literal تستی با allowlist درون‌خطی و محدود علامت‌گذاری
-  شد و line number قدیمی Baseline با اسکن UTF-8 کامل refresh شد؛ هیچ detector،
-  مسیر اسکن یا Gate تضعیف نشده است. T090 تا سبزشدن اجرای بعدی CI فعال می‌ماند.
+- شکست قبلی Run شمارهٔ `30327861603` با allowlist محدود fixture جعلی
+  diagnostics و refresh شدن Baseline UTF-8 رفع شد؛ Run نهایی بالا اثبات می‌کند
+  هیچ detector، مسیر اسکن یا Gate تضعیف نشده است.
+- با موفقیت همهٔ Gateهای خودکار، T090 و Milestone 9 تکمیل شده‌اند. ساخت Tag،
+  انتشار GHCR و GitHub Release همچنان اقدام دستی و خارج از این Task است.
 
 ## توالی upgrade مورد انتظار
 

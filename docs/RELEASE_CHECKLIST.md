@@ -1,19 +1,30 @@
 # v1.1.0 Release Checklist
 
-- [ ] همهٔ Gateهای `quality.yml` روی Commit نهایی موفق‌اند.
-- [ ] Workflow پذیرش Docker روی Linux موفق است.
-- [ ] Job دقیق `Quality / Docker and installer acceptance` دو Instance مستقل،
+## شواهد پذیرش خودکار
+
+- Quality Run:
+  [`30329250841`](https://github.com/HamedSanaei/telegram-assist-bot/actions/runs/30329250841)
+- Commit پذیرفته‌شده:
+  `4a5d63c1d60305c1949adbf811d25c3d9fd319c1`
+- Conclusion: `success`
+- Jobهای موفق: Python `3.12`، `3.13`، `3.14` و
+  `Docker and installer acceptance`
+
+- [x] همهٔ Gateهای `quality.yml` روی Commit پذیرفته‌شده موفق‌اند.
+- [x] Workflow پذیرش Docker روی Linux موفق است.
+- [x] Job دقیق `Quality / Docker and installer acceptance` دو Instance مستقل،
       mutationهای `tabctl`، rollback و cleanup منابع را با موفقیت اجرا کرده است.
-- [ ] نسخه در Package، Wheel، OCI label و مستندات `1.1.0` است.
-- [ ] Bundle فقط Compose، Installerها، Config نمونه و این checklist را دارد.
+- [x] نسخه در Package، Wheel، OCI label و مستندات `1.1.0` است.
+- [x] قرارداد Bundle فقط Compose، Installerها، Config نمونه و این checklist
+      را می‌پذیرد.
 - [ ] Imageهای `linux/amd64` و `linux/arm64` با SBOM و provenance ساخته می‌شوند.
 - [ ] Digest و `SHA256SUMS` قبل از انتشار بررسی شده‌اند.
 - [ ] هیچ Config محلی، Session، Token، Password یا Private Key در Artifact نیست.
-- [ ] `tabctl backup verify`، update rollback و repair dry-run روی Instance
+- [x] `tabctl backup verify`، update rollback و repair dry-run روی Instance
       آزمایشی موفق‌اند.
-- [ ] مسیر import/repair/backup/update از Instance آزمایشی `1.0.0` با basename
+- [x] مسیر import/repair/backup/update از Instance آزمایشی `1.0.0` با basename
       متفاوت، Config و Session و MongoDB volume را حفظ کرده است.
-- [ ] diagnostics archive فقط `diagnostics.json` redacted دارد و `.env`،
+- [x] diagnostics archive فقط `diagnostics.json` redacted دارد و `.env`،
       Session یا Media در آن نیست.
 - [ ] Kernel 6.19+ با `mongo:7.0.32` و permission non-root در Ubuntu acceptance
       موفق است.
@@ -23,3 +34,7 @@
 
 Telegram login/send در CI عمداً اجرا نمی‌شود؛ این مرزها با Fake پوشش داده شده و
 smoke زنده فقط با Credential مالک Release انجام می‌شود.
+
+Commit مستندات تکمیل T090 باید پیش از ساخت Tag Push شود و Quality روی همان
+Commit نیز سبز بماند. موارد مربوط به Image، Digest، Asset، Tag و GitHub Release
+فقط پس از اجرای Workflow انتشار علامت‌گذاری می‌شوند.
