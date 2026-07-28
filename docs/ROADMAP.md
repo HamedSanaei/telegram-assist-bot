@@ -168,7 +168,7 @@ fallback متنی قطعی برای URLهای قابل‌انتقال منبع �
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T093](tasks/T093-v1-1-2-portable-proxy-link-publication.md) | v1.1.2 Portable Proxy Link Publication | T077، T092 | `5.10`، `5.17`–`5.19`، `18` | Active |
+| [T093](tasks/T093-v1-1-2-portable-proxy-link-publication.md) | v1.1.2 Portable Proxy Link Publication | T077، T092 | `5.10`، `5.17`–`5.19`، `18` | Completed |
 
 ## Maintenance
 
