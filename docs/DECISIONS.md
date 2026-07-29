@@ -375,6 +375,20 @@
   به immediate تا حذف بومی موفق صبر می‌کند؛ Bot API هرگز Session کاربر را باز
   نمی‌کند.
 
+## ADR-047 — Toggle پایدار انتشار فوری و حذف receipt-backed
+
+- **Status:** Accepted
+- **Decision:** کلیک دوم Toggle فوری به‌جای اجرای مستقیم Telegram، روی سند
+  `Publication` موفق یک درخواست retraction با state، lease، retry و
+  `selection_version` ثبت می‌کند. فقط Runtime که مالک User API است آن را claim
+  کرده و با `destination_id` و `message_ids` همان receipt حذف می‌کند. Approval
+  Bot هرگز Session کاربر را باز نمی‌کند. تکمیل حذف idempotent است و انتخاب فوری
+  بعدی پس از reset اتمیک receipt و نگه‌داری history محلی قابل فعال‌سازی است.
+- **Consequences:** حذف source، مقصد دیگر و Approval message از این مسیر ممکن
+  نیست؛ restart و چند Worker به‌کمک MongoDB و lease امن هستند. خطای ambiguous
+  حذف retry محدود دارد چون حذف تکراری مخرب نیست، اما publication ambiguous همچنان
+  مطابق ADR-022 terminal باقی می‌ماند.
+
 ## ADR-027 — آداپتور اول ارائه‌دهنده هوش مصنوعی (z-ai)
 
 - **Status:** Accepted

@@ -45,8 +45,9 @@ class ScheduleRepository(Protocol):
         post_id: str,
         destination_id: int,
         now: datetime,
+        reopen: bool = False,
     ) -> ScheduleReservation:
-        """Reserve one idempotent due-now publication command."""
+        """Reserve or explicitly reopen one idempotent due-now command."""
         ...
 
     async def get(self, job_id: str) -> ScheduledPublication | None:

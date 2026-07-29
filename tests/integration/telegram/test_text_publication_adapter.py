@@ -38,6 +38,7 @@ class Client:
 
     def __init__(self) -> None:
         self.call: tuple[int, str, dict[str, object]] | None = None
+        self.delete_call: tuple[int, tuple[int, ...], bool] | None = None
 
     async def send_message(self, entity: int, message: str, **kwargs: object) -> object:
         self.call = (entity, message, kwargs)
@@ -48,6 +49,12 @@ class Client:
 
     async def upload_file(self, file: object, **kwargs: object) -> object:
         raise AssertionError("Text publication must not upload media.")
+
+    async def delete_messages(
+        self, entity: int, message_ids: tuple[int, ...], *, revoke: bool
+    ) -> object:
+        self.delete_call = (entity, message_ids, revoke)
+        return object()
 
 
 def test_accepts_mongodb_int64_destination_without_duplicate_send(
@@ -94,6 +101,25 @@ def test_maps_persian_zwnj_and_custom_emoji_without_bot_metadata(
     assert mapped[0].document_id == 987654
     assert "header" not in kwargs
     assert "administrator" not in kwargs
+
+
+def test_deletes_only_exact_persisted_destination_receipt(tmp_path: Path) -> None:
+    client = Client()
+    gateway = TelethonPublisherGateway(client, media_root=tmp_path)
+    asyncio.run(gateway.delete(-1009, (44, 45), timeout_seconds=2))
+    assert client.delete_call == (-1009, (44, 45), True)
+
+    for destination_id, message_ids in ((0, (44,)), (-1009, ()), (-1009, (0,))):
+        with pytest.raises(PublisherError) as captured:
+            asyncio.run(
+                gateway.delete(
+                    destination_id,
+                    message_ids,
+                    timeout_seconds=2,
+                )
+            )
+        assert captured.value.category is PublicationFailureCategory.PERMANENT
+        assert captured.value.reason_code == "invalid_retraction_receipt"
 
 
 def test_maps_common_entity_and_rejects_unknown_entity(tmp_path: Path) -> None:

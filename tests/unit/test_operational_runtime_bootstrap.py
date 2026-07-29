@@ -15,7 +15,11 @@ from telegram_assist_bot.application.ports import (
     NativeScheduleStatus,
     PublicationPayload,
 )
-from telegram_assist_bot.application.publication import PublishResult, PublishStatus
+from telegram_assist_bot.application.publication import (
+    PublishResult,
+    PublishStatus,
+    RetractionStatus,
+)
 from telegram_assist_bot.application.scheduling import RunDueStatus
 from telegram_assist_bot.domain import ScheduledPublication
 
@@ -43,6 +47,16 @@ class PublisherUseCase:
     async def execute(self, request: object) -> PublishResult:
         del request
         return PublishResult(PublishStatus.SUCCEEDED)
+
+
+class RetractionUseCase:
+    """Keep the retraction worker idle while testing runtime composition."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+    async def execute_once(self) -> RetractionStatus:
+        return RetractionStatus.IDLE
 
 
 class Runner:
@@ -186,6 +200,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         monkeypatch.setattr(module, "MongoOperationalApprovalRepository", Operational)
         monkeypatch.setattr(module, "MongoRuntimeHeartbeatRepository", Heartbeat)
         monkeypatch.setattr(module, "PublishImmediately", PublisherUseCase)
+        monkeypatch.setattr(module, "RetractImmediatePublication", RetractionUseCase)
         monkeypatch.setattr(module, "RunDuePublication", Runner)
         monkeypatch.setattr(module, "RunNativeScheduling", NativeRunner)
         monkeypatch.setattr(module, "ScheduledPublicationWorker", Worker)
@@ -242,7 +257,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         assert [item.action for item in Runner.instances] == ["immediate"]
         assert Operational.statuses == ["published", "native_scheduled"]
         assert Heartbeat.beats == ["running", "stopped"]
-        assert [item.poll_seconds for item in Worker.instances] == [1.0, 1.0]
+        assert [item.poll_seconds for item in Worker.instances] == [1.0, 1.0, 1.0]
         names = [cast("str", item["event_name"]) for item in emitted]
         assert "runtime_heartbeat_active" in names
         assert "publication_worker_started" in names
@@ -351,6 +366,7 @@ def test_runtime_startup_with_ai_enabled_and_disabled(
         monkeypatch.setattr(module, "MongoOperationalApprovalRepository", Operational)
         monkeypatch.setattr(module, "MongoRuntimeHeartbeatRepository", Heartbeat)
         monkeypatch.setattr(module, "PublishImmediately", PublisherUseCase)
+        monkeypatch.setattr(module, "RetractImmediatePublication", RetractionUseCase)
         monkeypatch.setattr(module, "RunDuePublication", Runner)
         monkeypatch.setattr(module, "RunNativeScheduling", NativeRunner)
         monkeypatch.setattr(module, "ScheduledPublicationWorker", Worker)

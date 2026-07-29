@@ -57,6 +57,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoApprovalPostLoader,
     MongoNativeScheduleRepository,
     MongoOperationalApprovalRepository,
+    MongoPublicationRepository,
     MongoRuntimeHeartbeatRepository,
     MongoScheduleRepository,
     initialize_approval_cleanup_indexes,
@@ -227,6 +228,7 @@ class ApprovalBotApplication:
                 timezone=settings.timezone,
                 logger=self._foundation.logger,
                 native_schedules=native_schedule_repository,
+                retractions=MongoPublicationRepository(publications),
             )
             handlers = OperationalBotHandlers(
                 components.authorize, components.gateway, callbacks

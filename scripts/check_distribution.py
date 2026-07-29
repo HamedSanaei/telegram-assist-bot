@@ -155,6 +155,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/application/ports/native_scheduling.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/publication/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/publication/publish_immediately.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/application/publication/retract_immediately.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/scheduling/__init__.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/scheduling/cancel_scheduled_post.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/application/scheduling/run_due_publication.py",

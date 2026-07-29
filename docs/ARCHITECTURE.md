@@ -418,8 +418,11 @@ claimهای کاملاً server-side است. هر use، actor/permission/Post/De
 می‌شود؛ header هرگز وارد artifact انتشار نمی‌شود.
 
 Keyboard برای هر مقصد مجاز یک ردیف scheduled/immediate و حداکثر ۲۰ مقصد دارد؛
-overflow fail-fast است. Toggle فقط selection آینده را با CAS تغییر می‌دهد و هیچ
-Job یا انتشار نمی‌سازد. Sync از آخرین state، best-effort و version-aware است؛
+overflow fail-fast است. Toggle selection با CAS انجام می‌شود و Transition فوری
+به یک Publication durable dispatch می‌کند. کلیک دوم پس از receipt موفق فقط
+درخواست retraction را در همان Publication ثبت می‌کند؛ Approval Bot User session
+را باز نمی‌کند و Runtime با Worker/lease حذف را انجام می‌دهد. Sync از آخرین state،
+best-effort و version-aware است؛
 not-modified موفق، deleted دائمی و خطای موقت حداکثر سه attempt با lease اتمیک است.
 
 ## 9. MongoDB و مدل ماندگاری
@@ -443,7 +446,8 @@ Collectionهای بعدی فقط برای Taskهای صریح آینده برن�
 - `approvals`: Reference پیام‌های تأیید و وضعیت آخرین Sync؛
 - `approval_deliveries`: outbox منطقی آماده‌ها، claim/lease تحویل، retry، وضعیت امن
   مقصدها و درخواست پایدار همگام‌سازی UI؛
-- `publications`: Unique Idempotency Key برای هر تصمیم انتشار؛
+- `publications`: Unique Idempotency Key برای هر تصمیم انتشار، receipt مقصد و
+  state/lease/retry درخواست retraction؛
 - `scheduled_publications`: Index روی `status + due_at`، Unique Key و فیلدهای Lease؛
 - `native_schedule_commands`: outbox نسخه‌دار Scheduled Messages بومی با receipt،
   UTC due، cancellation و outcome-unknown؛
@@ -1051,8 +1055,10 @@ metadata، SBOM و provenance به GHCR می‌روند. پس از موفقیت 
 `contents: write` Release عمومی را می‌سازد؛ اجرای تکراری Assetها را با
 `--clobber` تکمیل می‌کند و Tag را تغییر نمی‌دهد. MongoDB منبع حقیقت Workerها
 باقی می‌ماند. Cleanup Approval فقط
-reference پیام Bot را حذف می‌کند؛ source/destination message ID هرگز ورودی حذف
-نیست. Cleanup Media نیز هیچ Telegram API call ندارد.
+reference پیام Bot را حذف می‌کند؛ source message ID و destination ID خارج از
+receipt-backed T094 هرگز ورودی حذف نیستند. T094 فقط message IDهای receipt موفق
+انتشار فوری همان مقصد را، توسط Runtime User API، حذف می‌کند. Cleanup Media نیز
+هیچ Telegram API call ندارد.
 
 Approval Bot پیش از media API طول Caption را با واحد UTF-16 واقعی Bot API
 می‌سنجد. تا ۱۰۲۴ واحد Caption/Entity مستقیم ارسال می‌شود؛ مقدار بزرگ‌تر Media

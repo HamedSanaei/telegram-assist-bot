@@ -19,6 +19,17 @@ class PublicationState(StrEnum):
     OUTCOME_UNKNOWN = "OutcomeUnknown"
 
 
+class PublicationRetractionState(StrEnum):
+    """Stable states for deleting one successful immediate publication."""
+
+    NONE = "None"
+    PENDING = "Pending"
+    CLAIMED = "Claimed"
+    WAITING_FOR_RETRY = "WaitingForRetry"
+    SUCCEEDED = "Succeeded"
+    PERMANENT_FAILED = "PermanentFailed"
+
+
 class PublicationFailureCategory(StrEnum):
     """Application-owned Publisher failure categories."""
 
@@ -60,6 +71,17 @@ class Publication:
     correlation_id: str | None = None
     failure_type: str | None = None
     failure_reason_code: str | None = None
+    retraction_state: PublicationRetractionState = PublicationRetractionState.NONE
+    retraction_owner: str | None = None
+    retraction_lease_until: datetime | None = None
+    retraction_attempt_count: int = 0
+    retraction_next_attempt_at: datetime | None = None
+    retraction_requested_at: datetime | None = None
+    retracted_at: datetime | None = None
+    retraction_selection_version: int | None = None
+    retraction_error_category: str | None = None
+    retraction_failure_type: str | None = None
+    retraction_failure_reason_code: str | None = None
 
     def __post_init__(self) -> None:
         """Reject naive persistence timestamps."""
@@ -68,6 +90,10 @@ class Publication:
             self.attempted_at,
             self.next_attempt_at,
             self.published_at,
+            self.retraction_lease_until,
+            self.retraction_next_attempt_at,
+            self.retraction_requested_at,
+            self.retracted_at,
         ):
             if value is not None and value.tzinfo is None:
                 raise ValueError("Publication timestamps must be timezone-aware.")
@@ -90,6 +116,7 @@ class PublishedMessage:
 __all__ = (
     "Publication",
     "PublicationFailureCategory",
+    "PublicationRetractionState",
     "PublicationState",
     "PublishedMessage",
     "publication_identity",

@@ -216,11 +216,11 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `domain/media/` | هویت و metadata immutable فایل Media بدون وابستگی به Filesystem/Telegram |
 | `domain/duplicates/` | نتیجهٔ exact سازگار و نتیجه/state/policy نسخه‌دار semantic با similarity و confidence مستقل |
 | `domain/categories/` | هویت دسته و نتیجهٔ auditپذیر دسته‌بندی پایه/دستی |
-| `domain/publication.py` و `domain/scheduling.py` | stateهای Publication/Schedule، identity نسخه‌دار، lease، failure و audit due |
+| `domain/publication.py` و `domain/scheduling.py` | stateهای Publication/Schedule، identity نسخه‌دار، receipt، retraction، lease، failure و audit due |
 | `application/ports/post_repository.py` | insert یکتا با canonical ID/Conflict، claim اتمیک مرحلهٔ بعد، read/list و CAS مستقل از driver |
 | `application/ports/telegram_source_gateway.py` | DTO، Port، result و errorهای application-owned برای auth، validation، History و subscription |
 | `application/ports/media.py` | Portهای Stream/Storage/Persistence و DTOهای Media، Album، duplicate، category، artifact و readiness |
-| `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، payload loader، claim Publication، certainty مرز send و صف پایدار |
+| `application/ports/publication.py` و `scheduling.py` | Portهای Publisher، deletion gateway، payload loader، claim Publication، certainty مرز send و صف پایدار |
 | `application/ports/ai_job_repository.py` | قرارداد درگاه پایدار صف کارهای هوش مصنوعی |
 | `application/ports/ai_provider.py` | درگاه کلاینت AI جهت برقراری تماس با مدل‌های مختلف و دریافت raw envelope |
 | `application/ports/provider_state_repository.py` | Port رزرو اتمیک ظرفیت و ثبت outcome تایپ‌شدهٔ Provider/Model |
@@ -228,7 +228,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `application/ports/ai_audit_repository.py` | قرارداد eventهای immutable، sanitized و idempotent اجرای AI |
 | `application/ports/post_repository.py` | Port و درخواست‌های CAS افزایشی نتیجه/شکست تبلیغات و Duplicate معنایی در کنار قراردادهای پایدار Post |
 | `application/ports/provider_metrics_repository.py` | delta و snapshot آمار تجمعی مستقل هر Provider/Model |
-| `application/publication/` | انتشار idempotent متن/Media/Album با retry پیش‌ارسال و `OutcomeUnknown` |
+| `application/publication/` | انتشار idempotent متن/Media/Album و حذف receipt-backed با retry محدود و `OutcomeUnknown` |
 | `application/scheduling/` | رزرو Slot، اجرای Job due و لغو policyدار |
 | `application/authenticate_telegram_session.py` | reuse Session معتبر و flow کد/2FA فقط با ورودی تعاملی تزریق‌شده |
 | `application/validate_telegram_session.py` | تجمیع Premium، resolve canonical channel و access/permission issueها |
@@ -276,7 +276,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity/URL-button و state/result تبلیغ و semantic با default امن legacy |
 | `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
 | `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار، recheck consumerهای پایدار و state آماده‌سازی/Album |
-| `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication و Schedule، cancel/recompact |
+| `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication، retraction و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album، metadata اختیاری `text_url` و ردیف‌های دکمهٔ URL بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
@@ -289,7 +289,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/telegram/user/text_ingestion_gateway.py` | facade یک client برای validation، History، Listener، MediaSource و lifetime signal همان client |
 | `infrastructure/telegram/media_serializer.py` | upload مشترک immediate/native با filename امن، InputMedia نوع‌صحیح و Album مرتب |
 | `infrastructure/telegram/url_button_fallback.py` | تبدیل bounded ردیف‌های URL منبع به خطوط متنی مرتب برای محدودیت keyboard در User API |
-| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji، fallback متنی URL-button، نرمال‌سازی شناسهٔ BSON مقصد و ارسال متن/Media/Album با serializer مشترک Telethon |
+| `infrastructure/telegram/user_publisher.py` | mapping Entity/Custom Emoji، fallback متنی URL-button، نرمال‌سازی شناسهٔ BSON مقصد، ارسال متن/Media/Album و حذف receipt مقصد با serializer مشترک Telethon |
 | `infrastructure/telegram/native_scheduler.py` | خواندن Scheduled Messages خارجی و `schedule=due_at` همراه fallback متنی URL با serializer مشترک همان client Runtime |
 | `infrastructure/telegram/bot/adapter.py` | تحویل content/control با Bot API، upload نوع‌صحیح Media زیر root محصور و نگاشت امن network/rate-limit/server failures به retry Application |
 | `infrastructure/persistence/mongodb/errors.py` | خطاهای داخلی، ثابت و redacted اتصال، Index و Document؛ هیچ exception مربوط به driver از Infrastructure خارج نمی‌شود |

@@ -24,6 +24,8 @@ from telegram_assist_bot.application.ports import (
     ApprovalDeliveryRateLimitError,
     ApprovalDeliveryRejectedError,
     ApprovalDeliveryUnavailableError,
+    PublicationPreparationOutcome,
+    PublicationRetractionRequestOutcome,
 )
 from telegram_assist_bot.application.scheduling import (
     CancelRequest,
@@ -61,6 +63,7 @@ if TYPE_CHECKING:
         InlineKeyboard,
         NativeScheduleRepository,
         OperationalApprovalRepository,
+        PublicationRetractionRepository,
         ScheduleRepository,
     )
     from telegram_assist_bot.domain import (
@@ -75,6 +78,9 @@ STATUS_LABELS = {
     "scheduled": "زمان‌بندی شده",
     "publishing": "در حال انتشار",
     "published": "منتشر شد",
+    "retraction_pending": "در صف حذف انتشار فوری",
+    "retracted": "انتشار فوری حذف شد",
+    "retraction_failed": "حذف انتشار فوری ناموفق",
     "cancelled": "لغو شد",
     "permanent_failed": "انتشار ناموفق",
     "native_resolved": "دیگر در Scheduled Messages نیست",
@@ -511,6 +517,7 @@ class ApprovalCallbackExecutor:
         timezone: tzinfo = UTC,
         logger: StructuredLogger | None = None,
         native_schedules: NativeScheduleRepository | None = None,
+        retractions: PublicationRetractionRepository | None = None,
     ) -> None:
         """Store existing approval, scheduling, and synchronization use cases."""
         self._tokens = tokens
@@ -533,6 +540,7 @@ class ApprovalCallbackExecutor:
         self._timezone = timezone
         self._logger = logger
         self._native_schedules = native_schedules
+        self._retractions = retractions
 
     async def execute(self, update: BotUpdate) -> bool:
         """Handle one mapped callback without performing User API operations."""
@@ -655,21 +663,48 @@ class ApprovalCallbackExecutor:
             previous is SelectionMode.SCHEDULED and self._native_schedules is not None
         )
         cancelled_previous = False
+        retraction_requested = False
+        if (
+            previous is SelectionMode.IMMEDIATE
+            and current is not SelectionMode.IMMEDIATE
+        ):
+            retraction_requested = await self._request_immediate_retraction(
+                post_id,
+                destination_id,
+                selection.version,
+                actor_id,
+                correlation_id,
+                now,
+            )
+            cancelled_previous = True
         if (
             previous is not SelectionMode.NONE
             and previous is not current
             and legacy_cancel_allowed
+            and previous is not SelectionMode.IMMEDIATE
         ):
             await self._cancel_action(
                 post_id, destination_id, previous, actor_id, correlation_id
             )
             cancelled_previous = True
         if current is SelectionMode.IMMEDIATE:
+            reopen = False
+            if self._retractions is not None:
+                preparation = await self._retractions.prepare_republication(
+                    publication_identity(post_id, destination_id, "immediate"),
+                    now=now,
+                )
+                if preparation is PublicationPreparationOutcome.BLOCKED:
+                    raise RuntimeError(
+                        "Immediate publication is not ready for another cycle."
+                    )
+                reopen = preparation is PublicationPreparationOutcome.READY
             reservation = await self._schedules.reserve_immediate(
                 job_id=publication_identity(post_id, destination_id, "immediate"),
                 post_id=post_id,
                 destination_id=destination_id,
                 now=now,
+                reopen=reopen,
             )
             await self._operational.record_destination_status(
                 post_id,
@@ -730,15 +765,66 @@ class ApprovalCallbackExecutor:
                 await self._cancel_action(
                     post_id, destination_id, previous, actor_id, correlation_id
                 )
-            await self._operational.record_destination_status(
-                post_id,
-                destination_id,
-                status="cancelled",
-                version=selection.version,
-                at=now,
-            )
+            if not retraction_requested:
+                await self._operational.record_destination_status(
+                    post_id,
+                    destination_id,
+                    status="cancelled",
+                    version=selection.version,
+                    at=now,
+                )
             return
         del reservation
+
+    async def _request_immediate_retraction(
+        self,
+        post_id: str,
+        destination_id: int,
+        selection_version: int,
+        actor_id: int,
+        correlation_id: str,
+        now: datetime,
+    ) -> bool:
+        """Request receipt-backed deletion or cancel a not-yet-published command."""
+        if self._retractions is not None:
+            outcome = await self._retractions.request_retraction(
+                publication_identity(post_id, destination_id, "immediate"),
+                now=now,
+                selection_version=selection_version,
+            )
+            if outcome in {
+                PublicationRetractionRequestOutcome.REQUESTED,
+                PublicationRetractionRequestOutcome.ALREADY_REQUESTED,
+            }:
+                await self._operational.record_destination_status(
+                    post_id,
+                    destination_id,
+                    status="retraction_pending",
+                    version=selection_version,
+                    at=now,
+                    action="immediate",
+                )
+                return True
+            if outcome is PublicationRetractionRequestOutcome.ALREADY_RETRACTED:
+                await self._operational.record_destination_status(
+                    post_id,
+                    destination_id,
+                    status="retracted",
+                    version=selection_version,
+                    at=now,
+                    action="immediate",
+                )
+                return True
+            if outcome is PublicationRetractionRequestOutcome.BLOCKED:
+                raise RuntimeError("Immediate publication retraction is blocked.")
+        await self._cancel_action(
+            post_id,
+            destination_id,
+            SelectionMode.IMMEDIATE,
+            actor_id,
+            correlation_id,
+        )
+        return False
 
     async def _cancel_action(
         self,

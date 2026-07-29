@@ -16,6 +16,7 @@ from .admin_approval import (
 from .publication import (
     Publication,
     PublicationFailureCategory,
+    PublicationRetractionState,
     PublicationState,
     PublishedMessage,
     publication_identity,
@@ -45,6 +46,7 @@ __all__ = (
     "DueTimeAudit",
     "Publication",
     "PublicationFailureCategory",
+    "PublicationRetractionState",
     "PublicationState",
     "PublishedMessage",
     "ScheduleStatus",

@@ -6,5 +6,13 @@ from .publish_immediately import (
     PublishResult,
     PublishStatus,
 )
+from .retract_immediately import RetractImmediatePublication, RetractionStatus
 
-__all__ = ("PublishImmediately", "PublishRequest", "PublishResult", "PublishStatus")
+__all__ = (
+    "PublishImmediately",
+    "PublishRequest",
+    "PublishResult",
+    "PublishStatus",
+    "RetractImmediatePublication",
+    "RetractionStatus",
+)
