@@ -11,6 +11,8 @@ from pymongo.errors import DuplicateKeyError
 from telegram_assist_bot.application.ports import (
     PublicationClaimOutcome,
     PublicationClaimResult,
+    PublicationPreparationOutcome,
+    PublicationRetractionRequestOutcome,
     ScheduleReservation,
 )
 from telegram_assist_bot.domain import (
@@ -19,6 +21,7 @@ from telegram_assist_bot.domain import (
     DueTimeAudit,
     Publication,
     PublicationFailureCategory,
+    PublicationRetractionState,
     PublicationState,
     PublishedMessage,
     ScheduledPublication,
@@ -51,6 +54,15 @@ async def initialize_publication_indexes(
             ("lease_until", ASCENDING),
         ],
         name="ix_publication_claim_v1",
+    )
+    await publications.create_index(
+        [
+            ("retraction_state", ASCENDING),
+            ("retraction_next_attempt_at", ASCENDING),
+            ("retraction_lease_until", ASCENDING),
+            ("retraction_requested_at", ASCENDING),
+        ],
+        name="ix_publication_retraction_claim_v1",
     )
     await schedules.create_index(
         [("post_id", ASCENDING), ("destination_id", ASCENDING), ("action", ASCENDING)],
@@ -92,6 +104,19 @@ def _publication(document: Document) -> Publication:
         correlation_id=document.get("correlation_id"),
         failure_type=document.get("failure_type"),
         failure_reason_code=document.get("failure_reason_code"),
+        retraction_state=PublicationRetractionState(
+            document.get("retraction_state", PublicationRetractionState.NONE.value)
+        ),
+        retraction_owner=document.get("retraction_owner"),
+        retraction_lease_until=document.get("retraction_lease_until"),
+        retraction_attempt_count=document.get("retraction_attempt_count", 0),
+        retraction_next_attempt_at=document.get("retraction_next_attempt_at"),
+        retraction_requested_at=document.get("retraction_requested_at"),
+        retracted_at=document.get("retracted_at"),
+        retraction_selection_version=document.get("retraction_selection_version"),
+        retraction_error_category=document.get("retraction_error_category"),
+        retraction_failure_type=document.get("retraction_failure_type"),
+        retraction_failure_reason_code=document.get("retraction_failure_reason_code"),
     )
 
 
@@ -283,6 +308,256 @@ class MongoPublicationRepository:
             raise RuntimeError("Publication lease was lost before failure persistence.")
         return _publication(document)
 
+    async def request_retraction(
+        self,
+        publication_id: str,
+        *,
+        now: datetime,
+        selection_version: int,
+    ) -> PublicationRetractionRequestOutcome:
+        """Request deletion only for one successful receipt with message IDs."""
+        document = await self._collection.find_one({"_id": publication_id})
+        if (
+            document is None
+            or document.get("state") != PublicationState.SUCCEEDED.value
+        ):
+            return PublicationRetractionRequestOutcome.NOT_PUBLISHED
+        if not document.get("message_ids"):
+            return PublicationRetractionRequestOutcome.BLOCKED
+        state = PublicationRetractionState(
+            document.get("retraction_state", PublicationRetractionState.NONE.value)
+        )
+        if state is PublicationRetractionState.SUCCEEDED:
+            return PublicationRetractionRequestOutcome.ALREADY_RETRACTED
+        if state in {
+            PublicationRetractionState.PENDING,
+            PublicationRetractionState.CLAIMED,
+            PublicationRetractionState.WAITING_FOR_RETRY,
+        }:
+            return PublicationRetractionRequestOutcome.ALREADY_REQUESTED
+        if state is PublicationRetractionState.PERMANENT_FAILED:
+            return PublicationRetractionRequestOutcome.BLOCKED
+        result = await self._collection.update_one(
+            {
+                "_id": publication_id,
+                "state": PublicationState.SUCCEEDED.value,
+                "message_ids.0": {"$exists": True},
+                "$or": [
+                    {"retraction_state": {"$exists": False}},
+                    {"retraction_state": PublicationRetractionState.NONE.value},
+                ],
+            },
+            {
+                "$set": {
+                    "retraction_state": PublicationRetractionState.PENDING.value,
+                    "retraction_requested_at": now,
+                    "retraction_selection_version": selection_version,
+                    "retraction_owner": None,
+                    "retraction_lease_until": None,
+                    "retraction_attempt_count": 0,
+                    "retraction_next_attempt_at": None,
+                    "retraction_error_category": None,
+                    "retraction_failure_type": None,
+                    "retraction_failure_reason_code": None,
+                },
+                "$inc": {"version": 1},
+            },
+        )
+        if result.modified_count == 1:
+            return PublicationRetractionRequestOutcome.REQUESTED
+        canonical = await self._collection.find_one({"_id": publication_id})
+        if canonical is None:
+            return PublicationRetractionRequestOutcome.NOT_PUBLISHED
+        canonical_state = PublicationRetractionState(
+            canonical.get("retraction_state", PublicationRetractionState.NONE.value)
+        )
+        if canonical_state is PublicationRetractionState.SUCCEEDED:
+            return PublicationRetractionRequestOutcome.ALREADY_RETRACTED
+        if canonical_state in {
+            PublicationRetractionState.PENDING,
+            PublicationRetractionState.CLAIMED,
+            PublicationRetractionState.WAITING_FOR_RETRY,
+        }:
+            return PublicationRetractionRequestOutcome.ALREADY_REQUESTED
+        return PublicationRetractionRequestOutcome.BLOCKED
+
+    async def prepare_republication(
+        self, publication_id: str, *, now: datetime
+    ) -> PublicationPreparationOutcome:
+        """Reset a retracted receipt while retaining an append-only local audit."""
+        document = await self._collection.find_one({"_id": publication_id})
+        if document is None:
+            return PublicationPreparationOutcome.NEW
+        state = PublicationState(document["state"])
+        retraction = PublicationRetractionState(
+            document.get("retraction_state", PublicationRetractionState.NONE.value)
+        )
+        if (
+            state is PublicationState.PENDING
+            and not document.get("message_ids")
+            and retraction is PublicationRetractionState.NONE
+        ):
+            return PublicationPreparationOutcome.READY
+        if (
+            state is not PublicationState.SUCCEEDED
+            or retraction is not PublicationRetractionState.SUCCEEDED
+        ):
+            return PublicationPreparationOutcome.BLOCKED
+        history = {
+            "message_ids": document["message_ids"],
+            "published_at": document["published_at"],
+            "retracted_at": document["retracted_at"],
+        }
+        result = await self._collection.update_one(
+            {
+                "_id": publication_id,
+                "state": PublicationState.SUCCEEDED.value,
+                "retraction_state": PublicationRetractionState.SUCCEEDED.value,
+                "version": document.get("version", 0),
+            },
+            {
+                "$set": {
+                    "state": PublicationState.PENDING.value,
+                    "attempt_count": 0,
+                    "attempted_at": None,
+                    "next_attempt_at": None,
+                    "message_ids": [],
+                    "published_at": None,
+                    "error_category": None,
+                    "failure_type": None,
+                    "failure_reason_code": None,
+                    "retraction_state": PublicationRetractionState.NONE.value,
+                    "retraction_owner": None,
+                    "retraction_lease_until": None,
+                    "retraction_attempt_count": 0,
+                    "retraction_next_attempt_at": None,
+                    "retraction_requested_at": None,
+                    "retracted_at": None,
+                    "retraction_selection_version": None,
+                    "retraction_error_category": None,
+                    "retraction_failure_type": None,
+                    "retraction_failure_reason_code": None,
+                    "reopened_at": now,
+                },
+                "$push": {"publication_history": history},
+                "$inc": {"version": 1, "publication_cycle": 1},
+            },
+        )
+        return (
+            PublicationPreparationOutcome.READY
+            if result.modified_count == 1
+            else PublicationPreparationOutcome.BLOCKED
+        )
+
+    async def claim_retraction(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        max_attempts: int,
+    ) -> Publication | None:
+        """Claim the oldest pending, retry-ready, or expired retraction."""
+        document = await self._collection.find_one_and_update(
+            {
+                "state": PublicationState.SUCCEEDED.value,
+                "message_ids.0": {"$exists": True},
+                "retraction_attempt_count": {"$lt": max_attempts},
+                "$or": [
+                    {"retraction_state": PublicationRetractionState.PENDING.value},
+                    {
+                        "retraction_state": (
+                            PublicationRetractionState.WAITING_FOR_RETRY.value
+                        ),
+                        "retraction_next_attempt_at": {"$lte": now},
+                    },
+                    {
+                        "retraction_state": PublicationRetractionState.CLAIMED.value,
+                        "retraction_lease_until": {"$lte": now},
+                    },
+                ],
+            },
+            {
+                "$set": {
+                    "retraction_state": PublicationRetractionState.CLAIMED.value,
+                    "retraction_owner": owner,
+                    "retraction_lease_until": lease_until,
+                    "retraction_next_attempt_at": None,
+                },
+                "$inc": {"version": 1, "retraction_attempt_count": 1},
+            },
+            sort=[("retraction_requested_at", ASCENDING), ("_id", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        return None if document is None else _publication(document)
+
+    async def complete_retraction(
+        self, publication_id: str, *, owner: str, at: datetime
+    ) -> Publication:
+        """Complete an owned retraction idempotently."""
+        document = await self._collection.find_one_and_update(
+            {
+                "_id": publication_id,
+                "retraction_state": PublicationRetractionState.CLAIMED.value,
+                "retraction_owner": owner,
+            },
+            {
+                "$set": {
+                    "retraction_state": PublicationRetractionState.SUCCEEDED.value,
+                    "retracted_at": at,
+                    "retraction_owner": None,
+                    "retraction_lease_until": None,
+                    "retraction_next_attempt_at": None,
+                    "retraction_error_category": None,
+                },
+                "$inc": {"version": 1},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            raise RuntimeError("Publication retraction lease was lost.")
+        return _publication(document)
+
+    async def fail_retraction(
+        self,
+        publication_id: str,
+        *,
+        owner: str,
+        category: PublicationFailureCategory,
+        next_attempt_at: datetime | None,
+        failure_type: str,
+        failure_reason_code: str | None,
+    ) -> Publication:
+        """Persist a retryable or terminal retraction failure."""
+        state = (
+            PublicationRetractionState.WAITING_FOR_RETRY
+            if next_attempt_at is not None
+            else PublicationRetractionState.PERMANENT_FAILED
+        )
+        document = await self._collection.find_one_and_update(
+            {
+                "_id": publication_id,
+                "retraction_state": PublicationRetractionState.CLAIMED.value,
+                "retraction_owner": owner,
+            },
+            {
+                "$set": {
+                    "retraction_state": state.value,
+                    "retraction_owner": None,
+                    "retraction_lease_until": None,
+                    "retraction_next_attempt_at": next_attempt_at,
+                    "retraction_error_category": category.value,
+                    "retraction_failure_type": failure_type,
+                    "retraction_failure_reason_code": failure_reason_code,
+                },
+                "$inc": {"version": 1},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            raise RuntimeError("Publication retraction lease was lost.")
+        return _publication(document)
+
 
 class MongoScheduleRepository:
     """Implement durable per-destination slot reservation and worker leases."""
@@ -417,6 +692,7 @@ class MongoScheduleRepository:
         post_id: str,
         destination_id: int,
         now: datetime,
+        reopen: bool = False,
     ) -> ScheduleReservation:
         """Insert one due-now command without occupying a scheduled queue slot."""
         document = {
@@ -432,6 +708,37 @@ class MongoScheduleRepository:
         try:
             await self._schedules.insert_one(document)
         except DuplicateKeyError:
+            if reopen:
+                reopened = await self._schedules.find_one_and_update(
+                    {
+                        "_id": job_id,
+                        "destination_id": destination_id,
+                        "action": "immediate",
+                        "status": {
+                            "$in": [
+                                ScheduleStatus.CANCELLED.value,
+                                ScheduleStatus.COMPLETED.value,
+                            ]
+                        },
+                    },
+                    {
+                        "$set": {
+                            "due_at": now,
+                            "status": ScheduleStatus.PENDING.value,
+                            "claim_owner": None,
+                            "lease_until": None,
+                            "attempt_count": 0,
+                            "next_attempt_at": None,
+                            "last_error_category": None,
+                            "last_failure_type": None,
+                            "last_failure_reason_code": None,
+                        },
+                        "$inc": {"version": 1},
+                    },
+                    return_document=ReturnDocument.AFTER,
+                )
+                if reopened is not None:
+                    return ScheduleReservation(_schedule(reopened), True)
             existing = await self._schedules.find_one({"_id": job_id})
             if existing is None:
                 raise

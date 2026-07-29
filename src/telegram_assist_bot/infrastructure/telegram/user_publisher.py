@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from telethon import errors, types  # type: ignore[import-untyped]
 
@@ -41,6 +41,16 @@ class TelethonPublisherClient(Protocol):
 
     async def upload_file(self, file: object, **kwargs: object) -> object:
         """Upload one media item with explicit filename metadata."""
+        ...
+
+
+class TelethonPublisherDeletionClient(Protocol):
+    """Describe the extra User API call required for receipt deletion."""
+
+    async def delete_messages(
+        self, entity: int, message_ids: tuple[int, ...], *, revoke: bool
+    ) -> object:
+        """Delete exact destination messages through the same User session."""
         ...
 
 
@@ -223,6 +233,53 @@ class TelethonPublisherGateway:
                 request_may_have_reached_telegram=True,
             )
         return PublishedMessage(message_ids, datetime.now(UTC))
+
+    async def delete(
+        self,
+        destination_id: int,
+        message_ids: tuple[int, ...],
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        """Delete only validated receipt IDs from their persisted destination."""
+        try:
+            if (
+                timeout_seconds <= 0
+                or type(destination_id) is not int
+                or destination_id == 0
+                or not message_ids
+                or any(type(value) is not int or value <= 0 for value in message_ids)
+            ):
+                raise ValueError("Publication retraction input is invalid.")
+            async with asyncio.timeout(timeout_seconds):
+                await cast(
+                    "TelethonPublisherDeletionClient", self._client
+                ).delete_messages(destination_id, message_ids, revoke=True)
+        except asyncio.CancelledError:
+            raise
+        except ValueError as error:
+            raise PublisherError(
+                PublicationFailureCategory.PERMANENT,
+                reason_code="invalid_retraction_receipt",
+            ) from error
+        except TimeoutError as error:
+            raise PublisherError(
+                PublicationFailureCategory.TIMEOUT,
+                request_may_have_reached_telegram=True,
+            ) from error
+        except errors.FloodWaitError as error:
+            raise PublisherError(
+                PublicationFailureCategory.RATE_LIMIT,
+                request_may_have_reached_telegram=True,
+                retry_after_seconds=float(error.seconds),
+            ) from error
+        except (errors.ChatAdminRequiredError, errors.ChannelPrivateError) as error:
+            raise PublisherError(PublicationFailureCategory.PERMISSION) from error
+        except (errors.RPCError, OSError) as error:
+            raise PublisherError(
+                PublicationFailureCategory.AMBIGUOUS,
+                request_may_have_reached_telegram=True,
+            ) from error
 
 
 __all__ = ("TelethonPublisherClient", "TelethonPublisherGateway")

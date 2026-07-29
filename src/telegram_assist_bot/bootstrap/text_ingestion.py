@@ -31,6 +31,7 @@ from telegram_assist_bot.application.ports import (
     TelegramHistoryGateway,
     TelegramLiveGateway,
     TelegramLiveSubscription,
+    TelegramMessageDeletionGateway,
     TelegramPublisherGateway,
     TelegramValidationGateway,
 )
@@ -41,6 +42,8 @@ from telegram_assist_bot.application.prepare_post_pipeline import (
 from telegram_assist_bot.application.publication import (
     PublishImmediately,
     PublishRequest,
+    RetractImmediatePublication,
+    RetractionStatus,
 )
 from telegram_assist_bot.application.runtime_ingestion import (
     RuntimeMessageIngestor,
@@ -91,7 +94,7 @@ if TYPE_CHECKING:
 
     from telegram_assist_bot.application.ports import TelegramNativeSchedulerGateway
     from telegram_assist_bot.application.ports.ai_provider import AIProvider
-    from telegram_assist_bot.domain import ScheduledPublication
+    from telegram_assist_bot.domain import Publication, ScheduledPublication
     from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
         MongoDocument,
     )
@@ -1065,6 +1068,35 @@ async def _create_publication_worker(
         before_attempt=before_attempt,
         logger=owned_foundation.logger,
     )
+
+    async def after_retraction(receipt: Publication, status: RetractionStatus) -> None:
+        durable_status = {
+            RetractionStatus.SUCCEEDED: "retracted",
+            RetractionStatus.RETRY_PENDING: "retraction_pending",
+            RetractionStatus.PERMANENT_FAILED: "retraction_failed",
+        }.get(status)
+        if durable_status is None:
+            return
+        await operational.record_destination_status(
+            receipt.post_id,
+            receipt.destination_id,
+            status=durable_status,
+            version=receipt.retraction_selection_version or receipt.version,
+            at=datetime.now(UTC),
+            action="immediate",
+        )
+
+    retraction = RetractImmediatePublication(
+        publication_repository,
+        cast("TelegramMessageDeletionGateway", publisher),
+        owner=f"retraction-{owner}",
+        clock=lambda: datetime.now(UTC),
+        timeout_seconds=float(publishing.operation_timeout_seconds),
+        lease_seconds=float(publishing.publication_lease_seconds),
+        max_attempts=publishing.publication_max_attempts,
+        retry_delay_seconds=float(publishing.retry_initial_delay_seconds),
+        after_result=after_retraction,
+    )
     native_gateway = cast(
         "TelegramNativeSchedulerGateway",
         owned_gateway.native_scheduler(media_root=settings.media.root),
@@ -1402,6 +1434,9 @@ async def _create_publication_worker(
     publication_worker = ScheduledPublicationWorker(
         immediate.execute_once, poll_seconds=publication_poll_seconds
     )
+    retraction_worker = ScheduledPublicationWorker(
+        retraction.execute_once, poll_seconds=publication_poll_seconds
+    )
     native_worker = ScheduledPublicationWorker(
         run_native_once, poll_seconds=native_poll_seconds
     )
@@ -1458,11 +1493,22 @@ async def _create_publication_worker(
                 )
                 await native_worker.run()
 
+            async def retract_published() -> None:
+                owned_foundation.logger.emit(
+                    level=LogLevel.INFO,
+                    event_name="publication_retraction_worker_started",
+                    fields={"publication_poll_seconds": publication_poll_seconds},
+                )
+                await retraction_worker.run()
+
             publication_task = asyncio.create_task(
                 publish_due(), name="runtime-publication"
             )
             native_task = asyncio.create_task(
                 run_native_scheduling(), name="runtime-native-scheduling"
+            )
+            retraction_task = asyncio.create_task(
+                retract_published(), name="runtime-publication-retraction"
             )
             heartbeat_task = asyncio.create_task(pulse(), name="runtime-heartbeat")
 
@@ -1493,7 +1539,13 @@ async def _create_publication_worker(
                     mark_ready(), name="runtime-readiness-marker"
                 )
                 done, _pending = await asyncio.wait(
-                    (publication_task, native_task, heartbeat_task, *ai_worker_tasks),
+                    (
+                        publication_task,
+                        retraction_task,
+                        native_task,
+                        heartbeat_task,
+                        *ai_worker_tasks,
+                    ),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 completed = next(iter(done))
@@ -1509,6 +1561,7 @@ async def _create_publication_worker(
                 tasks = [
                     readiness_task,
                     publication_task,
+                    retraction_task,
                     native_task,
                     heartbeat_task,
                 ]

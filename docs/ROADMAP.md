@@ -170,6 +170,15 @@ fallback متنی قطعی برای URLهای قابل‌انتقال منبع �
 |---|---|---|---|---|
 | [T093](tasks/T093-v1-1-2-portable-proxy-link-publication.md) | v1.1.2 Portable Proxy Link Publication | T077، T092 | `5.10`، `5.17`–`5.19`، `18` | Completed |
 
+## Milestone 12 — Persistent Immediate Publication Toggle
+
+این Milestone رفتار عملی دکمهٔ فوری را با Toggle زمان‌بندی هم‌راستا می‌کند،
+بدون اینکه Approval Bot مالک Telegram User session شود.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T094](tasks/T094-persistent-immediate-publication-toggle.md) | Persistent Immediate Publication Toggle | T029–T032، T077، T093 | `5.15`–`5.17` | Completed |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |

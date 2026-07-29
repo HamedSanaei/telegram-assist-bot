@@ -78,6 +78,24 @@ class PublicationClaimOutcome(StrEnum):
     EXHAUSTED = "exhausted"
 
 
+class PublicationRetractionRequestOutcome(StrEnum):
+    """Describe one durable immediate-publication retraction request."""
+
+    REQUESTED = "requested"
+    ALREADY_REQUESTED = "already_requested"
+    ALREADY_RETRACTED = "already_retracted"
+    NOT_PUBLISHED = "not_published"
+    BLOCKED = "blocked"
+
+
+class PublicationPreparationOutcome(StrEnum):
+    """Describe whether a new immediate-publication cycle may be queued."""
+
+    READY = "ready"
+    NEW = "new"
+    BLOCKED = "blocked"
+
+
 @dataclass(frozen=True, slots=True)
 class PublicationClaimResult:
     """Return the canonical publication and claim decision."""
@@ -93,6 +111,20 @@ class TelegramPublisherGateway(Protocol):
         self, payload: PublicationPayload, *, timeout_seconds: float
     ) -> PublishedMessage:
         """Publish exactly one logical destination message or album."""
+        ...
+
+
+class TelegramMessageDeletionGateway(Protocol):
+    """Delete persisted destination messages through the User API owner."""
+
+    async def delete(
+        self,
+        destination_id: int,
+        message_ids: tuple[int, ...],
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        """Delete exactly the persisted destination message identifiers."""
         ...
 
 
@@ -149,13 +181,67 @@ class PublicationRepository(Protocol):
         ...
 
 
+class PublicationRetractionRepository(Protocol):
+    """Persist restart-safe requests to retract successful publications."""
+
+    async def request_retraction(
+        self,
+        publication_id: str,
+        *,
+        now: datetime,
+        selection_version: int,
+    ) -> PublicationRetractionRequestOutcome:
+        """Request deletion only for a successful receipt."""
+        ...
+
+    async def prepare_republication(
+        self, publication_id: str, *, now: datetime
+    ) -> PublicationPreparationOutcome:
+        """Open a new cycle only after a prior retraction completed."""
+        ...
+
+    async def claim_retraction(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_until: datetime,
+        max_attempts: int,
+    ) -> Publication | None:
+        """Claim the oldest eligible retraction atomically."""
+        ...
+
+    async def complete_retraction(
+        self, publication_id: str, *, owner: str, at: datetime
+    ) -> Publication:
+        """Persist successful deletion under the current lease."""
+        ...
+
+    async def fail_retraction(
+        self,
+        publication_id: str,
+        *,
+        owner: str,
+        category: PublicationFailureCategory,
+        next_attempt_at: datetime | None,
+        failure_type: str,
+        failure_reason_code: str | None,
+    ) -> Publication:
+        """Persist bounded retry or terminal retraction failure."""
+        ...
+
+
 __all__ = (
     "PublicationClaimOutcome",
     "PublicationClaimResult",
     "PublicationMedia",
     "PublicationPayload",
     "PublicationPayloadLoader",
+    "PublicationPreparationOutcome",
     "PublicationRepository",
+    "PublicationRetractionRepository",
+    "PublicationRetractionRequestOutcome",
     "PublisherError",
+    "TelegramMessageDeletionGateway",
     "TelegramPublisherGateway",
 )

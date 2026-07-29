@@ -43,6 +43,8 @@ from telegram_assist_bot.application.ports import (
     NativeScheduleCommand,
     NativeScheduleStatus,
     OperationalApprovalRepository,
+    PublicationPreparationOutcome,
+    PublicationRetractionRequestOutcome,
     ScheduleReservation,
 )
 from telegram_assist_bot.application.ports import (
@@ -186,15 +188,30 @@ class ScheduleRepository:
         self.jobs: dict[str, ScheduledPublication] = {}
 
     async def reserve_immediate(
-        self, *, job_id: str, post_id: str, destination_id: int, now: datetime
+        self,
+        *,
+        job_id: str,
+        post_id: str,
+        destination_id: int,
+        now: datetime,
+        reopen: bool = False,
     ) -> ScheduleReservation:
-        created = job_id not in self.jobs
-        self.jobs.setdefault(
-            job_id,
-            ScheduledPublication(
-                job_id, post_id, destination_id, now, action="immediate"
-            ),
+        existing = self.jobs.get(job_id)
+        created = existing is None or (
+            reopen
+            and existing.status in {ScheduleStatus.CANCELLED, ScheduleStatus.COMPLETED}
         )
+        if existing is None:
+            self.jobs[job_id] = ScheduledPublication(
+                job_id, post_id, destination_id, now, action="immediate"
+            )
+        elif created:
+            self.jobs[job_id] = replace(
+                existing,
+                due_at=now,
+                status=ScheduleStatus.PENDING,
+                version=existing.version + 1,
+            )
         return ScheduleReservation(self.jobs[job_id], created)
 
     async def reserve(
@@ -252,6 +269,34 @@ class Loader:
             source_published_at=NOW,
             content_type="text",
         )
+
+
+class RetractionRepository:
+    """Script receipt-backed request and republication preparation outcomes."""
+
+    def __init__(self) -> None:
+        self.request_outcome = PublicationRetractionRequestOutcome.NOT_PUBLISHED
+        self.preparation_outcome = PublicationPreparationOutcome.NEW
+        self.requests: list[tuple[str, int]] = []
+        self.preparations: list[str] = []
+
+    async def request_retraction(
+        self,
+        publication_id: str,
+        *,
+        now: datetime,
+        selection_version: int,
+    ) -> PublicationRetractionRequestOutcome:
+        assert now == NOW
+        self.requests.append((publication_id, selection_version))
+        return self.request_outcome
+
+    async def prepare_republication(
+        self, publication_id: str, *, now: datetime
+    ) -> PublicationPreparationOutcome:
+        assert now == NOW
+        self.preparations.append(publication_id)
+        return self.preparation_outcome
 
 
 class CallbackStub:
@@ -351,6 +396,89 @@ def test_scheduled_callback_uses_existing_slot_calculation_and_deselection_cance
         assert await executor.execute(BotUpdate(7, 7, "private", second, "q2"))
         assert schedules.jobs[identity].status is ScheduleStatus.CANCELLED
         assert operational.statuses[DESTINATION] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_immediate_second_click_requests_receipt_backed_retraction() -> None:
+    async def scenario() -> None:
+        executor, tokens, schedules, operational = build_executor()
+        first = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", first, "q1"))
+        identity = publication_identity("post-1", DESTINATION, "immediate")
+        schedules.jobs[identity] = replace(
+            schedules.jobs[identity], status=ScheduleStatus.COMPLETED
+        )
+        retractions = cast("RetractionRepository", executor._retractions)
+        retractions.request_outcome = PublicationRetractionRequestOutcome.REQUESTED
+        second = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", second, "q2"))
+        assert retractions.requests == [(identity, 2)]
+        assert schedules.jobs[identity].status is ScheduleStatus.COMPLETED
+        assert operational.statuses[DESTINATION] == "retraction_pending"
+        assert (
+            "در صف حذف انتشار فوری" in cast("Gateway", executor._gateway).edits[-1][0]
+        )
+        selection = await cast("MemoryRepository", executor._approvals).get_selection(
+            "post-1", DESTINATION
+        )
+        assert selection.mode is SelectionMode.NONE
+
+    asyncio.run(scenario())
+
+
+def test_immediate_can_republish_only_after_retraction_completed() -> None:
+    async def scenario() -> None:
+        executor, tokens, schedules, _operational = build_executor()
+        retractions = cast("RetractionRepository", executor._retractions)
+        retractions.preparation_outcome = PublicationPreparationOutcome.BLOCKED
+        blocked = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert not await executor.execute(
+            BotUpdate(7, 7, "private", blocked, "blocked")
+        )
+        selection = await cast("MemoryRepository", executor._approvals).get_selection(
+            "post-1", DESTINATION
+        )
+        assert selection.mode is SelectionMode.NONE
+
+        retractions.preparation_outcome = PublicationPreparationOutcome.READY
+        identity = publication_identity("post-1", DESTINATION, "immediate")
+        schedules.jobs[identity] = ScheduledPublication(
+            identity,
+            "post-1",
+            DESTINATION,
+            NOW - timedelta(minutes=1),
+            status=ScheduleStatus.COMPLETED,
+            action="immediate",
+        )
+        allowed = await tokens.issue(
+            actor_id=7,
+            action=CallbackAction.TOGGLE_IMMEDIATE,
+            post_id="post-1",
+            destination_id=DESTINATION,
+            now=NOW,
+        )
+        assert await executor.execute(BotUpdate(7, 7, "private", allowed, "allowed"))
+        assert schedules.jobs[identity].status is ScheduleStatus.PENDING
+        assert schedules.jobs[identity].due_at == NOW
 
     asyncio.run(scenario())
 
@@ -555,6 +683,7 @@ def build_executor() -> tuple[
     keyboard = BuildDestinationKeyboard(tokens)
     operational = OperationalRepository()
     schedules = ScheduleRepository()
+    retractions = RetractionRepository()
     executor = ApprovalCallbackExecutor(
         tokens=tokens,
         authorize=authorize,
@@ -583,6 +712,7 @@ def build_executor() -> tuple[
         clock=lambda: NOW,
         runtime_active=lambda: _false(),
         timezone=ZoneInfo("Asia/Tehran"),
+        retractions=cast("Any", retractions),
     )
     return executor, tokens, schedules, operational
 
