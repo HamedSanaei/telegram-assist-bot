@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 import stat
 from contextlib import suppress
@@ -17,12 +18,16 @@ from telegram_assist_bot.application.ports import (
     MediaPermanentError,
     MediaTooLargeError,
     MediaTransientError,
+    OrphanMediaFile,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from telegram_assist_bot.domain.media import MediaIdentity, StoredMedia
+
+_ORPHAN_PREFIX_PATTERN = re.compile(r"[0-9a-f]{2}")
+_ORPHAN_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class LocalMediaStorage:
@@ -33,7 +38,7 @@ class LocalMediaStorage:
         root: Path,
         *,
         preview_enabled: bool = False,
-        preview_root: Path = Path("data/media-preview"),
+        preview_root: Path | None = None,
     ) -> None:
         """Create and protect the private owned storage root."""
         resolved = root.resolve()
@@ -44,6 +49,11 @@ class LocalMediaStorage:
         self._temporary = resolved / ".tmp"
         self._temporary.mkdir(exist_ok=True)
         self._preview_enabled = preview_enabled
+        # Keep generated previews inside the owned media root by default so they
+        # can never silently grow the container writable layer behind a mounted
+        # Docker media volume. An explicit preview_root remains an escape hatch.
+        if preview_root is None:
+            preview_root = resolved / ".preview"
         self._preview_root = preview_root.resolve()
 
     def _safe(self, relative_path: str) -> Path:
@@ -277,6 +287,73 @@ class LocalMediaStorage:
                 path.stat().st_mtime, tz=older_than.tzinfo
             )
             if modified <= older_than:
+                path.unlink(missing_ok=True)
+                removed += 1
+        return removed
+
+    async def list_orphan_candidates(
+        self, *, older_than: datetime, limit: int
+    ) -> tuple[OrphanMediaFile, ...]:
+        """List bounded canonical files older than the grace boundary."""
+        if older_than.tzinfo is None or older_than.utcoffset() is None:
+            raise ValueError("Cleanup boundary is invalid.")
+        if limit <= 0:
+            raise ValueError("Cleanup boundary is invalid.")
+        return await asyncio.to_thread(self._scan_orphan_candidates, older_than, limit)
+
+    def _scan_orphan_candidates(
+        self, older_than: datetime, limit: int
+    ) -> tuple[OrphanMediaFile, ...]:
+        """Walk only the canonical sha256 tree without following symlinks."""
+        candidates: list[OrphanMediaFile] = []
+        sha_directory = self._root / "sha256"
+        if not sha_directory.is_dir() or sha_directory.is_symlink():
+            return tuple(candidates)
+        for prefix_path in sorted(sha_directory.iterdir(), key=lambda path: path.name):
+            if len(candidates) >= limit:
+                break
+            if (
+                prefix_path.is_symlink()
+                or not prefix_path.is_dir()
+                or _ORPHAN_PREFIX_PATTERN.fullmatch(prefix_path.name) is None
+            ):
+                continue
+            for file_path in sorted(prefix_path.iterdir(), key=lambda path: path.name):
+                if len(candidates) >= limit:
+                    break
+                if (
+                    file_path.is_symlink()
+                    or not file_path.is_file()
+                    or _ORPHAN_HASH_PATTERN.fullmatch(file_path.name) is None
+                ):
+                    continue
+                modified = datetime.fromtimestamp(
+                    file_path.stat().st_mtime, tz=older_than.tzinfo
+                )
+                if modified > older_than:
+                    continue
+                candidates.append(
+                    OrphanMediaFile(
+                        storage_path=(f"sha256/{prefix_path.name}/{file_path.name}"),
+                        content_hash=file_path.name,
+                        size_bytes=file_path.stat().st_size,
+                    )
+                )
+        return tuple(candidates)
+
+    async def delete_previews(self, content_hash: str) -> int:
+        """Delete every generated preview belonging to one canonical hash."""
+        if not self._preview_enabled:
+            return 0
+        if _ORPHAN_HASH_PATTERN.fullmatch(content_hash) is None:
+            raise MediaPermanentError("Preview content hash is invalid.")
+        return await asyncio.to_thread(self._delete_preview_files, content_hash)
+
+    def _delete_preview_files(self, content_hash: str) -> int:
+        """Remove only regular owned preview files for one hash."""
+        removed = 0
+        for path in self._preview_root.glob(f"{content_hash}.*"):
+            if path.is_file() and not path.is_symlink():
                 path.unlink(missing_ok=True)
                 removed += 1
         return removed

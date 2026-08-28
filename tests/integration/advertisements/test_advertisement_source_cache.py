@@ -19,6 +19,7 @@ from telegram_assist_bot.application.ports import (
     AdvertisementSourceGroupDTO,
     AdvertisementSourceMessageDTO,
     AdvertisementSourceNotFoundError,
+    OrphanMediaFile,
     TelegramMediaReference,
 )
 from telegram_assist_bot.domain.advertisement_source import (
@@ -118,6 +119,11 @@ class FakeMediaStorage:
         self, *, older_than: datetime, limit: int
     ) -> int:
         return 0
+
+    async def list_orphan_candidates(
+        self, *, older_than: datetime, limit: int
+    ) -> tuple[OrphanMediaFile, ...]:
+        return ()
 
 
 def _make_test_campaign(
