@@ -477,6 +477,7 @@ def test_ports_package_public_api_is_complete_and_documented() -> None:
         "ProviderStateRepository",
         "ProviderStateRepositoryError",
         "OperationalApprovalRepository",
+        "OrphanMediaFile",
         "PublicationClaimOutcome",
         "PublicationClaimResult",
         "PublicationCollisionRepository",

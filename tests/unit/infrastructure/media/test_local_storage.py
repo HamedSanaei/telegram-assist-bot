@@ -1,6 +1,7 @@
 """Verify private atomic local media storage."""
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,7 @@ from telegram_assist_bot.application.ports import (
     MediaPermanentError,
     MediaTooLargeError,
     MediaTransientError,
+    OrphanMediaFile,
 )
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
@@ -223,6 +225,157 @@ def test_preview_extension_prefers_supported_filename_after_unknown_mime(
         )
         == "webp"
     )
+
+
+def test_preview_default_root_stays_inside_managed_root(tmp_path: Path) -> None:
+    storage = LocalMediaStorage(tmp_path / "media", preview_enabled=True)
+
+    async def scenario() -> None:
+        path, size, content_hash = await storage.store(
+            MediaIdentity(-1, 5), chunks(b"\xff\xd8\xffpreview"), maximum_bytes=100
+        )
+        media = StoredMedia(
+            MediaIdentity(-1, 5),
+            MediaType.PHOTO,
+            content_hash,
+            size,
+            "image/jpeg",
+            "image.jpeg",
+            path,
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        assert await storage.ensure_preview(media)
+        preview = tmp_path / "media" / ".preview" / f"{content_hash}.jpg"
+        assert preview.is_file()
+        # No uncontrolled container-path preview is created by default.
+        assert not (tmp_path / "data" / "media-preview").exists()
+
+    asyncio.run(scenario())
+
+
+def test_preview_deletion_removes_only_owned_preview_files(tmp_path: Path) -> None:
+    storage = LocalMediaStorage(tmp_path, preview_enabled=True)
+
+    async def scenario() -> None:
+        path, size, content_hash = await storage.store(
+            MediaIdentity(-1, 6), chunks(b"\xff\xd8\xffowned"), maximum_bytes=100
+        )
+        media = StoredMedia(
+            MediaIdentity(-1, 6),
+            MediaType.PHOTO,
+            content_hash,
+            size,
+            "image/jpeg",
+            "image.jpeg",
+            path,
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        assert await storage.ensure_preview(media)
+        preview = tmp_path / ".preview" / f"{content_hash}.jpg"
+        assert preview.is_file()
+        assert await storage.delete_previews(content_hash) == 1
+        assert not preview.exists()
+        assert await storage.delete_previews(content_hash) == 0
+
+    asyncio.run(scenario())
+
+
+def test_orphan_scan_only_returns_old_canonical_files(tmp_path: Path) -> None:
+    storage = LocalMediaStorage(tmp_path / "private")
+    root = tmp_path / "private"
+    old_stamp = (datetime.now(UTC) - timedelta(hours=2)).timestamp()
+
+    async def scenario() -> None:
+        await storage.store(MediaIdentity(-1, 1), chunks(b"tracked"), maximum_bytes=100)
+        prefix_dir = root / "sha256" / "ab"
+        prefix_dir.mkdir(parents=True, exist_ok=True)
+        old_file = prefix_dir / ("c" * 64)
+        old_file.write_bytes(b"old")
+        os.utime(old_file, (old_stamp, old_stamp))
+        fresh_file = prefix_dir / ("d" * 64)
+        fresh_file.write_bytes(b"fresh")
+        (prefix_dir / "not-a-hash").write_bytes(b"junk")
+        (prefix_dir / ("e" * 40)).write_bytes(b"short")
+        nested = root / "sha256" / "nothex"
+        nested.mkdir()
+        (nested / ("f" * 64)).write_bytes(b"nested")
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / ("g" * 64)).write_bytes(b"outside")
+        boundary = datetime.now(UTC) - timedelta(hours=1)
+        candidates = await storage.list_orphan_candidates(
+            older_than=boundary, limit=100
+        )
+        assert candidates == (
+            OrphanMediaFile(
+                storage_path=f"sha256/ab/{'c' * 64}",
+                content_hash="c" * 64,
+                size_bytes=3,
+            ),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_orphan_scan_rejects_symlink_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = LocalMediaStorage(tmp_path / "private")
+    root = tmp_path / "private"
+    old_stamp = (datetime.now(UTC) - timedelta(hours=2)).timestamp()
+
+    async def scenario() -> None:
+        prefix_dir = root / "sha256" / "ab"
+        prefix_dir.mkdir(parents=True, exist_ok=True)
+        old_file = prefix_dir / ("c" * 64)
+        old_file.write_bytes(b"old")
+        os.utime(old_file, (old_stamp, old_stamp))
+        original = Path.is_symlink
+
+        def is_symlink(path: Path) -> bool:
+            return path.name == "cd" or original(path)
+
+        monkeypatch.setattr(Path, "is_symlink", is_symlink)
+        escaped = root / "sha256" / "cd"
+        escaped.mkdir()
+        escaped_file = escaped / ("d" * 64)
+        escaped_file.write_bytes(b"escape")
+        os.utime(escaped_file, (old_stamp, old_stamp))
+        boundary = datetime.now(UTC) - timedelta(hours=1)
+        candidates = await storage.list_orphan_candidates(
+            older_than=boundary, limit=100
+        )
+        assert candidates == (
+            OrphanMediaFile(
+                storage_path=f"sha256/ab/{'c' * 64}",
+                content_hash="c" * 64,
+                size_bytes=3,
+            ),
+        )
+        assert escaped_file.exists()
+
+    asyncio.run(scenario())
+
+
+def test_orphan_scan_is_bounded_by_limit(tmp_path: Path) -> None:
+    storage = LocalMediaStorage(tmp_path / "private")
+    root = tmp_path / "private"
+    old_stamp = (datetime.now(UTC) - timedelta(hours=2)).timestamp()
+    prefix_dir = root / "sha256" / "ab"
+    prefix_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(5):
+        name = f"{index:02d}" + "0" * 62
+        path = prefix_dir / name
+        path.write_bytes(b"x")
+        os.utime(path, (old_stamp, old_stamp))
+
+    async def scenario() -> None:
+        boundary = datetime.now(UTC) - timedelta(hours=1)
+        candidates = await storage.list_orphan_candidates(older_than=boundary, limit=2)
+        assert len(candidates) == 2
+        assert candidates[0].storage_path.startswith("sha256/ab/")
+
+    asyncio.run(scenario())
 
 
 def test_store_rejects_invalid_limits_chunks_and_hash_collision(

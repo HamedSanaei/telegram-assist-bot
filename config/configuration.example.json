@@ -127,6 +127,8 @@
     "download_max_attempts": 3,
     "cleanup_batch_size": 100,
     "cleanup_interval_seconds": 3600,
+    "cleanup_max_batches_per_cycle": 10,
+    "cleanup_defer_seconds": 3600,
     "orphan_grace_seconds": 3600,
     "album_quiet_seconds": 3,
     "album_maximum_wait_seconds": 30,

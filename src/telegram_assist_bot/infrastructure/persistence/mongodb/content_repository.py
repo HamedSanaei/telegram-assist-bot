@@ -63,6 +63,14 @@ async def initialize_content_preparation_indexes(
         name="ix_media_retention_cleanup_v2",
     )
     await media.create_index(
+        [
+            ("cleaned_at", ASCENDING),
+            ("media_expires_at", ASCENDING),
+            ("cleanup_next_check_at", ASCENDING),
+        ],
+        name="ix_media_cleanup_deferral_v3",
+    )
+    await media.create_index(
         [("post_id", ASCENDING), ("storage_path", ASCENDING)],
         name="ix_media_post_path_v1",
     )
@@ -324,11 +332,22 @@ class MongoContentPreparationRepository:
             self._media.find(
                 {
                     "cleaned_at": None,
-                    "$or": [
-                        {"media_expires_at": {"$lte": now}},
+                    "$and": [
                         {
-                            "media_expires_at": {"$exists": False},
-                            "expires_at": {"$lte": now},
+                            "$or": [
+                                {"media_expires_at": {"$lte": now}},
+                                {
+                                    "media_expires_at": {"$exists": False},
+                                    "expires_at": {"$lte": now},
+                                },
+                            ]
+                        },
+                        {
+                            "$or": [
+                                {"cleanup_next_check_at": {"$exists": False}},
+                                {"cleanup_next_check_at": None},
+                                {"cleanup_next_check_at": {"$lte": now}},
+                            ]
                         },
                     ],
                 }
@@ -551,6 +570,24 @@ class MongoContentPreparationRepository:
             {"$set": {"cleaned_at": cleaned_at}},
         )
         return result.modified_count == 1
+
+    async def defer_media_cleanup(
+        self, identity: MediaIdentity, *, until: datetime
+    ) -> bool:
+        """Push one non-cleaned candidate to a bounded future attempt."""
+        result = await self._media.update_one(
+            {"_id": identity.key, "cleaned_at": None},
+            {"$set": {"cleanup_next_check_at": until}},
+        )
+        return result.modified_count == 1
+
+    async def has_media_record_for_storage_path(self, storage_path: str) -> bool:
+        """Return whether any active non-cleaned media record owns the path."""
+        document = await self._media.find_one(
+            {"storage_path": storage_path, "cleaned_at": None},
+            projection={"_id": 1},
+        )
+        return document is not None
 
     async def add_group_member(
         self, group: MediaGroup, member: MediaGroupMember

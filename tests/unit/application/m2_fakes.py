@@ -30,6 +30,7 @@ class FakePreparationRepository:
     cleaned: set[str] = field(default_factory=set)
     active_storage_paths: set[str] = field(default_factory=set)
     ready: set[str] = field(default_factory=set)
+    cleanup_next_check: dict[str, datetime] = field(default_factory=dict)
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
         return self.media.get(identity.key)
@@ -44,11 +45,23 @@ class FakePreparationRepository:
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:
         del orphan_before
-        return tuple(
-            item
-            for item in self.media.values()
-            if item.expires_at <= now and item.identity.key not in self.cleaned
-        )[:limit]
+        eligible = sorted(
+            (
+                (key, item)
+                for key, item in self.media.items()
+                if item.expires_at <= now and key not in self.cleaned
+            ),
+            key=lambda pair: pair[0],
+        )
+        selected: list[StoredMedia] = []
+        for key, item in eligible:
+            if len(selected) >= limit:
+                break
+            next_check = self.cleanup_next_check.get(key)
+            if next_check is not None and next_check > now:
+                continue
+            selected.append(item)
+        return tuple(selected)
 
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime
@@ -66,6 +79,20 @@ class FakePreparationRepository:
             return False
         self.cleaned.add(identity.key)
         return True
+
+    async def defer_media_cleanup(
+        self, identity: MediaIdentity, *, until: datetime
+    ) -> bool:
+        if identity.key in self.cleaned:
+            return False
+        self.cleanup_next_check[identity.key] = until
+        return True
+
+    async def has_media_record_for_storage_path(self, storage_path: str) -> bool:
+        return any(
+            key not in self.cleaned and item.storage_path == storage_path
+            for key, item in self.media.items()
+        )
 
     async def add_group_member(
         self, group: MediaGroup, member: MediaGroupMember

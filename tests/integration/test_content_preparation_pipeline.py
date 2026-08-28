@@ -181,12 +181,14 @@ def test_media_album_duplicate_pipeline_and_cleanup(
             await media_collection.update_one(
                 {"_id": first.identity.key}, {"$set": {"media_expires_at": now}}
             )
-            assert (
-                await CleanupExpiredMedia(
-                    repository, storage, orphan_grace=timedelta(hours=1), batch_size=10
-                ).execute(now=now)
-                == 1
-            )
+            result = await CleanupExpiredMedia(
+                repository,
+                storage,
+                orphan_grace=timedelta(hours=1),
+                batch_size=10,
+                defer_interval=timedelta(hours=1),
+            ).execute(now=now)
+            assert result.deleted == 1
             assert not await storage.exists(first.storage_path)
         finally:
             await close_mongodb_client(client, timeout_seconds=5)
