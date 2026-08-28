@@ -87,7 +87,10 @@ async def _build_cleanup_use_case(
 
     use_case = CleanupExpiredMedia(
         repository,
-        LocalMediaStorage(settings.media.root),
+        LocalMediaStorage(
+            settings.media.root,
+            preview_enabled=settings.media.preview_enabled,
+        ),
         orphan_grace=timedelta(seconds=settings.media.orphan_grace_seconds),
         batch_size=settings.media.cleanup_batch_size,
         defer_interval=timedelta(seconds=settings.media.cleanup_defer_seconds),

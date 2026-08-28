@@ -49,11 +49,13 @@ class Foundation:
     failure: BaseException | None = None
     shutdowns: int = 0
     logger_value: Logger = field(default_factory=Logger)
+    preview_enabled: bool = False
 
     @property
     def configuration(self) -> object:
         media = SimpleNamespace(
             root=Path("synthetic-media"),
+            preview_enabled=self.preview_enabled,
             orphan_grace_seconds=60,
             cleanup_batch_size=10,
             cleanup_interval_seconds=3600,
@@ -130,7 +132,9 @@ def setup(monkeypatch: pytest.MonkeyPatch, foundation: Foundation) -> None:
         "MongoContentPreparationRepository",
         lambda *_args, **_kwargs: object(),
     )
-    monkeypatch.setattr(cleanup_module, "LocalMediaStorage", lambda _root: object())
+    monkeypatch.setattr(
+        cleanup_module, "LocalMediaStorage", lambda _root, **_kwargs: object()
+    )
     monkeypatch.setattr(cleanup_module, "CleanupExpiredMedia", Cleanup)
 
 
@@ -190,6 +194,29 @@ def test_cleanup_maps_startup_and_runtime_failures(
     assert execute() is FoundationExitCode.INFRASTRUCTURE_ERROR
     assert runtime.shutdowns == 1
     assert runtime.logger.events[-1]["event_name"] == "media_cleanup_failed"
+
+
+def test_cleanup_composition_propagates_preview_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup wiring must hand the real preview flag to LocalMediaStorage."""
+    constructions: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def capturing_storage(*args: object, **kwargs: object) -> object:
+        constructions.append((args, kwargs))
+        return object()
+
+    for flag in (True, False):
+        foundation = Foundation(preview_enabled=flag)
+        setup(monkeypatch, foundation)
+        monkeypatch.setattr(cleanup_module, "LocalMediaStorage", capturing_storage)
+        Cleanup.result = CleanupBatchResult()
+        assert execute() is FoundationExitCode.SUCCESS
+
+    assert len(constructions) == 2
+    for flag, (args, kwargs) in zip((True, False), constructions, strict=True):
+        assert args == (Path("synthetic-media"),)
+        assert kwargs.get("preview_enabled") is flag
 
 
 def test_cleanup_propagates_cancellation_after_shutdown(
