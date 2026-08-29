@@ -10,7 +10,7 @@ from zipfile import BadZipFile, ZipFile
 
 EXPECTED_DISTRIBUTION = "telegram-assist-bot"
 EXPECTED_IMPORT_PACKAGE = "telegram_assist_bot"
-EXPECTED_VERSION = "1.1.2"
+EXPECTED_VERSION = "1.1.3"
 EXPECTED_PYTHON_SPECIFIERS = frozenset({">=3.12", "<3.15"})
 EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
     {

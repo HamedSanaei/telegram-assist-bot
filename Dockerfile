@@ -22,7 +22,7 @@ RUN uv build --no-build-isolation \
 
 FROM python:3.12.10-slim-bookworm AS runtime
 
-ARG VERSION=1.1.2
+ARG VERSION=1.1.3
 ARG VCS_REF=unknown
 
 LABEL org.opencontainers.image.title="Telegram Assist Bot" \
