@@ -79,6 +79,15 @@ class MediaSource(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class OrphanMediaFile:
+    """Describe one canonical filesystem media file with no active metadata."""
+
+    storage_path: str
+    content_hash: str
+    size_bytes: int
+
+
 class MediaStorage(Protocol):
     """Store and delete files confined to a private runtime root."""
 
@@ -104,6 +113,12 @@ class MediaStorage(Protocol):
         self, *, older_than: datetime, limit: int
     ) -> int:
         """Delete a bounded set of stale owned temporary files."""
+        ...
+
+    async def list_orphan_candidates(
+        self, *, older_than: datetime, limit: int
+    ) -> tuple[OrphanMediaFile, ...]:
+        """List bounded canonical files older than the grace boundary."""
         ...
 
 
@@ -198,6 +213,16 @@ class ContentPreparationRepository(Protocol):
         self, identity: MediaIdentity, *, cleaned_at: datetime
     ) -> bool:
         """Conditionally mark one media record cleaned."""
+        ...
+
+    async def defer_media_cleanup(
+        self, identity: MediaIdentity, *, until: datetime
+    ) -> bool:
+        """Conditionally push one non-cleaned candidate to a future attempt."""
+        ...
+
+    async def has_media_record_for_storage_path(self, storage_path: str) -> bool:
+        """Return whether any active non-cleaned media record owns the path."""
         ...
 
     async def add_group_member(

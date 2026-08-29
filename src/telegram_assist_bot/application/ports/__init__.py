@@ -85,6 +85,7 @@ from telegram_assist_bot.application.ports.media import (
     MediaStorage,
     MediaTooLargeError,
     MediaTransientError,
+    OrphanMediaFile,
 )
 from telegram_assist_bot.application.ports.native_scheduling import (
     NativeScheduleCommand,
@@ -284,6 +285,7 @@ __all__ = (
     "NativeScheduleStatus",
     "NativeScheduledMessage",
     "OperationalApprovalRepository",
+    "OrphanMediaFile",
     "PostClaimOutcome",
     "PostClaimRequest",
     "PostClaimResult",

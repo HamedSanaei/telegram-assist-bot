@@ -399,6 +399,8 @@ class MediaStorageConfig(_FrozenConfigModel):
     download_max_attempts: Annotated[StrictInt, Field(ge=1, le=10)] = 3
     cleanup_batch_size: Annotated[StrictInt, Field(ge=1, le=1000)] = 100
     cleanup_interval_seconds: Annotated[StrictInt, Field(ge=60, le=604_800)] = 3600
+    cleanup_max_batches_per_cycle: Annotated[StrictInt, Field(ge=1, le=1000)] = 10
+    cleanup_defer_seconds: Annotated[StrictInt, Field(ge=60, le=604_800)] = 3600
     orphan_grace_seconds: Annotated[StrictInt, Field(ge=60, le=604800)] = 3600
     album_quiet_seconds: Annotated[StrictInt, Field(ge=1, le=300)] = 3
     album_maximum_wait_seconds: Annotated[StrictInt, Field(ge=1, le=3600)] = 30

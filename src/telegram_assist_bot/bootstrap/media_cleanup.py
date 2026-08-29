@@ -7,7 +7,10 @@ import signal
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from telegram_assist_bot.application.cleanup_expired_media import CleanupExpiredMedia
+from telegram_assist_bot.application.cleanup_expired_media import (
+    CleanupBatchResult,
+    CleanupExpiredMedia,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationApplication,
     FoundationExitCode,
@@ -84,12 +87,30 @@ async def _build_cleanup_use_case(
 
     use_case = CleanupExpiredMedia(
         repository,
-        LocalMediaStorage(settings.media.root),
+        LocalMediaStorage(
+            settings.media.root,
+            preview_enabled=settings.media.preview_enabled,
+        ),
         orphan_grace=timedelta(seconds=settings.media.orphan_grace_seconds),
         batch_size=settings.media.cleanup_batch_size,
+        defer_interval=timedelta(seconds=settings.media.cleanup_defer_seconds),
         on_candidate_error=report_candidate_error,
     )
     return use_case, settings
+
+
+def _batch_result_fields(result: CleanupBatchResult) -> dict[str, int]:
+    """Map one cleanup result to bounded observable metric fields."""
+    return {
+        "scanned": result.scanned,
+        "deleted": result.deleted,
+        "deferred": result.deferred,
+        "orphan_deleted": result.orphan_deleted,
+        "temporary_deleted": result.temporary_deleted,
+        "failed": result.failed,
+        "deleted_bytes": result.deleted_bytes,
+        "orphan_deleted_bytes": result.orphan_deleted_bytes,
+    }
 
 
 async def run_media_cleanup(
@@ -103,11 +124,11 @@ async def run_media_cleanup(
     try:
         await foundation.start(configuration_path, environ=environ)
         use_case, _settings = await _build_cleanup_use_case(foundation)
-        cleaned = await use_case.execute(now=datetime.now(UTC))
+        result = await use_case.execute(now=datetime.now(UTC))
         foundation.logger.emit(
             level=LogLevel.INFO,
             event_name="media_cleanup_completed",
-            fields={"cleaned_item_count": cleaned},
+            fields=_batch_result_fields(result),
         )
     except asyncio.CancelledError:
         await foundation.shutdown()
@@ -150,10 +171,20 @@ async def run_media_cleanup_worker(
                 except (NotImplementedError, RuntimeError, ValueError):
                     continue
                 registered.append(signum)
+
+        async def observe_batch(result: CleanupBatchResult) -> None:
+            foundation.logger.emit(
+                level=LogLevel.INFO,
+                event_name="media_cleanup_batch_completed",
+                fields=_batch_result_fields(result),
+            )
+
         iterations = await PeriodicMediaCleanupWorker(
             use_case,
             _SystemClock(),
             interval_seconds=settings.media.cleanup_interval_seconds,
+            max_batches_per_cycle=settings.media.cleanup_max_batches_per_cycle,
+            on_batch_completed=observe_batch,
         ).run(shutdown)
         foundation.logger.emit(
             level=LogLevel.INFO,

@@ -27,6 +27,8 @@ def test_missing_media_retention_fields_use_safe_defaults(
     media = _media(valid_payload)
     media.pop("retention_days")
     media.pop("cleanup_interval_seconds")
+    media.pop("cleanup_max_batches_per_cycle")
+    media.pop("cleanup_defer_seconds")
 
     loaded = load_configuration(
         configuration_writer(valid_payload), environ=synthetic_environ
@@ -34,6 +36,8 @@ def test_missing_media_retention_fields_use_safe_defaults(
 
     assert loaded.settings.media.retention_days == 2
     assert loaded.settings.media.cleanup_interval_seconds == 3600
+    assert loaded.settings.media.cleanup_max_batches_per_cycle == 10
+    assert loaded.settings.media.cleanup_defer_seconds == 3600
 
 
 def test_custom_media_retention_settings_are_loaded(
@@ -44,6 +48,8 @@ def test_custom_media_retention_settings_are_loaded(
     media = _media(valid_payload)
     media["retention_days"] = 30
     media["cleanup_interval_seconds"] = 600
+    media["cleanup_max_batches_per_cycle"] = 20
+    media["cleanup_defer_seconds"] = 120
 
     loaded = load_configuration(
         configuration_writer(valid_payload), environ=synthetic_environ
@@ -51,6 +57,8 @@ def test_custom_media_retention_settings_are_loaded(
 
     assert loaded.settings.media.retention_days == 30
     assert loaded.settings.media.cleanup_interval_seconds == 600
+    assert loaded.settings.media.cleanup_max_batches_per_cycle == 20
+    assert loaded.settings.media.cleanup_defer_seconds == 120
 
 
 @pytest.mark.parametrize(
@@ -67,6 +75,12 @@ def test_custom_media_retention_settings_are_loaded(
         ("cleanup_interval_seconds", "3600"),
         ("cleanup_interval_seconds", False),
         ("cleanup_interval_seconds", 604_801),
+        ("cleanup_max_batches_per_cycle", 0),
+        ("cleanup_max_batches_per_cycle", 1001),
+        ("cleanup_max_batches_per_cycle", "10"),
+        ("cleanup_defer_seconds", 59),
+        ("cleanup_defer_seconds", 604_801),
+        ("cleanup_defer_seconds", 60.5),
     ],
 )
 def test_invalid_media_retention_values_report_exact_path(
