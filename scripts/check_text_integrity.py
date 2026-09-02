@@ -1,4 +1,4 @@
-"""Validate repository text files for UTF-8 and common corruption markers."""
+"""Validate repository text files for UTF-8, corruption, and AI attribution."""
 
 from __future__ import annotations
 
@@ -16,6 +16,32 @@ _GIT_TIMEOUT_SECONDS = 30.0
 _REPLACEMENT_CHARACTER = chr(0xFFFD)
 _BOM_CHARACTER = chr(0xFEFF)
 _QUESTION_MARK_RUN = re.compile(r"\?{4,}")
+_AI_ATTRIBUTION_NAMES = (
+    "codebuff",
+    "codex",
+    "claude",
+    "copilot",
+    "cursor",
+    "gemini",
+    "chatgpt",
+    "openai",
+    "anthropic",
+)
+_AI_NAMES_ALTERNATION = "|".join(re.escape(name) for name in _AI_ATTRIBUTION_NAMES)
+_PROHIBITED_ATTRIBUTION_RE = re.compile(
+    r"^\s*(?:"
+    r"co-authored-by\s*:\s*|"
+    r"co-authored by\s+|"
+    r"generated (?:with|by)\s+|"
+    r"created (?:with|by)\s+|"
+    r"written by\s+|"
+    r"implemented by\s+|"
+    r"assisted by\s+|"
+    r"powered by\s+|"
+    r"authored by\s+"
+    rf")({_AI_NAMES_ALTERNATION})\b",
+    re.IGNORECASE,
+)
 _MOJIBAKE_CODE_POINTS = frozenset(
     {
         0x00C2,
@@ -81,6 +107,7 @@ class IssueCode(StrEnum):
     REPLACEMENT_CHARACTER = "replacement_character"
     MOJIBAKE = "mojibake"
     QUESTION_MARK_RUN = "question_mark_run"
+    PROHIBITED_ATTRIBUTION = "prohibited_attribution"
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +236,7 @@ _ISSUE_MESSAGES: dict[IssueCode, str] = {
     IssueCode.REPLACEMENT_CHARACTER: "Unicode replacement character detected",
     IssueCode.MOJIBAKE: "common mojibake marker detected",
     IssueCode.QUESTION_MARK_RUN: "unexpected run of ASCII question marks detected",
+    IssueCode.PROHIBITED_ATTRIBUTION: "AI coding agent attribution is prohibited",
 }
 
 
@@ -408,6 +436,21 @@ def scan_text(
                     code=IssueCode.QUESTION_MARK_RUN,
                     line=line_number,
                     column=question_mark_match.start() + 1,
+                ),
+                line,
+                allowlist,
+                allowance_usage,
+                issues,
+            )
+
+        attribution_match = _PROHIBITED_ATTRIBUTION_RE.search(line)
+        if attribution_match is not None:
+            _record_issue(
+                TextIssue(
+                    path=path,
+                    code=IssueCode.PROHIBITED_ATTRIBUTION,
+                    line=line_number,
+                    column=attribution_match.start() + 1,
                 ),
                 line,
                 allowlist,
