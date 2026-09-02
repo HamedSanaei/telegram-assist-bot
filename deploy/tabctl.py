@@ -12,7 +12,6 @@ import os
 import platform
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tarfile
@@ -924,6 +923,54 @@ def _copy_restored_file(
         destination.chmod(mode)
 
 
+def _write_runtime_config(metadata: InstanceMetadata, payload: bytes) -> None:
+    """Overwrite configuration.json as the configured runtime user.
+
+    The instance configuration is intentionally owned by the runtime UID
+    (group-readable by the host manager), so a host-side write can fail with
+    PermissionError when the manager is a different, unprivileged user.  This
+    helper streams the verified payload through stdin into a narrowly scoped
+    ephemeral container that runs as the configured runtime UID/GID and bind
+    mounts the instance config directory read-write.  Truncating the existing
+    file in place preserves its runtime ownership; mode 0640 is restored
+    explicitly.  Configuration bytes never appear in argv or output.
+    """
+    root = Path(metadata.installation_path)
+    coordinates = _read_env_coordinates(root)
+    runtime_uid = coordinates.get("TAB_RUNTIME_UID", "10001")
+    runtime_gid = coordinates.get("TAB_RUNTIME_GID", "10001")
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--interactive",
+        "--pull",
+        "never",
+        "--network",
+        "none",
+        "--user",
+        f"{runtime_uid}:{runtime_gid}",
+        "--volume",
+        f"{root / 'config'}:/restore/config",
+        "--entrypoint",
+        "/bin/sh",
+        metadata.application_image,
+        "-ec",
+        "cat > /restore/config/configuration.json; "
+        "chmod 0640 /restore/config/configuration.json",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603
+            command, check=False, input=payload, timeout=120
+        ).returncode
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise TabctlError(
+            "Configuration restore could not run.", EXIT_INFRASTRUCTURE
+        ) from error
+    if result != 0:
+        raise TabctlError("Configuration restore failed.", EXIT_INFRASTRUCTURE)
+
+
 def restore_backup(
     metadata: InstanceMetadata,
     backup_id: str,
@@ -971,7 +1018,7 @@ def restore_backup(
         raise TabctlError("Services could not be stopped.", EXIT_INFRASTRUCTURE)
 
     def rollback_files() -> None:
-        (target_root / "config" / "configuration.json").write_bytes(original_config)
+        _write_runtime_config(target, original_config)
         if original_env is not None:
             (target_root / ".env").write_bytes(original_env)
         if original_compose is not None:
@@ -995,12 +1042,7 @@ def restore_backup(
                     decrypt=True,
                 )
         if (staging / "configuration.json").is_file():
-            config_stat = (target_root / "config" / "configuration.json").stat()
-            _copy_restored_file(
-                staging / "configuration.json",
-                target_root / "config" / "configuration.json",
-                mode=stat.S_IMODE(config_stat.st_mode),
-            )
+            _write_runtime_config(target, (staging / "configuration.json").read_bytes())
         if to_instance is None:
             if (staging / BACKUP_ENV_FILE).is_file():
                 _copy_restored_file(

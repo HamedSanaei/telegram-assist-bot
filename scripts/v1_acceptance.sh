@@ -57,6 +57,33 @@ cleanup_resources() {
   docker image rm "$IMAGE" >/dev/null 2>&1 || true
 }
 
+remove_acceptance_tree() {
+  local canonical
+  canonical="$(realpath -m "$TMP_ROOT" 2>/dev/null)"
+  if [[ -z "$canonical" || "$canonical" == "/" \
+    || "$canonical" == "$(realpath -m /tmp 2>/dev/null)" ]]; then
+    echo "Refusing to remove unsafe acceptance root: $TMP_ROOT" >&2
+    return 1
+  fi
+  case "$canonical" in
+    /tmp/tmp.*) ;;
+    *)
+      echo "Refusing to remove non-mktemp acceptance root: $TMP_ROOT" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$canonical" == "$(realpath -m "$ROOT" 2>/dev/null)"* \
+    || "$canonical" == "$(realpath -m "$HOME" 2>/dev/null)"* ]]; then
+    echo "Refusing to remove acceptance root inside repo or HOME: $TMP_ROOT" >&2
+    return 1
+  fi
+  # Runtime containers own acceptance files as UID 10001, so an unprivileged
+  # host manager cannot delete them.  Reclaim ownership of exactly this
+  # harness-created tree before removing it; never recurse elsewhere.
+  sudo chown -R "$(id -u):$(id -g)" "$canonical"
+  rm -rf "$canonical"
+}
+
 finish() {
   local exit_code=$?
   trap - EXIT
@@ -67,7 +94,11 @@ finish() {
   if ((CLEANED == 0)); then
     cleanup_resources
   fi
-  rm -rf "$TMP_ROOT"
+  if ! remove_acceptance_tree; then
+    if ((exit_code == 0)); then
+      exit_code=1
+    fi
+  fi
   exit "$exit_code"
 }
 trap finish EXIT

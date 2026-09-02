@@ -1028,6 +1028,146 @@ def test_restore_conflict_requires_to_instance(
     assert "TAB_MONGODB_PASSWORD" in (second / ".env").read_text(encoding="utf-8")
 
 
+def _restore_fixture(
+    tabctl: ModuleType, path: Path, backup_id: str, backup_config: bytes
+) -> Path:
+    """Scaffold a verified single-component backup next to an instance."""
+    backup_root = path / "backups" / backup_id
+    backup_root.mkdir(parents=True)
+    (backup_root / "configuration.json").write_bytes(backup_config)
+    manifest = {
+        "schema_version": 1,
+        "backup_id": backup_id,
+        "instance_name": "demo",
+        "timestamp": "2026-01-01T01:00:00+00:00",
+        "application_version": "1.0.0",
+        "config_schema_version": 1,
+        "mongodb_version": "7.0.32",
+        "mode": "core",
+        "included_components": ["configuration.json"],
+        "encrypted": False,
+        "checksums": {
+            "configuration.json": tabctl._sha256(backup_root / "configuration.json")
+        },
+    }
+    (backup_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return backup_root
+
+
+def test_restore_config_writes_through_runtime_boundary(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restore must not depend on the host manager owning configuration.json."""
+    path = tmp_path / "first"
+    other = tmp_path / "second"
+    _instance(path)
+    _instance(other, project="telegram-assist-other")
+    source = tabctl.import_instance(path, "demo")
+    tabctl.import_instance(other, "other")
+    other_config = (other / "config" / "configuration.json").read_bytes()
+    backup_id = "20260101T010000.000000Z"
+    backup_config = b'{"restored": true, "key": "value"}'
+    _restore_fixture(tabctl, path, backup_id, backup_config)
+
+    commands: list[list[str]] = []
+    payloads: list[bytes] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        commands.append(command)
+        payload = cast("bytes", kwargs.get("input", b""))
+        payloads.append(payload)
+        if "/bin/sh" in command and any(
+            "/restore/config/configuration.json" in arg for arg in command
+        ):
+            volume = command[command.index("--volume") + 1]
+            host_dir = Path(volume.rsplit(":", 1)[0])
+            (host_dir / "configuration.json").write_bytes(payload)
+        return _Result()
+
+    monkeypatch.setattr(tabctl, "create_backup", lambda *a, **k: "pre")
+    monkeypatch.setattr(tabctl, "_compose", lambda *a: 0)
+    monkeypatch.setattr(tabctl, "_app_check", lambda *a: 0)
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+
+    tabctl.restore_backup(source, backup_id, confirmed=True)
+
+    write_commands = [
+        index
+        for index, command in enumerate(commands)
+        if "/bin/sh" in command
+        and any("/restore/config/configuration.json" in arg for arg in command)
+    ]
+    assert len(write_commands) == 1
+    write_command = commands[write_commands[0]]
+    assert write_command[:2] == ["docker", "run"]
+    assert write_command[write_command.index("--user") + 1] == "10001:10001"
+    assert write_command[write_command.index("--network") + 1] == "none"
+    volume = write_command[write_command.index("--volume") + 1]
+    assert Path(volume.rsplit(":", 1)[0]).resolve() == (path / "config").resolve()
+    assert "--pull" in write_command
+    assert all(backup_config not in arg.encode() for arg in write_command)
+    assert payloads[write_commands[0]] == backup_config
+    assert (path / "config" / "configuration.json").read_bytes() == backup_config
+    assert (other / "config" / "configuration.json").read_bytes() == other_config
+
+
+def test_restore_rollback_config_uses_runtime_boundary(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback restores the original config through the runtime boundary."""
+    path = tmp_path / "first"
+    _instance(path)
+    source = tabctl.import_instance(path, "demo")
+    original_config = (path / "config" / "configuration.json").read_bytes()
+    backup_id = "20260101T020000.000000Z"
+    backup_config = b'{"restored": true, "key": "value"}'
+    _restore_fixture(tabctl, path, backup_id, backup_config)
+
+    commands: list[list[str]] = []
+    payloads: list[bytes] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        commands.append(command)
+        payload = cast("bytes", kwargs.get("input", b""))
+        payloads.append(payload)
+        if "/bin/sh" in command and any(
+            "/restore/config/configuration.json" in arg for arg in command
+        ):
+            volume = command[command.index("--volume") + 1]
+            host_dir = Path(volume.rsplit(":", 1)[0])
+            (host_dir / "configuration.json").write_bytes(payload)
+        return _Result()
+
+    monkeypatch.setattr(tabctl, "create_backup", lambda *a, **k: "pre")
+    monkeypatch.setattr(tabctl, "_compose", lambda *a: 0)
+    monkeypatch.setattr(tabctl, "_app_check", lambda *a: 1)
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+
+    with pytest.raises(tabctl.TabctlError, match="failed health checks"):
+        tabctl.restore_backup(source, backup_id, confirmed=True)
+
+    write_commands = [
+        index
+        for index, command in enumerate(commands)
+        if "/bin/sh" in command
+        and any("/restore/config/configuration.json" in arg for arg in command)
+    ]
+    assert len(write_commands) == 2
+    assert payloads[write_commands[0]] == backup_config
+    assert payloads[write_commands[1]] == original_config
+    assert (path / "config" / "configuration.json").read_bytes() == original_config
+
+
 def test_default_instance_fallback_uses_single_registered_instance(
     tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

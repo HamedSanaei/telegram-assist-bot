@@ -20,9 +20,9 @@ def instance(tmp_path: Path) -> Path:
     path = tmp_path / "demo"
     path.mkdir(parents=True)
     (path / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
-    fake_token = "123456:" + ("A" * 35)
+    fake_token = "123456:" + ("A" * 35)  # pragma: allowlist secret
     (path / ".env").write_text(
-        "COMPOSE_PROJECT_NAME=telegram-assist-demo\n"
+        "COMPOSE_PROJECT_NAME=telegram-assist-demo\n"  # pragma: allowlist secret
         "TAB_IMAGE=example.invalid/app:1.0.0\n"
         "TAB_MONGODB_DATABASE=telegram_assist_demo\n"
         "TAB_MONGODB_IMAGE=mongo:7.0.32\n"
