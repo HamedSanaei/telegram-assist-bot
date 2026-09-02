@@ -689,6 +689,26 @@
   operator با ترتیب `stop`، `login`، `start` است؛ Config، Session، Media،
   MongoDB و volumeها در update مهاجرت یا بازنویسی نمی‌شوند.
 
+## ADR-047 — منوی مدیریت Bash به‌عنوان UX اولیه با مدیر Python به‌عنوان backend
+
+- **Status:** Accepted
+- **Context:** README عملیاتی پر از فرمان‌های Docker Compose/Python بود و
+  کاربر عادی باید ساختار `.env`، volume و Config را می‌فهمید. UX هدف، تجربهٔ
+  یک‌فرمانی/منومحور مشابه BackPack و 3x-ui است بدون بازنویسی منطق Domain در
+  Bash.
+- **Decision:** `deploy/menu.sh` (Bash خالص، بدون وابستگی terminal) منوی تعاملی
+  اولیه است و فقط orchestration می‌کند؛ هر عملیات از طریق مدیر Python
+  `deploy/tabctl.py` (که API متنی و `status --json` ارائه می‌دهد) و Docker
+  Compose اجرا می‌شود. `deploy/tabctl.sh` بدون آرگومان منو و با آرگومان همان
+  CLI قبلی را اجرا می‌کند. نصب پیش‌فرض instance به نام `default` دارد و پس از
+  نصب تعاملی منو را باز می‌کند. Backup/Restore با حالت‌های core/full، manifest
+  و checksum، رمزنگاری اختیاری و restore با `--to-instance` گسترش یافت.
+- **Consequences:** CLIهای موجود و اتوماسیون بدون تغییر کار می‌کنند؛ خروجی
+  ساختاریافته (`status --json`) پایهٔ اتوماسیون آینده است. PowerShell parity
+  عمداً عقب‌تر است و دلیلی برای شکستن رفتار Windows نیست. بازنویسی Domain در
+  Bash ممنوع است و همهٔ تغییرات Config از طریق mutation تراکنشی Python انجام
+  می‌شود.
+
 ## ADR-046 — fallback متنی دکمه‌های URL در مرز User API
 
 - **Status:** Accepted

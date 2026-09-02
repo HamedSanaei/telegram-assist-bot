@@ -13,202 +13,77 @@ Config، Logging، MongoDB و vertical slice دریافت متن Telegram User A
 مقصد، Toggle اتمیک و همگام‌سازی چندمدیره نیز در Milestone 3 آماده شده‌اند؛
 انتشار فوری متن/Media/Album و زمان‌بندی بومی Telegram با outbox پایدار نیز آماده است.
 
-## نصب Production
+## نصب و مدیریت Production
 
-پیش‌نیاز Linux یک توزیع ۶۴بیتی Debian/Ubuntu یا Fedora با `curl` و دسترسی
-`sudo` است؛ Installer در صورت نیاز Docker Engine و Compose Plugin رسمی را نصب
-می‌کند. در Windows 10/11 64-bit، PowerShell 5.1+، WSL2 و Docker Desktop لازم
-است. نصب Docker Desktop ممکن است Restart و سپس اجرای دوبارهٔ همان فرمان را
-لازم کند.
-
-Linux، از PowerShell یا shellای که Environmentهای لازم را تنظیم کرده است:
+نصب عادی Linux فقط یک فرمان است؛ Installer در صورت نیاز Docker Engine و
+Compose Plugin رسمی را نصب می‌کند، instance پیش‌فرض `default` را می‌سازد،
+تنظیمات Telegram و مدیران را هدایت‌شده می‌گیرد (Secretها فقط در فایل محلی
+`.env` با دسترسی محدود می‌مانند)، login می‌کند، سرویس‌ها را بالا می‌آورد و در
+پایان منوی مدیریت را باز می‌کند:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.sh -o install.sh
-bash install.sh --instance first
+bash <(curl -fsSL https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.sh)
 ```
 
 Windows PowerShell:
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.ps1 -OutFile install.ps1
-.\install.ps1 -Instance first
+.\install.ps1
 ```
 
-Installer ورودی‌های Telegram و مدیر را هدایت‌شده دریافت می‌کند و Secretها را
-فقط در فایل محلی `.env` با دسترسی محدود نگه می‌دارد. نصب Instance دوم روی همان
-Server collision پورت ندارد:
-
-```bash
-bash install.sh --instance second --retention-days 7
-```
-
-ورودی چند مدیر و چند Source در یک نصب:
-
-```bash
-bash install.sh --instance example \
-  --admin-user-ids "100000001,100000002" \
-  --source-usernames "@SourceOne,https://t.me/SourceTwo"
-```
-
-```powershell
-.\install.ps1 -Instance second -RetentionDays 7
-```
-
-```powershell
-.\install.ps1 -Instance example `
-  -AdminUserIds "100000001,100000002" `
-  -SourceUsernames "@SourceOne,https://t.me/SourceTwo"
-```
-
-Environmentهای plural `TAB_ADMIN_USER_IDS` و `TAB_SOURCE_USERNAMES` بر
-`TAB_ADMIN_USER_ID` و `TAB_SOURCE_USERNAME` مقدم‌اند. Config تازه هیچ
-AI provider، Advertisement campaign یا reference نمونهٔ فعالی ندارد و فقط
-Secretهای Telegram/MongoDB ضروری را درخواست می‌کند.
-
-نام Instance، Compose project، MongoDB database/volume، Network، Session،
-Media، Config و `.env` هر نصب مستقل است. مسیر پیش‌فرض Linux برابر
-`~/.local/share/telegram-assist-bot/<instance>` و مسیر Windows برابر
-`%LOCALAPPDATA%\TelegramAssistBot\instances\<instance>` است. retention فایل
-Media مستقل و پیش‌فرض دو روز است؛ Post metadata و تاریخچهٔ Duplicate همچنان
-۱۴ روز نگه داشته می‌شوند.
-
-Compose به‌طور پیش‌فرض از pin آزموده‌شدهٔ `mongo:7.0.32` استفاده می‌کند.
-Image پیش‌فرض نصب تازه
-`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.3` است؛ Instance importشده Image
-ثبت‌شدهٔ خودش را تا update صریح حفظ می‌کند.
-Installer Linux Kernel تشخیص‌داده‌شده، Image انتخاب‌شده و تصمیم سازگاری را پیش
-از startup چاپ می‌کند؛ انتخاب صریح MongoDB 8.x روی Kernel 6.19+ رد می‌شود.
-Override پشتیبانی‌شده با `--mongodb-image mongo:X.Y.Z` یا
-`TAB_MONGODB_IMAGE` انجام می‌شود و rerun آن را حفظ می‌کند. سرویس‌های Application
-همچنان non-root هستند؛ آماده‌سازی permission خودکار است و به `chmod`/`chown`
-دستی نیاز ندارد.
-
-## مدیریت Instance
-
-اولین نصب، مدیر سراسری `tabctl` را در `/usr/local/bin/tabctl` برای root یا
-`~/.local/bin/tabctl` برای کاربر Linux نصب می‌کند. Windows فایل
-`%LOCALAPPDATA%\TelegramAssistBot\bin\tabctl.ps1` را نصب و مسیر آن را به PATH
-کاربر اضافه می‌کند؛ shell بازِ فعلی ممکن است یک‌بار بازگشایی شود. اجرای بدون
-آرگومان menu تعاملی می‌دهد:
+تمام عملیات روزانه از منوی تعاملی انجام می‌شود:
 
 ```bash
 tabctl
-tabctl instance list
-tabctl --instance example status
-tabctl --instance example admin add "100000002,100000003"
-tabctl --instance example source add "@SourceTwo,https://t.me/SourceThree"
-tabctl --instance example logs --service runtime --tail 200
-tabctl --instance example update --check
-tabctl --instance example backup create
-tabctl --instance example repair --dry-run
 ```
 
-نصب موجود با path دلخواه و نام متفاوت بدون حذف داده import می‌شود:
+`tabctl` بدون آرگومان منوی مدیریت را باز می‌کند: Service، Telegram Session،
+Bot، کانال‌های منبع و مقصد، مدیران، Config، Logs، صف‌های انتشار/تأیید، Media،
+Backup/Restore، Docker، Update، Instanceها، Doctor و Uninstall. کاربر عادی
+هرگز به Docker Compose، MongoDB یا ساختار Config نیاز ندارد. فرمان‌های
+غیرتعاملی قبلی برای اتوماسیون بدون تغییر باقی مانده‌اند:
 
 ```bash
-tabctl instance import --path /opt/telegram-assist-bot/instances/admin1 \
-  --name example
+tabctl status
+tabctl --instance foo status
+tabctl --instance foo admin add "100000002"
 ```
 
-metadata نسخه‌دار هیچ Secretی ندارد؛ `unregister` فقط registry را تغییر می‌دهد
-و container، volume، Config، Session و Media را دست‌نخورده می‌گذارد.
-
-Backup شامل dump فشردهٔ MongoDB، Config فاقد Secret مستقیم و metadata است؛
-`.env` و Telegram Session/Media عمداً داخل آن نیستند:
+نصب Instance دوم مستقل است:
 
 ```bash
-tabctl --instance example backup list
-tabctl --instance example backup verify BACKUP_ID
-tabctl --instance example backup restore BACKUP_ID --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main/install.sh) --instance second --retention-days 7
 ```
 
-Update فقط SemVer دقیق را می‌پذیرد، پیش از تغییر backup می‌گیرد و failure را
-به Image/Config قبلی rollback می‌کند:
+Backup کامل migration (Config، MongoDB، Session، Media و `.env`) و Restore با
+تأیید از منوی ۱۲ انجام می‌شود؛ برای جابجایی سرور archive پورتابل خروجی
+بگیرید. نام Instance، Compose project، MongoDB، Session، Media و Config هر
+نصب مستقل است و مسیر پیش‌فرض Linux برابر
+`~/.local/share/telegram-assist-bot/<instance>` است. Image پیش‌فرض نصب تازه
+`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.3` و MongoDB پیش‌فرض
+`mongo:7.0.32` است.
 
-```bash
-tabctl --instance example update --version 1.1.3
-tabctl --instance example update --rollback
-tabctl --instance example diagnostics
-tabctl --instance example diagnostics export
-```
-
-برای adoption و upgrade نصب Production موجود با نام واقعی `kingofilter` ولی
-دایرکتوری legacy به نام `admin1`:
-
-```bash
-tabctl instance import \
-  --path /opt/telegram-assist-bot/instances/admin1 \
-  --name kingofilter
-
-tabctl --instance kingofilter repair --dry-run
-tabctl --instance kingofilter repair --apply
-tabctl --instance kingofilter backup create
-tabctl --instance kingofilter update --check
-tabctl --instance kingofilter update --version 1.1.3
-tabctl --instance kingofilter status
-```
-
-در صورت نیاز به rollback:
-
-```bash
-tabctl --instance kingofilter update --rollback
-```
-
-repair ابتدا backup می‌سازد، volume/Session/Media را حذف نمی‌کند و `.env` را
-regenerate نمی‌کند. `repair --apply` تأیید تعاملی می‌خواهد؛ برای اجرای
-non-interactive فقط پس از بازبینی plan می‌توان `--yes` افزود. Import نام Instance
-را از basename مسیر حدس نمی‌زند و Image ثبت‌شدهٔ `1.0.0` تا اجرای صریح update
-حفظ می‌شود. `diagnostics export` فقط گزارش redacted را archive می‌کند.
-
-از پوشهٔ Instance در Linux:
-
-```bash
-./manage.sh login
-./manage.sh start
-./manage.sh status
-./manage.sh logs
-./manage.sh restart
-./manage.sh stop
-./manage.sh update
-./manage.sh backup
-./manage.sh config-check
-./manage.sh repair permissions
-./manage.sh uninstall
-./manage.sh purge --yes
-```
-
-در Windows همین عملیات با
-`.\manage.ps1 login|start|status|logs|restart|stop|update|backup|config-check|uninstall`
-و حذف صریح با `.\manage.ps1 purge -Yes` انجام می‌شود. `uninstall` containerها
-را پایین می‌آورد اما Config و volumeها را حفظ می‌کند؛ `purge` فقط volumeهای
-همان Instance را حذف می‌کند. برای Upgrade ابتدا backup بگیرید، Installer را
-با `--update`/`-Update` دوباره اجرا کنید و سپس فرمان `update` را اجرا کنید.
-Installer در update یک Instance موجود، Telegram Session را باز یا login
-نمی‌کند و سرویس‌های فعال را برای login متوقف نمی‌کند. اگر Session به login
-مجدد نیاز دارد، آن را جداگانه با ترتیب `stop`، سپس `login` و بعد `start`
-انجام دهید.
+راهنمای کامل عملیات، نقشهٔ فرمان‌های قدیمی → منو و CLI پیشرفته در
+[docs/OPERATIONS.md](docs/OPERATIONS.md) آمده است؛ جزئیات فنی و فرمان‌های
+توسعه در ادامهٔ همین README است.
 
 فقط پیام‌های Approval ساخته‌شده توسط Bot پس از پایان retention حذف می‌شوند.
 Cleanup هرگز پیام یا پست کانال Source یا Destination را حذف نمی‌کند و T079
 هیچ حذف User API اضافه نکرده است.
 
-## عیب‌یابی Production
+## عیب‌یابی سریع Production
 
 - خطای دسترسی Docker در Linux: یک‌بار logout/login کنید و Installer را تکرار
   کنید.
 - Docker Desktop در Windows: WSL2/virtualization را فعال و پس از Restart همان
   فرمان نصب را دوباره اجرا کنید.
-- خطای Config: `manage.sh config-check` یا `manage.ps1 config-check`.
-- audit/repair permission: `manage.sh repair permissions` یا
-  `manage.ps1 repair permissions`؛ این فرمان محتویات Config، `.env`، Session،
-  Media یا MongoDB را تغییر نمی‌دهد.
-- وضعیت MongoDB و Workerها: `status` و سپس `logs`.
-- Login ناقص: `login` را دوباره اجرا کنید؛ داده‌های Instance حفظ می‌شوند.
-- Update ناموفق: Image tag و دسترسی به `ghcr.io` را بررسی و از backup استفاده
-  کنید.
-- Backup خراب: پیش از restore فرمان `backup verify BACKUP_ID` را اجرا کنید.
-- Update rollback: `tabctl --instance NAME update --rollback`.
+- خطای Config: منوی ۱ «Configuration validation» یا
+  `tabctl --instance X config check`.
+- بررسی سلامت کامل: منوی ۱۶ «Doctor»؛ تعمیر permissions با «Repair permissions».
+- Login ناقص: منوی ۲؛ داده‌های Instance حفظ می‌شوند.
+- Update ناموفق: منوی ۱۴ «Rollback» یا `tabctl --instance X update --rollback`.
+- Backup خراب: پیش از restore `tabctl --instance X backup verify BACKUP_ID`.
 
 ## ساخت Release و GHCR
 

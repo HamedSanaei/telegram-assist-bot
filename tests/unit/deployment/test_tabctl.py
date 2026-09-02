@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 if TYPE_CHECKING:
-    from io import BufferedWriter
+    from io import BufferedReader, BufferedWriter
     from types import ModuleType
 
 ROOT = Path(__file__).parents[3]
@@ -142,7 +143,9 @@ volumes:
 
     plan = tabctl.repair_plan(metadata)
     assert "replace legacy hardcoded MongoDB image" in plan
-    monkeypatch.setattr(tabctl, "create_backup", lambda value: "repair-backup")
+    monkeypatch.setattr(
+        tabctl, "create_backup", lambda value, **kwargs: "repair-backup"
+    )
     monkeypatch.setattr(
         tabctl.subprocess,
         "run",
@@ -363,18 +366,88 @@ def test_backup_manifest_and_checksum_verification(
         return _Result()
 
     monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
-    backup_id = tabctl.create_backup(metadata)
+    backup_id = tabctl.create_backup(metadata, mode=tabctl.BACKUP_MODE_FULL)
     manifest = tabctl.verify_backup(metadata, backup_id)
     assert manifest["included_components"] == [
-        "configuration",
-        "metadata",
-        "mongodb",
+        "configuration.json",
+        "instance.json",
+        "mongodb.archive.gz",
+        ".env",
+        "compose.yaml",
+        "session.tar.gz",
+        "media.tar.gz",
     ]
+    assert manifest["mode"] == "full"
     assert "configuration.json" in manifest["checksums"]
     archive = path / "backups" / backup_id / "mongodb.archive.gz"
     archive.write_bytes(b"tampered")
     with pytest.raises(tabctl.TabctlError, match="checksum"):
         tabctl.verify_backup(metadata, backup_id)
+
+
+def test_restore_volume_archive_forwards_archive_on_stdin(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    metadata = tabctl.import_instance(path, "demo")
+    archive = tmp_path / "session.tar.gz"
+    archive.write_bytes(b"verified archive")
+    commands: list[list[str]] = []
+    stdin_payloads: list[bytes] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        commands.append(command)
+        stream = kwargs.get("stdin")
+        assert stream is not None
+        stdin_payloads.append(cast("BufferedReader", stream).read())
+        return _Result()
+
+    monkeypatch.setattr(tabctl, "_volume_run", lambda *args, **kwargs: (0, ""))
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+
+    tabctl._restore_volume_archive(metadata, "telegram_session", archive)
+
+    assert "--interactive" in commands[0]
+    assert stdin_payloads == [b"verified archive"]
+
+
+def test_core_backup_keeps_original_component_set(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    config = json.loads(
+        (path / "config" / "configuration.json").read_text(encoding="utf-8")
+    )
+    config["configuration_schema_version"] = 1
+    (path / "config" / "configuration.json").write_text(
+        json.dumps(config), encoding="utf-8"
+    )
+    metadata = tabctl.import_instance(path, "demo")
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        output = kwargs.get("stdout")
+        if output is not None:
+            cast("BufferedWriter", output).write(b"synthetic mongodb archive")
+        return _Result()
+
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+    backup_id = tabctl.create_backup(metadata, mode=tabctl.BACKUP_MODE_CORE)
+    manifest = tabctl.verify_backup(metadata, backup_id)
+    assert manifest["included_components"] == [
+        "configuration.json",
+        "instance.json",
+        "mongodb.archive.gz",
+    ]
+    assert manifest["mode"] == "core"
+    assert not (path / "backups" / backup_id / "session.tar.gz").exists()
 
 
 def test_backup_rejects_direct_config_secrets(
@@ -411,7 +484,7 @@ def test_update_failure_restores_env_and_config(
     metadata = tabctl.import_instance(path, "demo")
     original_env = (path / ".env").read_bytes()
     original_config = (path / "config" / "configuration.json").read_bytes()
-    monkeypatch.setattr(tabctl, "create_backup", lambda value: "backup-id")
+    monkeypatch.setattr(tabctl, "create_backup", lambda value, **kwargs: "backup-id")
 
     class _Result:
         returncode = 0
@@ -572,3 +645,569 @@ def test_diagnostics_export_contains_only_redacted_report(
     assert "password@host" not in report
     assert "123456:" not in report
     assert ".env" not in archive.namelist()
+
+
+def test_status_json_reports_structured_state_without_secrets(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+
+    class _Result:
+        returncode = 0
+
+    monkeypatch.setattr(tabctl.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(
+        tabctl,
+        "_capture",
+        lambda command: (
+            0,
+            json.dumps(
+                {
+                    "Service": "runtime",
+                    "Name": "/demo-runtime",
+                    "State": "running",
+                    "Health": "healthy",
+                    "Image": "example.invalid/app:1.0.0",
+                }
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        tabctl,
+        "session_status",
+        lambda metadata: {
+            "state": "present",
+            "files": [{"name": "demo.session", "modified_at": "2026-01-01T00:00:00Z"}],
+        },
+    )
+    monkeypatch.setattr(
+        tabctl,
+        "media_usage",
+        lambda metadata: {
+            "state": "available",
+            "media_bytes": 1024,
+            "preview_bytes": 0,
+        },
+    )
+
+    assert tabctl.main(["--instance", "demo", "status", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["instance"] == "demo"
+    assert report["containers"][0]["service"] == "runtime"
+    assert report["session"]["state"] == "present"
+    assert report["media"]["media_bytes"] == 1024
+    assert "must-not-enter-metadata" not in capsys.readouterr().out
+
+
+def test_session_status_dispatch_and_reset_confirmation(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    monkeypatch.setattr(
+        tabctl,
+        "session_status",
+        lambda metadata: {
+            "state": "present",
+            "files": [{"name": "demo.session", "modified_at": "2026-01-01T00:00:00Z"}],
+        },
+    )
+
+    assert tabctl.main(["--instance", "demo", "session", "status"]) == 0
+    output = capsys.readouterr().out
+    assert "state=present" in output
+    assert "file=demo.session" in output
+
+    assert tabctl.main(["--instance", "demo", "session", "reset"]) == 4
+    monkeypatch.setattr(tabctl, "_volume_run", lambda *a, **k: (0, ""))
+    assert tabctl.main(["--instance", "demo", "session", "reset", "--yes"]) == 0
+    assert "session_reset=completed" in capsys.readouterr().out
+
+
+def test_service_dispatch_maps_bounded_compose_arguments(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    commands: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        commands.append(command)
+        return _Result()
+
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+
+    assert tabctl.main(["--instance", "demo", "service", "restart", "runtime"]) == 0
+    assert commands[0][-2:] == ["restart", "runtime"]
+    assert tabctl.main(["--instance", "demo", "service", "start", "approval-bot"]) == 0
+    assert commands[1][-2:] == ["start", "approval-bot"]
+    assert tabctl.main(["--instance", "demo", "service", "stop", "mongodb"]) == 0
+    assert commands[2][-2:] == ["stop", "mongodb"]
+    assert tabctl.main(["--instance", "demo", "service", "recreate", "all"]) == 0
+    assert commands[3][-2:] == ["up", "-d", "--force-recreate"][-2:]
+
+
+def test_queue_dispatch_builds_application_arguments(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    captured: list[list[str]] = []
+
+    def fake_run_app(metadata: object, arguments: list[str]) -> int:
+        captured.append(arguments)
+        return 0
+
+    monkeypatch.setattr(tabctl, "_run_app_command", fake_run_app)
+
+    assert (
+        tabctl.main(
+            [
+                "--instance",
+                "demo",
+                "queue",
+                "inspect",
+                "--kind",
+                "approval",
+                "--status",
+                "retry",
+                "--limit",
+                "10",
+            ]
+        )
+        == 0
+    )
+    assert captured[0] == ["approval-queue", "--status", "retry", "--limit", "10"]
+    assert (
+        tabctl.main(["--instance", "demo", "queue", "cancel", "--job-id", "job-1"]) == 0
+    )
+    assert captured[1] == ["publication-cancel", "--job-id", "job-1"]
+    assert (
+        tabctl.main(
+            [
+                "--instance",
+                "demo",
+                "queue",
+                "recover",
+                "immediate",
+                "--approval-post-id",
+                "post-1",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert captured[2] == [
+        "publication-recover-immediate",
+        "--approval-post-id",
+        "post-1",
+        "--dry-run",
+    ]
+
+
+def test_config_set_maps_to_typed_mutation(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    captured: list[tuple[str, str]] = []
+
+    def fake_mutation(metadata: object, *, operation: str, value: str) -> int:
+        del metadata
+        captured.append((operation, value))
+        return 0
+
+    monkeypatch.setattr(tabctl, "_run_config_mutation", fake_mutation)
+
+    assert (
+        tabctl.main(["--instance", "demo", "config", "set", "timezone", "Asia/Tehran"])
+        == 0
+    )
+    assert captured == [("timezone-set", "Asia/Tehran")]
+    assert tabctl.main(["--instance", "demo", "config", "set", "bogus", "x"]) == 2
+    assert len(captured) == 1
+
+
+def test_env_set_reads_stdin_and_never_exposes_value(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    env_path = path / ".env"
+
+    monkeypatch.setattr(tabctl.sys, "stdin", io.StringIO("123456:SECRETTOKENVALUE\n"))
+    assert (
+        tabctl.main(["--instance", "demo", "env", "set", "TAB_TELEGRAM_BOT_TOKEN"]) == 0
+    )
+    output = capsys.readouterr().out
+    assert "updated (value hidden)" in output
+    assert "SECRETTOKENVALUE" not in output
+    assert "TAB_TELEGRAM_BOT_TOKEN=123456:SECRETTOKENVALUE" in env_path.read_text(
+        encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit):
+        tabctl.main(["--instance", "demo", "env", "set", "TAB_TELEGRAM_API_ID"])
+    assert "TAB_TELEGRAM_API_ID=not-allowed" not in env_path.read_text(encoding="utf-8")
+
+
+def test_env_list_never_prints_values(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    assert tabctl.main(["--instance", "demo", "env", "list"]) == 0
+    output = capsys.readouterr().out
+    assert "TAB_TELEGRAM_BOT_TOKEN=missing" in output
+    assert "TAB_MONGODB_PASSWORD=configured" in output
+    assert "must-not-enter-metadata" not in output
+
+
+def test_media_clear_requires_confirmation_and_creates_safety_backup(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    monkeypatch.setattr(tabctl, "create_backup", lambda *a, **k: "safety-id")
+    monkeypatch.setattr(tabctl, "_compose", lambda *a: 0)
+    monkeypatch.setattr(tabctl, "_volume_run", lambda *a, **k: (0, ""))
+
+    assert tabctl.main(["--instance", "demo", "media", "clear"]) == 4
+    assert tabctl.main(["--instance", "demo", "media", "clear", "--yes"]) == 0
+    output = capsys.readouterr().out
+    assert "safety_backup=safety-id" in output
+    assert "media_reset=completed" in output
+
+
+def test_backup_encryption_roundtrip(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    config = json.loads(
+        (path / "config" / "configuration.json").read_text(encoding="utf-8")
+    )
+    config["configuration_schema_version"] = 1
+    (path / "config" / "configuration.json").write_text(
+        json.dumps(config), encoding="utf-8"
+    )
+    metadata = tabctl.import_instance(path, "demo")
+
+    class _Result:
+        returncode = 0
+
+    class _EncryptResult:
+        returncode = 0
+
+    class _FailResult:
+        returncode = 1
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        if command[0] == "openssl":
+            source = Path(str(command[command.index("-in") + 1]))
+            target = Path(str(command[command.index("-out") + 1]))
+            payload = source.read_bytes()
+            secret = cast("bytes", kwargs.get("input", b"pw"))
+            if "-d" in command:
+                if secret != b"pw" or not payload.startswith(b"enc:"):
+                    return cast("_Result", _FailResult())
+                target.write_bytes(payload[4:])
+            else:
+                target.write_bytes(b"enc:" + payload)
+            return cast("_Result", _EncryptResult())
+        output = kwargs.get("stdout")
+        if output is not None:
+            cast("BufferedWriter", output).write(b"synthetic mongodb archive")
+        return cast("_Result", _EncryptResult())
+
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(tabctl, "_backup_passphrase", lambda *, confirm: "pw")
+
+    backup_id = tabctl.create_backup(
+        metadata, mode=tabctl.BACKUP_MODE_CORE, encrypt=True
+    )
+    manifest = tabctl.verify_backup(metadata, backup_id, passphrase="pw")  # noqa: S106
+    assert manifest["encrypted"] is True
+    assert manifest["algorithm"] == "aes-256-cbc"
+    with pytest.raises(tabctl.TabctlError, match="passphrase is required"):
+        tabctl.verify_backup(metadata, backup_id)
+    stored = path / "backups" / backup_id
+    assert not (stored / "configuration.json").exists()
+    assert (stored / "configuration.json.enc").exists()
+    with pytest.raises(tabctl.TabctlError, match="decryption failed"):
+        tabctl.verify_backup(
+            metadata,
+            backup_id,
+            passphrase="wrong",  # noqa: S106
+        )
+
+
+def test_restore_conflict_requires_to_instance(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _instance(first)
+    _instance(second, project="telegram-assist-other")
+    source = tabctl.import_instance(first, "demo")
+    tabctl.import_instance(second, "other")
+    backup_id = "20260101T000000.000000Z"
+    backup_root = first / "backups" / backup_id
+    backup_root.mkdir(parents=True)
+    config_bytes = (first / "config" / "configuration.json").read_bytes()
+    (backup_root / "configuration.json").write_bytes(config_bytes)
+    (backup_root / "instance.json").write_text("{}\n", encoding="utf-8")
+    (backup_root / "mongodb.archive.gz").write_bytes(b"archive")
+    manifest = {
+        "schema_version": 1,
+        "backup_id": backup_id,
+        "instance_name": "other",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "application_version": "1.0.0",
+        "config_schema_version": 1,
+        "mongodb_version": "7.0.32",
+        "mode": "core",
+        "included_components": [
+            "configuration.json",
+            "instance.json",
+            "mongodb.archive.gz",
+        ],
+        "encrypted": False,
+        "checksums": {
+            name: tabctl._sha256(backup_root / name)
+            for name in ("configuration.json", "instance.json", "mongodb.archive.gz")
+        },
+    }
+    (backup_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(tabctl.TabctlError, match="belongs to instance"):
+        tabctl.restore_backup(source, backup_id, confirmed=True)
+
+    class _Result:
+        returncode = 0
+
+    monkeypatch.setattr(tabctl, "create_backup", lambda *a, **k: "pre")
+    monkeypatch.setattr(tabctl, "_compose", lambda *a: 0)
+    monkeypatch.setattr(tabctl, "_app_check", lambda *a: 0)
+    monkeypatch.setattr(tabctl.subprocess, "run", lambda *a, **k: _Result())
+    tabctl.restore_backup(source, backup_id, confirmed=True, to_instance="other")
+    output = capsys.readouterr().out
+    assert "env_skipped=preserve target credentials and identity" in output
+    assert "restore_status=healthy" in output
+    assert (second / "config" / "configuration.json").read_bytes() == config_bytes
+    assert "TAB_MONGODB_PASSWORD" in (second / ".env").read_text(encoding="utf-8")
+
+
+def test_default_instance_fallback_uses_single_registered_instance(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path, project="telegram-assist-solo")
+    tabctl.import_instance(path, "solo")
+    commands: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        commands.append(command)
+        return _Result()
+
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+
+    assert tabctl.main(["status"]) == 0
+    assert "telegram-assist-solo" in commands[0]
+    assert commands[0][-1] == "ps"
+
+
+def test_multiple_instances_require_explicit_flag(
+    tabctl: ModuleType, tmp_path: Path
+) -> None:
+    _instance(tmp_path / "one", project="telegram-assist-one")
+    _instance(tmp_path / "two", project="telegram-assist-two")
+    tabctl.import_instance(tmp_path / "one", "one")
+    tabctl.import_instance(tmp_path / "two", "two")
+    assert tabctl.main(["status"]) == 2
+
+
+def test_backup_export_and_import_roundtrip(
+    tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _instance(first)
+    _instance(second, project="telegram-assist-second")
+    source = tabctl.import_instance(first, "demo")
+    tabctl.import_instance(second, "second")
+    backup_id = "20260102T000000.000000Z"
+    backup_root = first / "backups" / backup_id
+    backup_root.mkdir(parents=True)
+    (backup_root / "configuration.json").write_bytes(b"cfg")
+    (backup_root / "instance.json").write_bytes(b"meta")
+    (backup_root / "mongodb.archive.gz").write_bytes(b"db")
+    (backup_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "backup_id": backup_id,
+                "instance_name": "demo",
+                "timestamp": "2026-01-02T00:00:00+00:00",
+                "application_version": "1.0.0",
+                "config_schema_version": 1,
+                "mongodb_version": "7.0.32",
+                "mode": "core",
+                "included_components": [
+                    "configuration.json",
+                    "instance.json",
+                    "mongodb.archive.gz",
+                ],
+                "encrypted": False,
+                "checksums": {
+                    name: tabctl._sha256(backup_root / name)
+                    for name in (
+                        "configuration.json",
+                        "instance.json",
+                        "mongodb.archive.gz",
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    archive = tabctl.export_backup(source, backup_id)
+    assert archive.name == f"backup-{backup_id}.tar.gz"
+    if os.name != "nt":
+        assert archive.stat().st_mode & 0o777 == 0o600
+
+    imported = tabctl.import_backup(tabctl._metadata("second"), archive)
+    assert imported == backup_id
+    assert tabctl.verify_backup(tabctl._metadata("second"), backup_id)["mode"] == "core"
+
+
+def test_media_usage_dispatch_and_cleanup_routing(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    tabctl.import_instance(path, "demo")
+    monkeypatch.setattr(
+        tabctl,
+        "media_usage",
+        lambda metadata: {
+            "state": "available",
+            "media_bytes": 2048,
+            "preview_bytes": 64,
+        },
+    )
+    assert tabctl.main(["--instance", "demo", "media", "usage"]) == 0
+    output = capsys.readouterr().out
+    assert "media_bytes=2048" in output
+    assert "preview_bytes=64" in output
+
+    captured: list[list[str]] = []
+
+    def fake_run(metadata: object, arguments: list[str]) -> int:
+        del metadata
+        captured.append(arguments)
+        return 0
+
+    monkeypatch.setattr(tabctl, "_run_app_command", fake_run)
+    assert tabctl.main(["--instance", "demo", "media", "cleanup"]) == 0
+    assert captured == [["media-cleanup"]]
+
+
+def test_app_check_retries_transient_failure_and_redacts_output(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    metadata = tabctl.import_instance(path, "demo")
+    attempts: list[int] = []
+    sleeps: list[int] = []
+
+    class _Result:
+        def __init__(self, returncode: int, output: str) -> None:
+            self.returncode = returncode
+            self.stdout = output
+            self.stderr = output
+
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
+        del command, kwargs
+        attempts.append(1)
+        if len(attempts) < 3:
+            return _Result(
+                1,
+                "error password=secret bot=123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+        return _Result(0, "configuration_validation_succeeded")
+
+    monkeypatch.setattr(tabctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(tabctl.time, "sleep", sleeps.append)
+
+    assert tabctl._app_check(metadata) == 0
+    assert len(attempts) == 3
+    assert sleeps == [tabctl.HEALTH_CHECK_RETRY_DELAY_SECONDS] * 2
+    assert "health_check_failed=" not in capsys.readouterr().err
+
+
+def test_app_check_reports_only_redacted_failure_details(
+    tabctl: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "instance"
+    _instance(path)
+    metadata = tabctl.import_instance(path, "demo")
+
+    class _Result:
+        returncode = 1
+        stdout = "error password=secret bot=123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        stderr = ""
+
+    monkeypatch.setattr(tabctl.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(tabctl.time, "sleep", lambda seconds: None)
+
+    assert tabctl._app_check(metadata) == 1
+    error_output = capsys.readouterr().err
+    assert "health_check_failed=" in error_output
+    assert "secret" not in error_output
+    assert "123456:AAAAAAAA" not in error_output
+    assert "[REDACTED]" in error_output or "[REDACTED_BOT_TOKEN]" in error_output

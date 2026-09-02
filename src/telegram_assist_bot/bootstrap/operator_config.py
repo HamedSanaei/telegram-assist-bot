@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Protocol, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
@@ -433,6 +434,58 @@ def set_logging_level(level: str) -> ConfigMutator:
     return mutate
 
 
+def set_timezone(timezone: str) -> ConfigMutator:
+    """Build a timezone mutation validated against the IANA timezone database."""
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, TypeError):
+        raise InstanceConfigurationError(
+            "Timezone must be a valid IANA timezone identifier."
+        ) from None
+
+    def mutate(document: ConfigDocument) -> None:
+        document["timezone"] = timezone
+
+    return mutate
+
+
+def set_media_preview_enabled(enabled: bool) -> ConfigMutator:
+    """Build a preview-generation toggle mutation with strict input."""
+    if not isinstance(enabled, bool):
+        raise InstanceConfigurationError("Preview value must be true or false.")
+
+    def mutate(document: ConfigDocument) -> None:
+        document["media"]["preview_enabled"] = enabled
+
+    return mutate
+
+
+def set_media_cleanup_interval(seconds: int) -> ConfigMutator:
+    """Build a bounded cleanup-interval mutation."""
+    if isinstance(seconds, bool) or not 60 <= seconds <= 86400 * 7:
+        raise InstanceConfigurationError(
+            "Cleanup interval must be between 60 and 604800 seconds."
+        )
+
+    def mutate(document: ConfigDocument) -> None:
+        document["media"]["cleanup_interval_seconds"] = seconds
+
+    return mutate
+
+
+def set_approval_chat_id(chat_id: int) -> ConfigMutator:
+    """Build a strict approval-chat mutation."""
+    if isinstance(chat_id, bool) or chat_id == 0 or chat_id > 0:
+        raise InstanceConfigurationError(
+            "Approval chat ID must be a negative Telegram identifier."
+        )
+
+    def mutate(document: ConfigDocument) -> None:
+        document["telegram"]["bot"]["approval_chat_id"] = chat_id
+
+    return mutate
+
+
 def _write_candidate(
     path: Path, document: ConfigDocument, *, source_stat: os.stat_result
 ) -> Path:
@@ -545,8 +598,12 @@ __all__ = (
     "remove_source",
     "set_administrator_active",
     "set_administrator_destinations",
+    "set_approval_chat_id",
     "set_destination_active",
     "set_logging_level",
+    "set_media_cleanup_interval",
+    "set_media_preview_enabled",
     "set_media_retention",
     "set_source_active",
+    "set_timezone",
 )

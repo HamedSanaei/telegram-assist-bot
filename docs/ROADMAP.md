@@ -179,6 +179,18 @@ fallback متنی قطعی برای URLهای قابل‌انتقال منبع �
 |---|---|---|---|---|
 | [T094](tasks/T094-persistent-immediate-publication-toggle.md) | Persistent Immediate Publication Toggle | T029–T032، T077، T093 | `5.15`–`5.17` | Completed |
 
+## Milestone 13 — Interactive Bash Management Experience — Completed
+
+هدف: تجربهٔ عملیاتی یک‌فرمانی/منومحور مشابه BackPack و 3x-ui بدون نیاز به
+دانستن Docker Compose یا ساختار Config.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T095](tasks/T095-interactive-bash-management-menu.md) | منوی تعاملی Bash و زیرساخت مدیر | T087، T088، T090، T092 | `18`، `19` | Completed |
+| [T096](tasks/T096-first-class-backup-restore.md) | Backup/Restore درجه‌یک | T095، T088 | `18`، `19` | Completed |
+| [T097](tasks/T097-installer-default-instance-and-readme-ux.md) | Installer پیش‌فرض و README ساده | T095، T096 | `18`، `19` | Completed |
+| [T098](tasks/T098-management-acceptance-and-policy.md) | Acceptance مدیریت و سیاست هویت | T095–T097 | `16`–`20` | Completed |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |

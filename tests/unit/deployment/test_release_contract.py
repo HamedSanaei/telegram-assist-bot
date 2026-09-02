@@ -142,7 +142,11 @@ def test_quality_workflow_runs_docker_and_installer_acceptance_without_push() ->
     assert "docker --version" in workflow
     assert "docker compose version" in workflow
     assert "bash scripts/v1_acceptance.sh" in workflow
-    assert "bash -n install.sh deploy/manage.sh scripts/v1_acceptance.sh" in workflow
+    assert (
+        "bash -n install.sh deploy/manage.sh deploy/menu.sh deploy/tabctl.sh"
+        in workflow
+    )
+    assert "scripts/v1_acceptance.sh" in workflow
     assert "Upload Docker acceptance diagnostics on failure" in workflow
     assert "if: failure()" in workflow
     assert "docker/login-action" not in workflow

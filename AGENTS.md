@@ -870,6 +870,9 @@ Never invent successful test results or claim completion without verification.
 
 ## 20. AI Agent Identity and Attribution Policy
 
+AI coding agents are implementation tools, not project authors or
+contributors.
+
 AI coding agents and automated development tools must remain completely
 anonymous in repository artifacts.
 
@@ -881,13 +884,20 @@ This prohibition includes, but is not limited to:
 
 - Git commit author names.
 - Git commit committer names.
-- `Co-authored-by` trailers.
+- `Co-authored-by` / `Co-Authored-By` trailers.
+- `Generated-by`, `Assisted-by`, or any equivalent AI attribution trailer.
 - Commit-message signatures.
 - Pull-request attribution text.
 - Source-code comments.
 - Documentation.
 - README files.
+- `CONTRIBUTORS` or `AUTHORS` files.
+- Acknowledgements sections.
 - Changelogs.
+- Release notes.
+- Badges.
+- Package metadata.
+- Contributor lists.
 - Generated-file headers or footers.
 - Test files.
 - Configuration files.
@@ -921,6 +931,12 @@ user.email` to its own identity.
 
 An AI agent must NEVER add itself as an author, co-author, contributor,
 reviewer, maintainer, or collaborator.
+
+AI agents must NOT create commits merely to record agent activity.
+
+Human repository history must not falsely present an AI tool as a human
+contributor, and the GitHub contributors graph must never attribute work to an
+AI identity.
 
 Tool names may only appear when they are legitimately part of the software's
 runtime dependencies, integration requirements, technical documentation, or

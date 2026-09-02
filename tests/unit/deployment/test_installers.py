@@ -30,8 +30,16 @@ def test_linux_installer_has_strict_inputs_and_safe_uninstall() -> None:
     assert "permissions.sh" in installer
     assert "repair permissions" in manager
     assert "deploy/tabctl.py" in installer
-    assert "/usr/local/bin/tabctl" in installer
-    assert ".local/bin/tabctl" in installer
+    assert "deploy/menu.sh" in installer
+    assert "deploy/tabctl.sh" in installer
+    assert 'manager_bin="/usr/local/bin"' in installer
+    assert 'manager_lib="/usr/local/lib/telegram-assist-bot"' in installer
+    assert '"$manager_bin/tabctl"' in installer
+    assert '"$manager_lib/menu.sh"' in installer
+    assert 'INSTANCE="${INSTANCE:-default}"' in installer
+    assert "--no-menu" in installer
+    assert '"Opening the management menu..."' in installer
+    assert 'manager_bin="$HOME/.local/bin"' in installer
     assert "docker compose" in installer
     assert "down --volumes" not in installer.partition("install_docker")[0]
     assert 'uninstall) "${COMPOSE[@]}" down' in manager
@@ -144,3 +152,12 @@ def test_acceptance_covers_nonroot_plural_config_and_two_instance_registry() -> 
     assert "runtime check" in acceptance
     assert "Update unexpectedly invoked Telegram login" in acceptance
     assert "getent group" in acceptance
+    assert "deploy/menu.sh" in acceptance
+    assert "--action status" in acceptance
+    assert "--action doctor" in acceptance
+    assert "acceptance-restored" in acceptance
+    assert "backup create --mode full" in acceptance
+    assert "backup restore" in acceptance
+    assert "restore_status=healthy" in acceptance
+    assert "env set TAB_TELEGRAM_BOT_TOKEN" in acceptance
+    assert "config set timezone" in acceptance

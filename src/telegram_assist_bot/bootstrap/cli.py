@@ -47,10 +47,14 @@ from telegram_assist_bot.bootstrap.operator_config import (
     remove_destination,
     remove_source,
     set_administrator_active,
+    set_approval_chat_id,
     set_destination_active,
     set_logging_level,
+    set_media_cleanup_interval,
+    set_media_preview_enabled,
     set_media_retention,
     set_source_active,
+    set_timezone,
 )
 from telegram_assist_bot.bootstrap.publication_queue import (
     cancel_publication_job,
@@ -255,6 +259,10 @@ def _parser() -> _SafeArgumentParser:
             "destination-disable",
             "retention-set",
             "logging-set",
+            "timezone-set",
+            "preview-set",
+            "cleanup-interval-set",
+            "approval-chat-set",
         ),
     )
     parser.add_argument("--value")
@@ -411,6 +419,16 @@ def main(
                 )
             elif operation == "retention-set":
                 mutator = set_media_retention(int(arguments.value))
+            elif operation == "timezone-set":
+                mutator = set_timezone(arguments.value)
+            elif operation == "preview-set":
+                if arguments.value not in ("true", "false"):
+                    raise CliUsageError
+                mutator = set_media_preview_enabled(arguments.value == "true")
+            elif operation == "cleanup-interval-set":
+                mutator = set_media_cleanup_interval(int(arguments.value))
+            elif operation == "approval-chat-set":
+                mutator = set_approval_chat_id(int(arguments.value))
             else:
                 mutator = set_logging_level(arguments.value)
             config_path = Path(arguments.config)

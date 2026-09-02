@@ -666,8 +666,11 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
 | `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
 | `deploy/permissions.sh` و `deploy/permissions.ps1` | audit/repair متمرکز و idempotent مالکیت و permission بدون تغییر محتوای Instance |
+| `deploy/tabctl.sh` | wrapper سراسری: بدون آرگومان منوی Bash و با آرگومان مدیر Python قبلی را اجرا می‌کند |
+| `deploy/menu.sh` | منوی تعاملی Bash ۱۸ بخشه (سرویس، Session، Bot، کانال‌ها، Config، Logs، Queueها، Media، Backup، Docker، Update، Instance، Doctor، Uninstall) با actionهای غیرتعاملی `--action` |
 | `deploy/tabctl.py` و `deploy/tabctl.ps1` | registry/metadata سراسری، menu و dispatch چند Instance با exit code پایدار |
-| `deploy/tabctl.py` lifecycle | backup manifest/checksum، restore، update rollback، repair plan و diagnostics export redacted |
+| `deploy/tabctl.py` lifecycle | backup (core/full با session+media+`.env`، رمزنگاری AES-256-CBC اختیاری)، verify/restore با plan و `--to-instance`، export/import archive، update rollback، repair plan و diagnostics export redacted |
+| `deploy/tabctl.py` status/session/service/queue/media/env/config | `status --json`، `session status/reset`، `service start|stop|restart|recreate`، wrapperهای `queue` و `recover`، `media usage|cleanup|clear`، `env list|set` (stdin) و `config set` |
 | `bootstrap/deployment_compatibility.py` | policy تایپ‌شدهٔ Kernel/MongoDB و رد Image شناور یا ترکیب اثبات‌نشده |
 | `bootstrap/instance_config.py` | تولید typed و اتمیک Config مینیمال Production و parser چند Admin/Source بدون persistence وابسته به OS |
 | `bootstrap/operator_config.py` | mutation lockدار Admin/Source/Destination/retention/logging با backup، validation و rollback |

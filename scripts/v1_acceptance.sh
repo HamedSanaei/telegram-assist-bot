@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
 DIAGNOSTICS_ROOT="${TAB_ACCEPTANCE_DIAGNOSTICS_DIR:-$TMP_ROOT/diagnostics}"
 REGISTRY_PATH="$TMP_ROOT/registry.json"
+export TAB_REGISTRY_PATH="$REGISTRY_PATH"
 INSTANCES=(acceptance-one acceptance-two)
 CLEANED=0
 
@@ -285,6 +286,154 @@ if grep -F -e "$ACCEPTANCE_MONGO_AUTH" -e "$ACCEPTANCE_BOT_FIXTURE" \
   echo "Diagnostics exposed an acceptance credential fixture." >&2
   exit 1
 fi
+
+# --- management menu one-shot actions ---
+env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action status \
+  | grep -F "Instance:"
+if env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action status \
+  | grep -F "$ACCEPTANCE_BOT_FIXTURE"; then
+  echo "Menu status exposed an acceptance credential fixture." >&2
+  exit 1
+fi
+env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action services \
+  | grep -F "SERVICE"
+env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action session \
+  | grep -E "^state="
+env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action queues \
+  >/dev/null
+env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action media-usage \
+  | grep -E "^media_bytes="
+if env TABCTL_MANAGER="$ROOT/deploy/tabctl.py" TABCTL_NO_COLOR=1 \
+  bash "$ROOT/deploy/menu.sh" --instance acceptance-one --action doctor \
+  | grep -F "One or more checks failed"; then
+  echo "Menu doctor reported failures for a healthy acceptance instance." >&2
+  exit 1
+fi
+
+# --- manager session, env and typed config surface ---
+tabctl --instance acceptance-one session status | grep -E "^state="
+tabctl --instance acceptance-one env list | grep "TAB_TELEGRAM_BOT_TOKEN=configured"
+printf '%s\n' "$ACCEPTANCE_BOT_FIXTURE" | \
+  tabctl --instance acceptance-one env set TAB_TELEGRAM_BOT_TOKEN
+tabctl --instance acceptance-one config set timezone Asia/Tehran
+if tabctl --instance acceptance-one config set timezone Not/AZone; then
+  echo "Invalid timezone mutation unexpectedly succeeded." >&2
+  exit 1
+fi
+tabctl --instance acceptance-one config set preview false
+tabctl --instance acceptance-one config set cleanup-interval 1800
+
+# --- encrypted backup round-trip ---
+TAB_BACKUP_PASSPHRASE="$ACCEPTANCE_MONGO_AUTH" \
+  tabctl --instance acceptance-one backup create --mode core --encrypt
+encrypted_backup_id="$(TAB_BACKUP_PASSPHRASE="$ACCEPTANCE_MONGO_AUTH" \
+  tabctl --instance acceptance-one backup list | tail -n1)"
+TAB_BACKUP_PASSPHRASE="$ACCEPTANCE_MONGO_AUTH" \
+  tabctl --instance acceptance-one backup verify "$encrypted_backup_id" \
+  | grep '"encrypted": true'
+if TAB_BACKUP_PASSPHRASE=wrong \
+  tabctl --instance acceptance-one backup verify "$encrypted_backup_id"; then
+  echo "Encrypted backup verified with the wrong passphrase." >&2
+  exit 1
+fi
+TAB_BACKUP_PASSPHRASE="$ACCEPTANCE_MONGO_AUTH" \
+  tabctl --instance acceptance-one backup delete "$encrypted_backup_id" --yes
+
+# --- disposable instance: full backup, destroy, restore, health ---
+restored=acceptance-restored
+mkdir -p "$TMP_ROOT/$restored/config"
+cp "$ROOT/compose.yaml" "$TMP_ROOT/$restored/compose.yaml"
+cp "$ROOT/deploy/permissions.sh" "$TMP_ROOT/$restored/permissions.sh"
+chmod 0700 "$TMP_ROOT/$restored/permissions.sh"
+cat >"$TMP_ROOT/$restored/.env" <<EOF
+COMPOSE_PROJECT_NAME=telegram-assist-$restored
+TAB_INSTANCE_DIR=$TMP_ROOT/$restored
+TAB_IMAGE=$IMAGE
+TAB_MONGODB_USERNAME=acceptance
+TAB_MONGODB_PASSWORD=$ACCEPTANCE_MONGO_AUTH
+TAB_MONGODB_DATABASE=telegram_assist_${restored//-/_}
+TAB_MONGODB_IMAGE=mongo:7.0.32
+TAB_RUNTIME_UID=10001
+TAB_RUNTIME_GID=10001
+TAB_MONGODB_URI=mongodb://acceptance:$ACCEPTANCE_MONGO_AUTH@mongodb:27017/?authSource=admin&directConnection=true
+TAB_TELEGRAM_API_ID=12345
+TAB_TELEGRAM_API_HASH=00000000000000000000000000000000
+TAB_TELEGRAM_PHONE_NUMBER=+10000000000
+TAB_TELEGRAM_BOT_TOKEN=$ACCEPTANCE_BOT_FIXTURE
+EOF
+sudo bash "$TMP_ROOT/$restored/permissions.sh" repair \
+  --instance-dir "$TMP_ROOT/$restored" \
+  --runtime-uid 10001 --runtime-gid 10001 \
+  --host-uid "$(id -u)" --host-gid "$(id -g)"
+docker run --rm --user 10001:10001 \
+  --env-file "$TMP_ROOT/$restored/.env" \
+  --volume "$TMP_ROOT/$restored/config:/instance/config" \
+  --volume "$ROOT/config/configuration.example.json:/instance/configuration.example.json:ro" \
+  "$IMAGE" render-instance-config \
+  --template /instance/configuration.example.json \
+  --output /instance/config/configuration.json \
+  --instance "$restored" \
+  --retention-days 1 \
+  --approval-chat-id -1009001 \
+  --admin-user-ids "100000001" \
+  --source-usernames "@RestoreSource" \
+  --destination-name primary \
+  --destination-id -1009002
+sudo bash "$TMP_ROOT/$restored/permissions.sh" repair \
+  --instance-dir "$TMP_ROOT/$restored" \
+  --runtime-uid 10001 --runtime-gid 10001 \
+  --host-uid "$(id -u)" --host-gid "$(id -g)"
+compose "$restored" config --quiet
+compose "$restored" up -d --wait --wait-timeout 120 mongodb
+tabctl instance import --path "$TMP_ROOT/$restored" --name "$restored" >/dev/null
+migration_backup="$(tabctl --instance "$restored" backup create --mode full | cut -d= -f2)"
+test -n "$migration_backup"
+tabctl --instance "$restored" backup verify "$migration_backup"
+compose "$restored" down --volumes --remove-orphans
+if docker volume inspect "telegram-assist-${restored}_mongodb_data" \
+  >/dev/null 2>&1; then
+  echo "Destroyed instance volume still exists before restore." >&2
+  exit 1
+fi
+compose "$restored" up -d --wait --wait-timeout 120 mongodb
+tabctl --instance "$restored" backup restore "$migration_backup" --yes \
+  | grep "restore_status=healthy"
+printf '%s\n' 'checkpoint=restore_config_check'
+tabctl --instance "$restored" config check
+printf '%s\n' 'checkpoint=restore_config_compare'
+if ! cmp -s "$TMP_ROOT/$restored/config/configuration.json" \
+  "$TMP_ROOT/$restored/backups/$migration_backup/configuration.json"; then
+  echo "Restored configuration does not match the migration backup." >&2
+  sha256sum "$TMP_ROOT/$restored/config/configuration.json" \
+    "$TMP_ROOT/$restored/backups/$migration_backup/configuration.json" >&2
+  exit 1
+fi
+printf '%s\n' 'checkpoint=restore_runtime_check'
+if ! compose "$restored" ps --status running | grep -F runtime; then
+  echo "Restored runtime is not running." >&2
+  compose "$restored" ps --all >&2 || true
+  exit 1
+fi
+printf '%s\n' 'checkpoint=restore_status_check'
+if ! tabctl --instance "$restored" status --json \
+  | grep -F '"instance": "acceptance-restored"'; then
+  echo "Restored structured status did not identify the instance." >&2
+  exit 1
+fi
+compose "$restored" down --volumes --remove-orphans
+for volume in mongodb_data telegram_session media; do
+  if docker volume inspect "telegram-assist-${restored}_${volume}" \
+    >/dev/null 2>&1; then
+    echo "Restored instance volume was not cleaned." >&2
+    exit 1
+  fi
+done
 
 for instance in "${INSTANCES[@]}"; do
   for volume in mongodb_data telegram_session media; do

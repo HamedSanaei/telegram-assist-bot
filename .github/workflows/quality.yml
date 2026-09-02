@@ -134,7 +134,8 @@ jobs:
 
       - name: Validate Linux installer syntax
         run: |
-          bash -n install.sh deploy/manage.sh scripts/v1_acceptance.sh
+          bash -n install.sh deploy/manage.sh deploy/menu.sh deploy/tabctl.sh \
+            scripts/v1_acceptance.sh
           bash -n deploy/permissions.sh
 
       - name: Validate PowerShell installer syntax

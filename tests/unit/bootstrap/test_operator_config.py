@@ -12,6 +12,7 @@ import pytest
 
 from telegram_assist_bot.bootstrap.cli import main
 from telegram_assist_bot.bootstrap.instance_config import (
+    InstanceConfigurationError,
     render_instance_configuration,
 )
 from telegram_assist_bot.bootstrap.operator_config import (
@@ -27,10 +28,14 @@ from telegram_assist_bot.bootstrap.operator_config import (
     remove_source,
     set_administrator_active,
     set_administrator_destinations,
+    set_approval_chat_id,
     set_destination_active,
     set_logging_level,
+    set_media_cleanup_interval,
+    set_media_preview_enabled,
     set_media_retention,
     set_source_active,
+    set_timezone,
 )
 from telegram_assist_bot.shared.config import ApplicationConfig
 
@@ -352,6 +357,14 @@ def test_logging_validation_and_invalid_current_file(config_path: Path) -> None:
         ("destination-disable", "مقصد اصلی", "", 0),
         ("retention-set", "3", "", 0),
         ("logging-set", "INFO", "", 0),
+        ("timezone-set", "UTC", "", 0),
+        ("preview-set", "true", "", 0),
+        ("cleanup-interval-set", "1800", "", 0),
+        ("approval-chat-set", "-1009999", "", 0),
+        ("timezone-set", "Not/AZone", "", 2),
+        ("preview-set", "maybe", "", 2),
+        ("cleanup-interval-set", "5", "", 2),
+        ("approval-chat-set", "123", "", 2),
     ],
 )
 def test_operator_cli_dispatches_each_typed_operation(
@@ -387,6 +400,27 @@ def test_operator_cli_dispatches_each_typed_operation(
     if destinations:
         arguments.extend(["--destinations", destinations])
     assert main(arguments, environ=ENVIRONMENT) == expected
+
+
+def test_typed_settings_mutators_validate_and_apply(config_path: Path) -> None:
+    _run(config_path, set_timezone("Asia/Tehran"))
+    _run(config_path, set_media_preview_enabled(True))
+    _run(config_path, set_media_cleanup_interval(1800))
+    _run(config_path, set_approval_chat_id(-1005001))
+    config = _load(config_path)
+    assert str(config.timezone) == "Asia/Tehran"
+    assert config.media.preview_enabled is True
+    assert config.media.cleanup_interval_seconds == 1800
+    assert config.telegram.bot.approval_chat_id == -1005001
+
+    with pytest.raises(InstanceConfigurationError):
+        set_timezone("Not/AZone")
+    with pytest.raises(InstanceConfigurationError):
+        set_media_cleanup_interval(5)
+    with pytest.raises(InstanceConfigurationError):
+        set_approval_chat_id(0)
+    with pytest.raises(InstanceConfigurationError):
+        set_media_preview_enabled("yes")  # type: ignore[arg-type]
 
 
 def test_operator_cli_rejects_missing_and_nonnumeric_values(

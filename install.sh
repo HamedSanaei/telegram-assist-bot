@@ -14,11 +14,13 @@ SOURCE_USERNAMES="${TAB_SOURCE_USERNAMES:-${TAB_SOURCE_USERNAME:-}}"
 NON_INTERACTIVE=0
 UPDATE=0
 DRY_RUN=0
+MENU_AFTER_INSTALL=1
 BASE_URL="${TAB_INSTALL_BASE_URL:-https://raw.githubusercontent.com/HamedSanaei/telegram-assist-bot/main}"
 
 usage() {
   cat <<'EOF'
-Usage: install.sh --instance NAME [options]
+Usage: install.sh [--instance NAME] [options]
+  --instance NAME       Instance name (default: default)
   --retention-days N     Media and approval retention (1..3650, default 2)
   --install-dir PATH     Instance directory
   --image IMAGE:TAG      Container image
@@ -29,6 +31,7 @@ Usage: install.sh --instance NAME [options]
   --source-usernames CSV One or more public channel usernames or t.me links
   --non-interactive      Read required values from TAB_* environment variables
   --update               Update assets/image without overwriting configuration
+  --no-menu              Do not open the management menu after installing
   --dry-run              Validate and print the plan without changing the host
   --help
 EOF
@@ -47,12 +50,14 @@ while (($#)); do
     --source-usernames) SOURCE_USERNAMES="${2:-}"; shift 2 ;;
     --non-interactive|--unattended) NON_INTERACTIVE=1; shift ;;
     --update) UPDATE=1; shift ;;
+    --no-menu) MENU_AFTER_INSTALL=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
+INSTANCE="${INSTANCE:-default}"
 if [[ ! "$INSTANCE" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
   echo "Instance must match [a-z][a-z0-9-]{0,31}." >&2
   exit 2
@@ -125,6 +130,7 @@ if ((DRY_RUN)); then
     "$MONGODB_IMAGE" "$RUNTIME_UID" "$RUNTIME_GID" "$RETENTION_DAYS"
   printf 'admin_count=%s\nadmin_user_ids=%s\nsource_count=%s\nsource_usernames=%s\nplanned_manager_command=tabctl --instance %s status\n' \
     "$admin_count" "$ADMIN_USER_IDS" "$source_count" "$SOURCE_USERNAMES" "$INSTANCE"
+  printf 'planned_default_instance=%s\n' "$INSTANCE"
   check_kernel_mongodb_pair "$KERNEL_RELEASE" "$MONGODB_IMAGE"
   exit 0
 fi
@@ -323,13 +329,25 @@ if ! command -v python3 >/dev/null 2>&1; then
   fi
 fi
 if [[ "$(id -u)" -eq 0 ]]; then
-  manager_target="/usr/local/bin/tabctl"
+  manager_bin="/usr/local/bin"
+  manager_lib="/usr/local/lib/telegram-assist-bot"
 else
-  manager_target="$HOME/.local/bin/tabctl"
-  mkdir -p "$(dirname "$manager_target")"
+  manager_bin="$HOME/.local/bin"
+  manager_lib="$HOME/.local/lib/telegram-assist-bot"
+  mkdir -p "$manager_bin"
 fi
-curl -fsSL "$BASE_URL/deploy/tabctl.py" -o "$manager_target"
-chmod 0755 "$manager_target"
-TAB_REGISTRY_PATH="${TAB_REGISTRY_PATH:-}" python3 "$manager_target" \
+mkdir -p "$manager_lib"
+curl -fsSL "$BASE_URL/deploy/tabctl.py" -o "$manager_lib/tabctl.py"
+chmod 0755 "$manager_lib/tabctl.py"
+curl -fsSL "$BASE_URL/deploy/menu.sh" -o "$manager_lib/menu.sh"
+chmod 0755 "$manager_lib/menu.sh"
+curl -fsSL "$BASE_URL/deploy/tabctl.sh" -o "$manager_bin/tabctl"
+chmod 0755 "$manager_bin/tabctl"
+TAB_REGISTRY_PATH="${TAB_REGISTRY_PATH:-}" python3 "$manager_lib/tabctl.py" \
   instance import --path "$INSTALL_DIR" --name "$INSTANCE" >/dev/null
-echo "Installed ${INSTANCE}. Manage it with: tabctl --instance ${INSTANCE} status"
+echo "Installed ${INSTANCE}. Run 'tabctl' to open the management menu."
+if ((NON_INTERACTIVE == 0 && MENU_AFTER_INSTALL == 1 && UPDATE == 0)) \
+  && [[ -t 0 && -t 1 ]]; then
+  echo "Opening the management menu..."
+  bash "$manager_lib/menu.sh" || true
+fi
