@@ -105,6 +105,7 @@ def _batch_result_fields(result: CleanupBatchResult) -> dict[str, int]:
         "scanned": result.scanned,
         "deleted": result.deleted,
         "deferred": result.deferred,
+        "reference_deferred": result.reference_deferred,
         "orphan_deleted": result.orphan_deleted,
         "temporary_deleted": result.temporary_deleted,
         "failed": result.failed,

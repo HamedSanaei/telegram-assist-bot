@@ -113,6 +113,30 @@ def test_active_reference_defers_then_terminal_reference_allows_cleanup(
     asyncio.run(scenario())
 
 
+def test_reference_deferred_metric_separates_blocks_from_retries(
+    tmp_path: Path,
+) -> None:
+    """Reference deferrals stay distinguishable from ordinary retry progress."""
+    now = datetime(2026, 7, 27, tzinfo=UTC)
+    storage = LocalMediaStorage(tmp_path)
+    repository = FakePreparationRepository()
+    blocked_path = f"sha256/cc/{'c' * 64}"
+    blocked = MediaIdentity(-12, 1)
+    repository.media[blocked.key] = media(blocked, blocked_path, now)
+    repository.active_storage_paths.add(blocked_path)
+    repository.media["sentinel"] = media(MediaIdentity(-12, 2), "../outside", now)
+
+    async def scenario() -> None:
+        result = await use_case(repository, storage, batch_size=10).execute(now=now)
+        assert result.scanned == 2
+        assert result.deferred == 1
+        assert result.reference_deferred == 1
+        assert result.failed == 1
+        assert repository.cleanup_next_check[blocked.key] == now + _DEFER
+
+    asyncio.run(scenario())
+
+
 def test_referenced_first_page_cannot_starve_later_unreferenced_candidate(
     tmp_path: Path,
 ) -> None:

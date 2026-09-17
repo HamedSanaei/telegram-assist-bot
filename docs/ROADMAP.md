@@ -191,6 +191,16 @@ fallback متنی قطعی برای URLهای قابل‌انتقال منبع �
 | [T097](tasks/T097-installer-default-instance-and-readme-ux.md) | Installer پیش‌فرض و README ساده | T095، T096 | `18`، `19` | Completed |
 | [T098](tasks/T098-management-acceptance-and-policy.md) | Acceptance مدیریت و سیاست هویت | T095–T097 | `16`–`20` | Completed |
 
+## Milestone 14 — v1.1.4 Media Cleanup Fairness and Approval-Expiration Patch
+
+این Milestone دو نقص اثبات‌شدهٔ Production در پاک‌سازی Media خصوصی را بدون تغییر
+Retention، بدون حذف دستی داده و بدون تضعیف هیچ مرجع محافظ دیگری برای patch
+release `v1.1.4` رفع می‌کند.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T099](tasks/T099-v1-1-4-media-cleanup-fairness-and-approval-expiration.md) | v1.1.4 Media Cleanup Fairness and Approval-Expiration Patch | T014، T078، T079 | `5.4`، `5.5`، `5.12–5.19`، `13`، `16` | Completed |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |

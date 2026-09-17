@@ -31,6 +31,7 @@ class CleanupBatchResult:
     scanned: int = 0
     deleted: int = 0
     deferred: int = 0
+    reference_deferred: int = 0
     orphan_scanned: int = 0
     orphan_deleted: int = 0
     temporary_deleted: int = 0
@@ -47,6 +48,7 @@ class _BatchCounters:
     scanned: int = 0
     deleted: int = 0
     deferred: int = 0
+    reference_deferred: int = 0
     orphan_scanned: int = 0
     orphan_deleted: int = 0
     temporary_deleted: int = 0
@@ -121,6 +123,7 @@ class CleanupExpiredMedia:
             scanned=counters.scanned,
             deleted=counters.deleted,
             deferred=counters.deferred,
+            reference_deferred=counters.reference_deferred,
             orphan_scanned=counters.orphan_scanned,
             orphan_deleted=counters.orphan_deleted,
             temporary_deleted=counters.temporary_deleted,
@@ -139,6 +142,7 @@ class CleanupExpiredMedia:
         ):
             await self._defer_media(media, now=now)
             counters.deferred += 1
+            counters.reference_deferred += 1
             return
         for attempt in range(1, self._maximum_attempts + 1):
             try:
@@ -148,6 +152,7 @@ class CleanupExpiredMedia:
                 ):
                     await self._defer_media(media, now=now)
                     counters.deferred += 1
+                    counters.reference_deferred += 1
                     return
                 deleted = await self._storage.delete(media.storage_path)
                 if not await self._repository.mark_media_cleaned(

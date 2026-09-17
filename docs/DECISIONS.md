@@ -725,3 +725,64 @@
   offset Entityهای قبلی تغییر نمی‌کند. callback، Login، WebApp و دادهٔ opaque
   منبع همچنان تفسیر نمی‌شوند. Post legacy فاقد `inline_keyboard` چیزی برای
   بازیابی ندارد و migration یا refetch خودکار انجام نمی‌شود.
+
+## ADR-048 — انصاف دو‌کلاسی صف Candidate پاک‌سازی Media
+
+- **Status:** Accepted
+- **Context:** در Production با `media.retention_days = 1`، ترتیب Candidate بر
+  پایهٔ `_id` باعث شد مرجع‌های همیشه deferشده در ابتدای صف برگردند و در هر Cycle
+  سقف bounded را مصرف کنند؛ هزاران رکورد منقضی و unreferenced پشت آن‌ها بدون
+  هیچ تلاش پاک‌سازی باقی ماندند و اجرای دستی صف را آزاد کرد. یک sort تک‌پرسشی بر
+  پایهٔ `cleanup_next_check_at` هم مسئله را کامل حل نمی‌کند: چون
+  `media_expires_at` در index نیست، در یک نصب واقعی با جمعیت بزرگ Media تازه،
+  پلن انتخابی به مدل هزینهٔ MongoDB وابسته می‌شود و ممکن است جمعیت تازه را اسکن
+  کند.
+- **Decision:** انتخاب Candidate به دو کلاس صریح و دو Query جدا تقسیم می‌شود:
+  کلاس هرگز-بررسی‌نشده (`cleanup_next_check_at: None` که هم `null` صریح و هم
+  فیلد غایب را می‌گیرد) با ترتیب `_id` و استفاده از indexهای موجود مرزدار روی
+  انقضا؛ و کلاس retry موعد-رسیده (`cleanup_next_check_at: {$lte: now}` که به
+  دلیل type-bracketed بودن مقایسه با datetime هرگز `null`/غایب را نمی‌گیرد) با
+  ترتیب `cleanup_next_check_at`/`_id` و index افزودنی
+  `ix_media_cleanup_fairness_v4` = `(cleaned_at, cleanup_next_check_at, _id)`.
+  نتیجهٔ کلاس اول سپس کلاس دوم با بودجهٔ باقی‌مانده بازگردانده می‌شود.
+- **Reason:** رفع گرسنگی قطعی، حفظ determinism داخل هر کلاس، محدود ماندن هر دو
+  Query به جمعیت منقضی، و داشتن یک Query بدون SORT برای retryها؛ همه بدون
+  بزرگ‌کردن Batch، بدون حذف سقف Cycle Worker و بدون backfill یا migration مخرب.
+- **Consequences:** هرگز-بررسی‌نشده‌ها همیشه پیش از retryها بررسی می‌شوند،
+  کلاس هرگز-بررسی‌نشده یک top-k sort محدود روی جمعیت منقضی دارد و کلاس retry
+  کاملاً index-served است. دو کلاس disjoint هستند و هر رکورد در هر Batch حداکثر
+  یک بار برمی‌گردد. رکوردهای legacy فاقد `cleanup_next_check_at` در کلاس پیش‌تاز
+  قرار می‌گیرند. رفتار و پلن این دو Query با Test روی MongoDB آزمایشی و یک
+  Dataset با اندازهٔ Production اثبات می‌شود؛ تغییر این سیاست باید صریح و مستند
+  باشد.
+
+## ADR-049 — انقضای Approval مرجع محافظ Media را آزاد می‌کند
+
+- **Status:** Accepted
+- **Context:** بررسی مرجع Approval تمام‌شده فقط `status == "completed"` و فعال
+  بودن Post را می‌سنجید. در Production، ۳۲۵۴ Approval تمام‌شده که چرخهٔ عمر
+  تأییدشان صریحاً منقضی شده بود (`approval_expired = True`) Media را تا پایان
+  پنجرهٔ مستقل ۱۴روزهٔ Post زنده نگه می‌داشتند، در حالی که
+  `MongoOperationalApprovalRepository.is_actionable()` همان رکوردها را
+  غیرقابل‌اقدام می‌دانست.
+- **Decision:** مرجع Approval تمام‌شده فقط با شرط
+  `"approval_expired": {"$ne": True}` محافظت می‌کند. مقدار `True` آزاد می‌کند،
+  مقدار `False` و فیلد غایب legacy همچنان محافظت می‌کنند. مرجع‌های غیرterminal
+  (`pending`، `claimed`، `retry`) و بررسی Post فعال دست‌نخورده می‌مانند.
+- **Reason:** هم‌راستایی مرجع Media با مرز واقعی قابل‌اقدام بودن Approval،
+  بدون تغییر Retention چهارده‌روزهٔ Post و بدون بازنویسی رکورد تاریخی Approval.
+- **Consequences:** Media پس از پایان پنجرهٔ اقدام مدیریتی و در اولین تلاش
+  واجدشرایط پاک می‌شود، اما فقط اگر هیچ مصرف‌کنندهٔ پایدار دیگری (Media تازه،
+  Album/preparation، Publication، Schedule، Native Schedule، Advertisement یا
+  Approval غیرterminal) آن را لازم نداشته باشد. Post همچنان به‌تنهایی داخل
+  پنجرهٔ ۱۴روزه منقضی نمی‌شود و هیچ Backfill یا حذف گروهی انجام نمی‌شود.
+- **Race audit:** مسیر باقی‌ماندهٔ حذف پیام Approval پس از `approval_expired=True`
+  فقط به شناسهٔ پیام وابسته است: `CleanupExpiredApprovals._process_claim`
+  نخست `expire_ui` را commit می‌کند و سپس برای هر message id فقط
+  `ApprovalMessageDeleteGateway.delete_approval_message(chat_id, message_id)` را
+  صدا می‌زند که در
+  `infrastructure/telegram/bot/adapter.py::delete_approval_message` به
+  `Bot.delete_message(chat_id, message_id)` نگاشت می‌شود. هیچ Storage، مسیر
+  Media یا upload محلی در این مسیر وجود ندارد؛ پس پاک‌شدن همزمان فایل محلی
+  امن است. تحویل تمام‌شده نیز دوباره claim نمی‌شود، چون `claim_ready` فقط
+  `pending`، `retry` موعد-رسیده و `claimed` با lease منقضی را می‌گیرد.

@@ -94,7 +94,7 @@ tabctl --instance X queue inspect --kind approval --status retry
 tabctl --instance X queue cancel --job-id ID
 tabctl --instance X queue recover immediate --approval-post-id ID --dry-run
 tabctl --instance X media usage
-tabctl --instance X media cleanup                 # پاک‌سازی امن مرجع‌آگاه
+tabctl --instance X media cleanup                 # یک batch پاک‌سازی امن مرجع‌آگاه
 printf '%s\n' "$TOKEN" | tabctl --instance X env set TAB_TELEGRAM_BOT_TOKEN
 tabctl --instance X config set timezone Asia/Tehran
 tabctl --instance X config set preview true
@@ -105,6 +105,33 @@ TAB_BACKUP_PASSPHRASE=... tabctl --instance X backup verify ID
 
 خروجی‌های `status --json`، `backup verify` و `diagnostics` JSON هستند؛
 `session status` و `media usage` خطوط `key=value` چاپ می‌کنند.
+
+## پاک‌سازی Media و صف منصفانه
+
+Cleanup فقط Media منقضی و بی‌مرجع را حذف می‌کند. انتخاب Candidate دو کلاس صریح
+دارد: ابتدا Mediaهای منقضی که هیچ تلاش پاک‌سازی نداشته‌اند و سپس retryهای
+موعد-رسیده. بنابراین Mediaهای blocked نمی‌توانند Mediaهای منقضی بعدی را برای
+همیشه از صف خارج کنند. هر retry پس از `media.cleanup_defer_seconds` دوباره
+واجدشرایط می‌شود و لاگ هر batch فیلد `reference_deferred` را جدا از `deferred`
+گزارش می‌کند تا قفل‌شدن مرجع از پیشرفت عادی قابل تشخیص باشد. هر `media cleanup`
+یک batch محدود پردازش می‌کند؛ برای تخلیهٔ صف بزرگ چند اجرا یا انتظار چند Cycle
+Worker لازم است و هیچ حذف دستی لازم نیست.
+
+`tabctl --instance X media cleanup` فقط در نسخه‌های این Repository که subcommand
+`media` را دارند موجود است. اگر `tabctl` نصب‌شده روی Host قدیمی‌تر باشد و
+`media` را رد کند، همان یک batch را مستقیماً در Container در حال اجرا اجرا
+کنید:
+
+```bash
+RUNTIME="$(docker ps \
+  --filter label=com.docker.compose.service=runtime \
+  --filter status=running --format '{{.Names}}' | head -n 1)"
+docker exec "$RUNTIME" /app/.venv/bin/python -m telegram_assist_bot \
+  media-cleanup --config /app/config/configuration.json
+```
+
+همین فرمان با `media-cleanup-worker` نسخهٔ دوره‌ای را اجرا می‌کند؛ Service
+`media-cleanup-worker` نیز در Compose همین فرمان را اجرا می‌کند.
 
 ## ایمنی و مخرب‌ها
 

@@ -540,8 +540,11 @@ traversal و symlink escape رد می‌شوند.
    nonterminal Publication، Schedule، Native Schedule، Approval delivery،
    Album/preparation و Advertisement را بلافاصله پیش از حذف دوباره بررسی می‌کند
    و فقط path محصور در همان root را حذف می‌کند.
-   Approval تحویل‌شده تا وقتی Post مرجع هنوز منقضی نشده است nonterminal محسوب
-   می‌شود؛ پس از انقضای Post، صرف delivery قدیمی مانع cleanup نیست.
+   Approval تمام‌شده فقط تا وقتی چرخهٔ عمر تأیید خودش زنده است محافظت می‌کند:
+   `approval_expired = True` (که چرخهٔ Cleanup Approval ثبت می‌کند) مرجع را
+   آزاد می‌کند، `False` و فیلد غایب legacy همچنان محافظت می‌کنند. Approvalهای
+   غیرterminal و Post فعال بدون تغییر باقی می‌مانند؛ پس از انقضای Post، صرف
+   delivery قدیمی مانع cleanup نیست.
 
 سند جدید `media_items` فیلد authoritative مستقل `media_expires_at` دارد و فیلد
 قدیمی `expires_at` را فقط برای سازگاری readerهای موجود نیز می‌نویسد. رکورد legacy
@@ -550,6 +553,36 @@ traversal و symlink escape رد می‌شوند.
 نسخه‌دار `ix_media_retention_cleanup_v2` در کنار index قبلی ساخته می‌شود.
 رسیدن expiration اولیه deadline انتشار نیست؛ وجود reference فعال فایل را حفظ
 می‌کند و پس از terminal شدن آخرین reference، همان سند دوباره candidate می‌شود.
+
+انتخاب candidate در Cleanup صریحاً دو‌کلاسی و منصفانه است و هر کلاس Query و
+index مستقل خود را دارد:
+
+1. کلاس هرگز-بررسی‌نشده: Mediaهای منقضی و پاک‌نشده‌ای که `cleanup_next_check_at`
+   ندارند (یا صریحاً `null` است). فیلتر `cleanup_next_check_at: None` هر دو شکل
+   را می‌گیرد و مرزهای index موجود (`ix_media_cleanup_deferral_v3` و
+   `ix_media_retention_cleanup_v2`) را روی جمعیت منقضی محدود می‌کند؛ بنابراین
+   اسکن هرگز جمعیت بزرگ Media تازه را نمی‌پیماید. ترتیب داخل کلاس `_id` صعودی
+   است و یک top-k sort محدود روی همین مجموعه انجام می‌شود.
+2. کلاس retry موعد-رسیده: Mediaهای منقضی که `cleanup_next_check_at` آن‌ها رسیده
+   است. مقایسه با یک datetime در MongoDB type-bracketed است، پس `$lte` هرگز
+   `null` یا فیلد غایب را انتخاب نمی‌کند و دو کلاس جدا باقی می‌مانند. index
+   نسخه‌دار `ix_media_cleanup_fairness_v4` با کلیدهای
+   `(cleaned_at, cleanup_next_check_at, _id)` این Query و ترتیب
+   `cleanup_next_check_at`/`_id` را مستقیماً سرو می‌کند و هیچ SORT ندارد.
+
+نتیجه این است که رکوردهای هرگز-بررسی‌نشده همیشه پیش از retryهای deferشده بررسی
+می‌شوند و یک گروه bounded از Mediaهای همیشه blocked نمی‌تواند رکوردهای منقضی و
+unreferenced بعدی را برای همیشه از تلاش پاک‌سازی محروم کند، بدون آنکه Batch یا
+سقف Cycle Worker بزرگ شود. رکوردهای legacy فاقد `cleanup_next_check_at` به‌طور
+طبیعی در کلاس هرگز-بررسی‌نشده قرار می‌گیرند، پس backfill لازم نیست؛ indexهای
+نسخهٔ قبل دست‌نخورده می‌مانند و migration مخربی وجود ندارد.
+
+راستی‌آزمایی اندازه روی یک Collection آزمایشی Production-shaped با ۱۰۰٫۰۰۰
+Media تازهٔ غیرمنقضی، ۵٫۰۰۰ منقضی هرگز-بررسی‌نشده، ۱٫۰۰۰ retry موعد-رسیده و
+۲۰۰ رکورد legacy (۱۰۶٫۲۰۰ سند) نشان می‌دهد کلاس retry با `IXSCAN`
+روی `ix_media_cleanup_fairness_v4` بدون SORT و با `keysExamined = 100` خوانده
+می‌شود و کلاس هرگز-بررسی‌نشده با `keysExamined = 5202` روی همان ۵٫۲۰۰ رکورد
+منقضی محدود می‌ماند؛ هیچ COLLSCAN و هیچ اسکنی روی جمعیت تازه رخ نمی‌دهد.
 
 Album با کلید canonical source + media-group ID ساخته می‌شود. arrival هر عضو پیش
 از دانلود Media ثبت می‌شود تا دانلود کند یا history قدیمی quiet window را دور نزند.

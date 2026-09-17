@@ -44,24 +44,34 @@ class FakePreparationRepository:
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:
+        """Mirror the MongoDB two-class fairness ordering of the real adapter.
+
+        Never-deferred candidates come first in identity order, then deferred
+        candidates in due order, so a perpetually referenced page cannot starve a
+        later never-attempted candidate.
+        """
         del orphan_before
-        eligible = sorted(
-            (
-                (key, item)
-                for key, item in self.media.items()
-                if item.expires_at <= now and key not in self.cleaned
-            ),
+
+        def still_deferred(key: str) -> bool:
+            due = self.cleanup_next_check.get(key)
+            return due is not None and due > now
+
+        eligible = [
+            (key, item)
+            for key, item in self.media.items()
+            if item.expires_at <= now
+            and key not in self.cleaned
+            and not still_deferred(key)
+        ]
+        never_deferred = sorted(
+            (pair for pair in eligible if pair[0] not in self.cleanup_next_check),
             key=lambda pair: pair[0],
         )
-        selected: list[StoredMedia] = []
-        for key, item in eligible:
-            if len(selected) >= limit:
-                break
-            next_check = self.cleanup_next_check.get(key)
-            if next_check is not None and next_check > now:
-                continue
-            selected.append(item)
-        return tuple(selected)
+        retried = sorted(
+            (pair for pair in eligible if pair[0] in self.cleanup_next_check),
+            key=lambda pair: (self.cleanup_next_check[pair[0]], pair[0]),
+        )
+        return tuple(item for _key, item in (*never_deferred, *retried)[:limit])
 
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime

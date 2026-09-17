@@ -236,7 +236,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `application/handle_live_message.py` | فیلتر و ingest مشترک رویداد زنده بدون payload logging |
 | `application/ingest_post_idempotently.py` | تنها write path Crawl/Listener؛ Created/AlreadyExists/Conflict و claim اتمیک |
 | `application/download_post_media.py` | دانلود stream محدود، ثبت metadata و بازیابی file-commit/database-failure |
-| `application/cleanup_expired_media.py` | پاک‌سازی batchدار، retry محدود per-candidate و recheck reference بلافاصله پیش از حذف |
+| `application/cleanup_expired_media.py` | پاک‌سازی batchدار، retry محدود per-candidate، recheck reference بلافاصله پیش از حذف و متریک افزودنی `reference_deferred` |
 | `application/assemble_media_group.py` | ثبت arrival پیش از دانلود، عضوگیری replay-safe و quiet/max deadline پایدار Album |
 | `application/text_normalization.py` و `detect_exact_duplicate.py` | normalization حداقلی نسخه ۱ و hash قطعی نسخه ۱ در پنجرهٔ دقیق ۱۴روزه |
 | `application/content/` و `prepare_destination_content.py` | تبدیل خالص مقصد با edit span و rebasing Entityهای UTF-16؛ policy نسخه ۱ |
@@ -275,12 +275,12 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/persistence/mongodb/semantic_duplicate_candidates.py` | query حداقلی MongoDB برای نامزدهای معتبر ۱۴روزه با ترتیب قطعی |
 | `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity/URL-button و state/result تبلیغ و semantic با default امن legacy |
 | `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
-| `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار، recheck consumerهای پایدار و state آماده‌سازی/Album |
+| `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار، انتخاب candidate دو‌کلاسی و منصفانه (فیلترهای `never_attempted_candidate_filter` / `due_retry_candidate_filter` و index `ix_media_cleanup_fairness_v4`)‌، آزادسازی مرجع Approval منقضی و recheck consumerهای پایدار و state آماده‌سازی/Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication، retraction و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album، metadata اختیاری `text_url` و ردیف‌های دکمهٔ URL بدون binary در MongoDB |
 | `infrastructure/media/local_storage.py` | ذخیره خصوصی content-addressed با stream/hash/size، temp یکتا و rename اتمیک |
-| `workers/media_cleanup.py` | محرک one-shot و loop دوره‌ای cancellation-safe؛ هر iteration فقط یک batch MongoDB-backed |
+| `workers/media_cleanup.py` | محرک one-shot و loop دوره‌ای cancellation-safe؛ هر wake-up حداکثر `max_batches_per_cycle` batch محدود و MongoDB-backed را drain می‌کند و بین batchها yield و stop-event را بررسی می‌کند |
 | `infrastructure/telegram/user/media_adapter.py` | resolve reference و stream فقط Photo/Document concrete تلگرام، با رد امن WebPage/Media نامعتبر |
 | `infrastructure/telegram/user/session_adapter.py` | Adapter Telethon برای Session lock/path/permission، login، Premium، channel access، auto-reconnect محدود و await کردن disconnect نهایی همان client مالک |
 | `infrastructure/telegram/user/message_mapper.py` | mapping بدون normalization متن/Caption/Entityهای UTF-16، دکمه‌های `KeyboardButtonUrl` و نگه‌داشتن WebPage preview به‌صورت متن عادی |
@@ -412,8 +412,11 @@ Telegram Media stream -> DownloadPostMedia -> LocalMediaStorage
     -> destination artifact v1 per destination
     -> atomic preparation readiness
 
-CleanupExpiredMedia -> bounded candidates -> reference recheck
-    -> confined idempotent delete under var/media
+CleanupExpiredMedia -> bounded fair candidates
+    -> class A: expired never-attempted candidates (_id order)
+    -> class B: due deferred retries (cleanup_next_check_at then _id)
+    -> reference recheck -> confined idempotent delete under var/media
+    -> reference-protected defer (cleanup_next_check_at, reference_deferred)
 ```
 
 MongoDB منبع حقیقت resume هر مرحله است. Worker پس از restart نتیجه‌های duplicate،
@@ -546,7 +549,13 @@ Build رسمی CI از `hatchling==1.31.0` موجود در گروه قفل‌ش�
 - `application/test_download_post_media.py` و `infrastructure/media/`: timeout،
   cancellation، size، temp cleanup، containment/symlink، rename اتمیک و حفظ فایل سالم.
 - `application/test_cleanup_expired_media.py`: مرز retention، reference/shared hash،
-  orphan grace، missing file، recheck و رقابت دو cleanup worker.
+  orphan grace، missing file، recheck، متریک `reference_deferred` و رقابت دو
+  cleanup worker.
+- `integration/test_media_retention_cleanup.py`: MongoDB واقعی loopback؛ وجود
+  indexهای cleanup، ترتیب دو‌کلاسی و منصفانهٔ candidate، Regression گرسنگی در
+  چند Cycle محدود Worker با گذر از فاصلهٔ defer، referenceهای Approval
+  (تمام‌شدهٔ منقضی/زنده/legacy و `pending`/`claimed`/`retry`)، Publication و
+  Schedule فعال، Media تازهٔ همان مسیر، رقابت دو worker و رکورد legacy.
 - `application/test_assemble_media_group.py`: replay، ترتیب، deadline، late-member
   policy و finalization تک‌برنده.
 - `application/test_detect_exact_duplicate.py` و `test_text_normalization.py`:

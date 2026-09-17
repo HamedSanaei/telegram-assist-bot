@@ -71,6 +71,14 @@ async def initialize_content_preparation_indexes(
         name="ix_media_cleanup_deferral_v3",
     )
     await media.create_index(
+        [
+            ("cleaned_at", ASCENDING),
+            ("cleanup_next_check_at", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="ix_media_cleanup_fairness_v4",
+    )
+    await media.create_index(
         [("post_id", ASCENDING), ("storage_path", ASCENDING)],
         name="ix_media_post_path_v1",
     )
@@ -99,6 +107,51 @@ async def initialize_content_preparation_indexes(
         ],
         name="ix_exact_duplicate_window_v1",
     )
+
+
+def expired_candidate_filter(now: datetime) -> Document:
+    """Return the shared legacy-safe expiration predicate for cleanup."""
+    return {
+        "$or": [
+            {"media_expires_at": {"$lte": now}},
+            {
+                "media_expires_at": {"$exists": False},
+                "expires_at": {"$lte": now},
+            },
+        ]
+    }
+
+
+def never_attempted_candidate_filter(now: datetime) -> Document:
+    """Select expired candidates that never received a cleanup attempt.
+
+    `cleanup_next_check_at: None` matches an explicit null and a missing field, so
+    both legacy shapes form one fast class. The equality on
+    `cleanup_next_check_at` keeps the scan on the existing deferral and retention
+    indexes, which bound it to expired documents instead of walking the much
+    larger fresh-media population. Records written before `cleanup_next_check_at`
+    existed therefore need no backfill to be selected first.
+    """
+    return {
+        "cleaned_at": None,
+        "cleanup_next_check_at": None,
+        "$and": [expired_candidate_filter(now)],
+    }
+
+
+def due_retry_candidate_filter(now: datetime) -> Document:
+    """Select expired deferred candidates whose retry instant has arrived.
+
+    A comparison against a datetime is type-bracketed in MongoDB, so `$lte`
+    matches only real dates and never a null or missing `cleanup_next_check_at`;
+    the two candidate classes are therefore disjoint. `ix_media_cleanup_fairness_v4`
+    serves this filter and its `cleanup_next_check_at`/`_id` ordering directly.
+    """
+    return {
+        "cleaned_at": None,
+        "cleanup_next_check_at": {"$lte": now},
+        "$and": [expired_candidate_filter(now)],
+    }
 
 
 def _media_document(media: StoredMedia) -> Document:
@@ -326,37 +379,47 @@ class MongoContentPreparationRepository:
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:
-        """List a bounded deterministic expired-media batch."""
+        """List a bounded, starvation-free, deterministic expired-media batch.
+
+        Candidate selection is an explicit two-class fairness policy:
+
+        1. Expired candidates that never received a cleanup attempt (no
+           `cleanup_next_check_at`) in `_id` order. Their query uses the existing
+           deferral/retention indexes, so a bounded scan reads only expired media
+           and never walks the much larger fresh-media population.
+        2. Expired deferred candidates whose retry instant arrived, ordered by due
+           instant and then `_id`. `ix_media_cleanup_fairness_v4`
+           (`cleaned_at`, `cleanup_next_check_at`, `_id`) serves this query and its
+           ordering directly, so a due page is fetched without a blocking sort.
+
+        Never-attempted candidates always precede retries, so a bounded set of
+        perpetually referenced (deferred) records can never permanently starve
+        later expired, unreferenced records while batch size and worker cycle
+        bounds stay unchanged. Each class keeps deterministic `_id` order, and the
+        two classes are disjoint.
+        """
         del orphan_before
-        cursor = (
-            self._media.find(
-                {
-                    "cleaned_at": None,
-                    "$and": [
-                        {
-                            "$or": [
-                                {"media_expires_at": {"$lte": now}},
-                                {
-                                    "media_expires_at": {"$exists": False},
-                                    "expires_at": {"$lte": now},
-                                },
-                            ]
-                        },
-                        {
-                            "$or": [
-                                {"cleanup_next_check_at": {"$exists": False}},
-                                {"cleanup_next_check_at": None},
-                                {"cleanup_next_check_at": {"$lte": now}},
-                            ]
-                        },
-                    ],
-                }
-            )
-            .sort("_id", ASCENDING)
-            .limit(limit)
+        never_attempted = await self._cleanup_candidate_page(
+            never_attempted_candidate_filter(now),
+            sort=[("_id", ASCENDING)],
+            limit=limit,
         )
-        items = [_media_from(document) async for document in cursor]
-        return tuple(items)
+        remaining = limit - len(never_attempted)
+        if remaining <= 0:
+            return never_attempted
+        due_retries = await self._cleanup_candidate_page(
+            due_retry_candidate_filter(now),
+            sort=[("cleanup_next_check_at", ASCENDING), ("_id", ASCENDING)],
+            limit=remaining,
+        )
+        return (*never_attempted, *due_retries)
+
+    async def _cleanup_candidate_page(
+        self, query: Document, *, sort: list[tuple[str, int]], limit: int
+    ) -> tuple[StoredMedia, ...]:
+        """Load one bounded deterministic page for one cleanup candidate class."""
+        cursor = self._media.find(query).sort(sort).limit(limit)
+        return tuple([_media_from(document) async for document in cursor])
 
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime
@@ -553,6 +616,15 @@ class MongoContentPreparationRepository:
                     {
                         "_id": {"$in": sorted(active_post_ids)},
                         "status": "completed",
+                        # A completed approval protects media only while its own
+                        # approval lifecycle is still live. The approval cleanup
+                        # lifecycle persists `approval_expired = True` once the
+                        # administrator action window is over, and
+                        # `is_actionable()` already treats that record as
+                        # non-actionable. A missing field is legacy data that was
+                        # never explicitly expired and therefore keeps protecting
+                        # the file.
+                        "approval_expired": {"$ne": True},
                     },
                     projection={"_id": 1},
                 )
