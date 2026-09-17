@@ -1,6 +1,6 @@
 # Telegram Assist Bot
 
-نسخهٔ Production `1.1.3` یک دستیار Dockerized برای جمع‌آوری، تأیید،
+نسخهٔ Production `1.1.4` یک دستیار Dockerized برای جمع‌آوری، تأیید،
 زمان‌بندی و انتشار محتوای کانال‌های تلگرام با Python و معماری تمیز است.
 Scaffold معماری، سامانهٔ typed Configuration، مدل خالص چرخهٔ عمر Post و
 Repository یکتای Post با Adapter ناهمگام MongoDB آماده‌اند. Composition Root
@@ -61,7 +61,7 @@ Backup کامل migration (Config، MongoDB، Session، Media و `.env`) و Rest
 بگیرید. نام Instance، Compose project، MongoDB، Session، Media و Config هر
 نصب مستقل است و مسیر پیش‌فرض Linux برابر
 `~/.local/share/telegram-assist-bot/<instance>` است. Image پیش‌فرض نصب تازه
-`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.3` و MongoDB پیش‌فرض
+`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.4` و MongoDB پیش‌فرض
 `mongo:7.0.32` است.
 
 راهنمای کامل عملیات، نقشهٔ فرمان‌های قدیمی → منو و CLI پیشرفته در
@@ -92,7 +92,7 @@ Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workfl
 Tag `v*.*.*` یا dispatch دستی یک Tag موجود اجرا می‌شود:
 
 ```bash
-gh workflow run release.yml -f tag=v1.1.3
+gh workflow run release.yml -f tag=v1.1.4
 ```
 
 Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJOR.MINOR.PATCH` و تطبیق آن
@@ -103,7 +103,7 @@ Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJO
 Release عمومی را با notes خودکار ایجاد می‌کند؛ اگر Release همان Tag موجود باشد
 آن را duplicate نمی‌کند و Assetها را با checksum تکمیل یا جایگزین می‌کند.
 
-برای Release پایدار `v1.1.3` Tagهای Image برابر `1.1.3`، `1.1`، `1`، Git SHA
+برای Release پایدار `v1.1.4` Tagهای Image برابر `1.1.4`، `1.1`، `1`، Git SHA
 و `latest` تولید می‌شوند. Tag باید فقط پس از موفقیت تمام Gateها به‌صورت دستی
 ساخته شود؛ Workflow Tag موجود را حذف یا جابه‌جا نمی‌کند. مراحل کنترل Artifact
 در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده است.
@@ -373,6 +373,24 @@ runtime فرمان `ingest` همان session/client بازشده را برای v
 ```powershell
 uv run --python 3.12 python -m telegram_assist_bot media-cleanup --config config/configuration.local.json
 ```
+
+در Instance نصب‌شدهٔ Production، `tabctl --instance X media cleanup` همین یک batch
+را اجرا می‌کند و subcommand `media cleanup` در نسخه‌های این Repository که آن را
+دارند موجود است. اگر `tabctl` نصب‌شده روی Host قدیمی‌تر باشد، همان فرمان را
+مستقیماً در Container اجرا کنید:
+
+```bash
+RUNTIME="$(docker ps \
+  --filter label=com.docker.compose.service=runtime \
+  --filter status=running --format '{{.Names}}' | head -n 1)"
+docker exec "$RUNTIME" /app/.venv/bin/python -m telegram_assist_bot \
+  media-cleanup --config /app/config/configuration.json
+```
+
+Cleanup فقط Media منقضی و بی‌مرجع را حذف می‌کند: ابتدا Candidateهای هرگز
+بررسی‌نشده و سپس retryهای موعد-رسیده، تا Mediaهای blocked هیچ‌وقت Mediaهای
+منقضی بعدی را از صف خارج نکنند. هر اجرا یک batch محدود است؛ برای تخلیهٔ صف بزرگ
+چند اجرا یا انتظار Cycleهای Worker لازم است و هیچ حذف دستی لازم نیست.
 
 ## اجرای عملیاتی تأیید و انتشار
 
