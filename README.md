@@ -463,13 +463,19 @@ polling تحویل فقط `approval_deliveries` را می‌خواند و هیچ
 `content_preparations` تاریخی انجام نمی‌دهد: هویت durable هر Post دقیقاً در
 لحظهٔ آماده‌شدن پایدار ساخته می‌شود. آماده‌های legacy با catch-up محدود و
 watermark-محور (`approval_outbox_reconcile_batch_size`،
-`approval_outbox_reconcile_interval_seconds` و
-`approval_outbox_reconcile_pause_seconds`) یک‌بار و افزاینده backfill می‌شوند.
+`approval_outbox_reconcile_interval_seconds`،
+`approval_outbox_reconcile_pause_seconds` و
+`approval_outbox_reconcile_guard_seconds`) یک‌بار و افزاینده backfill می‌شوند.
+پنجرهٔ guard تضمین می‌کند Markerهای تازه همیشه جلوتر از watermark بمانند، پس اگر
+نوشتن هویت درون‌خطی شکست بخورد در pass بعدی ترمیم می‌شود و اسکن همچنان bounded می‌ماند.
 
 در سطح Container نیز یک خطای Startup دائمی و غیرقابل‌retry (مثل اکانت Telegram
 بدون Premium) با exit code `4`، یک event `startup_failed_permanently` و توقف تمیز
 شناسانده می‌شود؛ سیاست `restart: on-failure:20` فقط خطاهای گذرا را با backoff
-محدود restart می‌کند تا هیچ restart storm رخ ندهد. جزئیات عملیاتی در
+محدود restart می‌کند تا هیچ restart storm رخ ندهد. بازیابی پس از Reboot سرور در
+لایهٔ Host انجام می‌شود: `deploy/systemd/telegram-assist-boot.service` و
+`deploy/boot_recovery.sh` برای هر Instance یک `docker compose up -d` ایدمپوتنت
+می‌زنند و سیاست محدود Runtime را تضعیف نمی‌کنند. جزئیات عملیاتی در
 `docs/OPERATIONS.md` آمده است.
 
 صف تحویل تأیید را می‌توان بدون بارگذاری متن یا مسیر Media و بدون اجرای Telegram

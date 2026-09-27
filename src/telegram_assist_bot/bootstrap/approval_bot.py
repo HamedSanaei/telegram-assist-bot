@@ -398,6 +398,9 @@ class ApprovalBotApplication:
                 pause_seconds=float(
                     settings.telegram.bot.approval_outbox_reconcile_pause_seconds
                 ),
+                guard_seconds=float(
+                    settings.telegram.bot.approval_outbox_reconcile_guard_seconds
+                ),
                 clock=_utc_now,
                 logger=self._foundation.logger,
             )

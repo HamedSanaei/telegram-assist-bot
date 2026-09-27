@@ -181,6 +181,43 @@ batchها مکث bounded انجام می‌شود و هر `approval_outbox_recon
 ایندکس‌شده روی `(ready_at, _id)` و هیچ نوشتنی ندارد؛ ابطال‌شده یا کامل‌شده‌ها
 دوباره claim نمی‌شوند.
 
+### پنجرهٔ Guard ترمیم و فهرست حلقه‌های Polling
+
+هر pass فقط آماده‌های قدیمی‌تر از `now - approval_outbox_reconcile_guard_seconds`
+(پیش‌فرض `300`) را اسکن می‌کند؛ یعنی watermark هرگز داخل بازهٔ اخیر جلو نمی‌رود و
+Markerهای تازه، وقتی از پنجره بیرون رفتند، در pass بعدی دوباره بررسی می‌شوند. این
+پنجره مسیر ترمیم شکست نوشتن درون‌خطی هویت تحویل است: تا وقتی Marker جلوتر از
+watermark است، یک pass بعدی آن را می‌بیند و هویت گم‌شده را می‌سازد؛ بنابراین هیچ
+تأییدیه‌ای گم نمی‌شود و اسکن همچنان bounded می‌ماند. اگر guard بزرگ شود و watermark
+داخل یا جلوتر از پنجرهٔ جدید بیفتد، همان pass یک‌بار watermark را به مرز پنجره
+برمی‌گرداند تا آن بازه بی‌نهایت اسکن نشود.
+
+قاعدهٔ عمومی: هیچ حلقهٔ دوره‌ای مجاز نیست در هر poll یک Collection را کامل بخواند،
+بشمارد یا بنویسد. جدول زیر وضعیت واقعی حلقه‌های فعال را نگه می‌دارد:
+
+| حلقه | cadence | کار هر poll در حالت بی‌کار | هزینه |
+|---|---|---|---|
+| `ApprovalDeliveryLoop` | `approval_delivery_poll_seconds` (5s) | یک `findAndModify` روی `approval_deliveries` | O(1) |
+| `ApprovalOutboxReconciliationLoop` | `approval_outbox_reconcile_interval_seconds` (300s) | batchهای محدود روی آماده‌های قدیمی‌تر از guard | O(batch) |
+| approval sync | `approval_delivery_poll_seconds` (5s) | یک claim ایندکس‌شدهٔ partial روی `sync_required` | O(1) |
+| AI worker | `ai.queue.worker_poll_seconds` (5s) | یک claim ایندکس‌شده روی `ai_jobs` | O(1) |
+| scheduled publication | `publishing.worker_poll_seconds` (5s) | یک claim ایندکس‌شده روی scheduleها | O(1) |
+| album finalizer | 1s | یک claim ایندکس‌شده روی `media_groups` | O(1) |
+| approval cleanup | `media.cleanup_interval_seconds` (3600s) | batchهای محدود | O(batch) |
+| live listener | رویداد Telegram | بدون کار DB تا رسیدن پیام | O(1) |
+
+### بازیابی Reboot در لایهٔ Host
+
+سیاست `on-failure:20` عمداً محدود است و در Restart خودکار Docker Daemon شرکت
+نمی‌کند؛ بنابراین یک Instance متوقف (از جمله توقف عمدی خطای دائمی) پس از Reboot
+سرور خودبه‌خود بالا نمی‌آید. این شکاف در لایهٔ Host بسته می‌شود و نه با تضعیف قرارداد
+Runtime: `deploy/systemd/telegram-assist-boot.service` یک Unit از نوع `oneshot`
+است که `deploy/boot_recovery.sh` را اجرا می‌کند و آن اسکریپت برای هر Instance دارای
+`compose.yaml` یک `docker compose up -d` ایدمپوتنت می‌زند. هیچ `--force-recreate`،
+حذف Volume یا تغییر سیاست Restart انجام نمی‌شود؛ Containerهای در حال اجرا
+دست‌نخورده می‌مانند و خطای دائمی در بدترین حالت یک‌بار در هر Reboot تمیز متوقف
+می‌شود.
+
 Outbox تحویل approval از watermark زمان شروع برای تفکیک backlog تاریخی و کار جدید
 استفاده می‌کند. مقدار سازگار `approval_delivery_max_per_startup` اندازهٔ batch
 تاریخی است؛ پس از تکمیل موفق همان تعداد Post، مکث bounded انجام و batch بعدی بدون

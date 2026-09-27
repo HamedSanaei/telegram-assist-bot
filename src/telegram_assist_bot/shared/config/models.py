@@ -229,6 +229,9 @@ class TelegramBotConfig(_FrozenConfigModel):
     approval_outbox_reconcile_pause_seconds: Annotated[
         StrictInt, Field(ge=0, le=60)
     ] = 2
+    approval_outbox_reconcile_guard_seconds: Annotated[
+        StrictInt, Field(ge=0, le=86_400)
+    ] = 300
     approval_media_upload_timeout_seconds: Annotated[
         StrictInt, Field(ge=1, le=3600)
     ] = 300

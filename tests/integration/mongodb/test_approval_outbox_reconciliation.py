@@ -403,6 +403,120 @@ def test_concurrent_outbox_creation_creates_one_logical_delivery(
     asyncio.run(scenario())
 
 
+def test_guard_window_reconciles_missing_identities_after_they_age_out(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    """The trailing window heals a failed inline write without a historical scan."""
+
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            preparations = database["content_preparations"]
+            deliveries = database["approval_deliveries"]
+            await initialize_content_preparation_indexes(
+                database["media_items"], database["media_groups"], preparations
+            )
+            await initialize_operational_approval_indexes(deliveries)
+            await preparations.insert_many(
+                [
+                    {"_id": "historical", "ready_at": _NOW - timedelta(seconds=400)},
+                    {"_id": "recent", "ready_at": _NOW - timedelta(seconds=10)},
+                ]
+            )
+            operational = _repository(cast("Any", database))
+
+            first = await operational.reconcile_missing_deliveries(
+                limit=100, at=_NOW, guard_seconds=300
+            )
+            assert (first.scanned_count, first.created_count) == (1, 1)
+            assert await deliveries.count_documents({"_id": "recent"}) == 0
+
+            later = await operational.reconcile_missing_deliveries(
+                limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+            )
+            assert (later.scanned_count, later.created_count) == (1, 1)
+            assert await deliveries.count_documents({"_id": "recent"}) == 1
+            assert await deliveries.count_documents({"_id": "historical"}) == 1
+
+            settled = await operational.reconcile_missing_deliveries(
+                limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+            )
+            assert (settled.scanned_count, settled.created_count) == (0, 0)
+            assert settled.completed is True
+
+            guarded = outbox.outbox_reconciliation_filter(
+                outbox.INITIAL_RECONCILIATION_WATERMARK,
+                ready_before_or_at=_NOW - timedelta(seconds=300),
+            )
+            explain = (
+                await preparations.find(guarded, {"_id": 1, "ready_at": 1})
+                .sort([("ready_at", 1), ("_id", 1)])
+                .limit(200)
+                .explain()
+            )
+            stages = _stage_names(explain)
+            assert "COLLSCAN" not in stages
+            assert "IXSCAN" in stages
+            assert _total_stat(explain, "totalDocsExamined") <= 2
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_reconciliation_rewind_heals_a_window_a_raised_guard_deferred(
+    mongodb_test_settings: MongoTestSettings,
+) -> None:
+    """A durable watermark at the horizon is rewound instead of skipping work."""
+
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            preparations = database["content_preparations"]
+            deliveries = database["approval_deliveries"]
+            await initialize_content_preparation_indexes(
+                database["media_items"], database["media_groups"], preparations
+            )
+            await initialize_operational_approval_indexes(deliveries)
+            await preparations.insert_many(
+                [{"_id": "recent", "ready_at": _NOW - timedelta(seconds=10)}]
+            )
+            await database["approval_outbox_state"].insert_one(
+                {
+                    "_id": "content_preparation_outbox",
+                    "watermark_ready_at": _NOW,
+                    "watermark_id": "recent",
+                }
+            )
+            operational = _repository(cast("Any", database))
+
+            rewound = await operational.reconcile_missing_deliveries(
+                limit=100, at=_NOW, guard_seconds=300
+            )
+            assert (rewound.scanned_count, rewound.created_count) == (0, 0)
+            state = await database["approval_outbox_state"].find_one(
+                {"_id": "content_preparation_outbox"}
+            )
+            assert state is not None
+            assert state["watermark_ready_at"] == _NOW - timedelta(seconds=300)
+
+            healed = await operational.reconcile_missing_deliveries(
+                limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+            )
+            assert (healed.scanned_count, healed.created_count) == (1, 1)
+            assert await deliveries.count_documents({"_id": "recent"}) == 1
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_claim_indexes_match_the_bounded_query_paths(
     mongodb_test_settings: MongoTestSettings,
 ) -> None:

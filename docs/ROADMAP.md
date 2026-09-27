@@ -208,7 +208,7 @@ release `v1.1.4` رفع می‌کند.
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
-| [T100](tasks/T100-approval-outbox-and-bounded-restart-contract.md) | Approval Delivery Outbox و قرارداد Restart محدود | T061، T066، T079 | `5.12–5.19`، `13`، `14`، `16` | Completed |
+| [T100](tasks/T100-approval-outbox-and-bounded-restart-contract.md) | Approval Delivery Outbox، قرارداد Restart محدود، پنجرهٔ Guard ترمیم و بازیابی Reboot در لایهٔ Host | T061، T066، T079 | `5.12–5.19`، `13`، `14`، `16` | Completed |
 
 ## Maintenance
 

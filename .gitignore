@@ -78,3 +78,4 @@ Thumbs.db
 config/configuration.local.env
 .pytest-tmp-*
 artifacts/*
+.freebuff/project-id

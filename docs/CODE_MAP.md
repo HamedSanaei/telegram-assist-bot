@@ -524,11 +524,15 @@ Build رسمی CI از `hatchling==1.31.0` موجود در گروه قفل‌ش�
   دائمی/گذرا، exit code پایدار `4`/`3`، تک‌event بودن و عدم نشت Secret.
 - `deployment/test_container_entrypoint.py`: نگاشت exit code دائمی به توقف تمیز،
   حفظ exit codeهای گذرا و event ساختاریافته بدون Secret.
+- `deployment/test_boot_recovery_contract.py`: واحد `oneshot` بازیابی Reboot،
+  ایدمپوتنت بودن اسکریپت و ممنوعیت flagهای مخرب و سیاست restart شناور.
 - `infrastructure/persistence/test_operational_approval_outbox.py`: اثبات عدم
   دسترسی مسیر polling به `content_preparations`، idempotency `ensure_delivery`،
-  حفظ پیشرفت موجود و bounded/incremental بودن reconciliation.
+  حفظ پیشرفت موجود، bounded/incremental بودن reconciliation، پنجرهٔ guard و
+  بازگرداندن watermark داخل پنجرهٔ جدید.
 - `application/test_approval_outbox_reconciliation.py`: batch محدود، مکث،
-  aggregate eventها، سکوت pass بی‌کار و رد Config نامحدود.
+  aggregate eventها، ارسال guard، سکوت pass بی‌کار و re-verify پنجره و رد Config
+  نامحدود.
 - `deployment/test_compose_contract.py`: سیاست restart محدود، healthcheck
   کم‌هزینهٔ MongoDB، `init: true` و entrypoint یکسان.
 - `test_text_integrity.py`: UTF-8 سخت‌گیرانه، BOM، Mojibake، allowlist محدود،
@@ -717,6 +721,7 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
 | `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
 | `deploy/permissions.sh` و `deploy/permissions.ps1` | audit/repair متمرکز و idempotent مالکیت و permission بدون تغییر محتوای Instance |
+| `deploy/boot_recovery.sh` و `deploy/systemd/telegram-assist-boot.service` | بازیابی Reboot در لایهٔ Host: Unit از نوع `oneshot` که برای هر Instance یک `docker compose up -d` ایدمپوتنت می‌زند، بدون تضعیف قرارداد `on-failure:20` |
 | `deploy/tabctl.sh` | wrapper سراسری: بدون آرگومان منوی Bash و با آرگومان مدیر Python قبلی را اجرا می‌کند |
 | `deploy/menu.sh` | منوی تعاملی Bash ۱۸ بخشه (سرویس، Session، Bot، کانال‌ها، Config، Logs، Queueها، Media، Backup، Docker، Update، Instance، Doctor، Uninstall) با actionهای غیرتعاملی `--action` |
 | `deploy/tabctl.py` و `deploy/tabctl.ps1` | registry/metadata سراسری، menu و dispatch چند Instance با exit code پایدار |

@@ -25,12 +25,14 @@ class BatchRepository:
     def __init__(self, batches: list[ApprovalOutboxReconciliation]) -> None:
         self.batches = list(batches)
         self.requested_limits: list[int] = []
+        self.requested_guards: list[float] = []
 
     async def reconcile_missing_deliveries(
-        self, *, limit: int, at: datetime
+        self, *, limit: int, at: datetime, guard_seconds: float = 0.0
     ) -> ApprovalOutboxReconciliation:
         del at
         self.requested_limits.append(limit)
+        self.requested_guards.append(guard_seconds)
         if not self.batches:
             return ApprovalOutboxReconciliation(0, 0, 0, True)
         return self.batches.pop(0)
@@ -76,6 +78,7 @@ def _loop(
             interval_seconds=300,
             pause_seconds=pause_seconds,
             clock=lambda: _NOW,
+            guard_seconds=300,
             logger=cast("Any", logger),
             sleeper=sleeper,
         ),
@@ -97,10 +100,10 @@ def test_pass_runs_bounded_batches_and_reports_aggregates() -> None:
         created = await loop.reconcile_once()
         assert created is True
         assert repository.requested_limits == [100, 100, 100]
+        assert repository.requested_guards == [300, 300, 300]
         assert sleeps == [0, 0]
         assert logger.event_names == [
             "approval_outbox_reconciliation_started",
-            "approval_outbox_reconciliation_batch_processed",
             "approval_outbox_reconciliation_batch_processed",
             "approval_outbox_reconciliation_batch_processed",
             "approval_outbox_reconciliation_completed",
@@ -116,6 +119,23 @@ def test_pass_runs_bounded_batches_and_reports_aggregates() -> None:
         assert completed_fields["created_count"] == 50
         assert completed_fields["existing_count"] == 200
         assert completed_fields["batch_count"] == 3
+
+    asyncio.run(scenario())
+
+
+def test_guard_window_reverification_stays_silent() -> None:
+    """A pass that only re-verifies the trailing window must not log at all."""
+
+    async def scenario() -> None:
+        repository = BatchRepository(
+            [ApprovalOutboxReconciliation(150, 0, 150, True, _NOW)]
+        )
+        logger = RecordingLogger()
+        loop, _sleeps = _loop(repository, logger)
+        created = await loop.reconcile_once()
+        assert created is False
+        assert repository.requested_guards == [300]
+        assert logger.events == []
 
     asyncio.run(scenario())
 
@@ -204,12 +224,21 @@ def test_rejects_unbounded_configuration() -> None:
             pause_seconds=-1,
             clock=lambda: _NOW,
         )
+    with pytest.raises(ValueError, match="guard"):
+        ApprovalOutboxReconciliationLoop(
+            cast("Any", repository),
+            batch_size=10,
+            interval_seconds=300,
+            pause_seconds=1,
+            clock=lambda: _NOW,
+            guard_seconds=-1,
+        )
 
 
 def test_watermark_field_is_serializable_when_absent() -> None:
     async def scenario() -> None:
         repository = BatchRepository(
-            [ApprovalOutboxReconciliation(5, 0, 5, True, None)]
+            [ApprovalOutboxReconciliation(5, 1, 4, True, None)]
         )
         logger = RecordingLogger()
         loop, _sleeps = _loop(repository, logger)

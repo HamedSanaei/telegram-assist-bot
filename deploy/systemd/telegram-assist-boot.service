@@ -1,0 +1,19 @@
+[Unit]
+Description=Telegram Assist Bot boot recovery
+Documentation=https://github.com/HamedSanaei/telegram-assist-bot/blob/main/docs/OPERATIONS.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+Environment=TAB_INSTANCE_ROOT=/opt/telegram-assist-bot/instances
+ExecStart=/usr/local/bin/telegram-assist-boot-recovery
+TimeoutStartSec=600
+# The unit only issues an idempotent `docker compose up -d` per instance. It never
+# overrides the bounded `restart: on-failure:20` policy, so a permanent startup
+# validation failure still stops instead of restarting forever.
+
+[Install]
+WantedBy=multi-user.target

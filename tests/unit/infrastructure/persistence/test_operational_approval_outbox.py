@@ -11,6 +11,9 @@ import pytest
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoOperationalApprovalRepository,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb import (
+    operational_approval_repository as outbox,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -441,5 +444,174 @@ def test_reconcile_rejects_invalid_configuration() -> None:
             await with_state.reconcile_missing_deliveries(limit=0, at=_NOW)
         with pytest.raises(ValueError, match="limit"):
             await with_state.reconcile_missing_deliveries(limit=5000, at=_NOW)
+        with pytest.raises(ValueError, match="guard"):
+            await with_state.reconcile_missing_deliveries(
+                limit=10, at=_NOW, guard_seconds=-1
+            )
+
+    asyncio.run(scenario())
+
+
+def test_outbox_reconciliation_filter_bounds_the_guard_horizon() -> None:
+    watermark = (_NOW - timedelta(seconds=600), "post-a")
+    horizon = _NOW - timedelta(seconds=300)
+
+    assert outbox.outbox_reconciliation_filter(
+        watermark, ready_before_or_at=horizon
+    ) == {
+        "$or": [
+            {"ready_at": {"$gt": watermark[0], "$lte": horizon}},
+            {"ready_at": watermark[0], "_id": {"$gt": "post-a"}},
+        ]
+    }
+
+
+def test_outbox_reconciliation_filter_without_horizon_stays_forward_only() -> None:
+    watermark = (_NOW - timedelta(seconds=600), "post-a")
+
+    assert outbox.outbox_reconciliation_filter(watermark) == {
+        "$or": [
+            {"ready_at": {"$gt": watermark[0]}},
+            {"ready_at": watermark[0], "_id": {"$gt": "post-a"}},
+        ]
+    }
+
+
+def test_reconcile_guard_window_heals_identities_once_they_age_out() -> None:
+    """A failed inline write is repaired later without rescanning history."""
+
+    async def scenario() -> None:
+        preparations = RecordingCollection(
+            [
+                {"_id": "historical", "ready_at": _NOW - timedelta(seconds=400)},
+                {"_id": "recent", "ready_at": _NOW - timedelta(seconds=10)},
+                {"_id": "unready"},
+            ]
+        )
+        deliveries = RecordingCollection()
+        state = RecordingCollection()
+        repository = _repository(
+            preparations=preparations, deliveries=deliveries, state=state
+        )
+
+        first = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW, guard_seconds=300
+        )
+        assert (first.scanned_count, first.created_count) == (1, 1)
+        assert first.completed is True
+        assert set(deliveries.documents) == {"historical"}
+
+        later = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+        )
+        assert (later.scanned_count, later.created_count, later.existing_count) == (
+            1,
+            1,
+            0,
+        )
+        assert set(deliveries.documents) == {"historical", "recent"}
+        assert "unready" not in deliveries.documents
+
+        settled = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+        )
+        assert (settled.scanned_count, settled.created_count) == (0, 0)
+        assert settled.completed is True
+        assert set(deliveries.documents) == {"historical", "recent"}
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_rewinds_a_watermark_that_reached_the_guard_horizon() -> None:
+    """A raised guard must rewind the window instead of skipping it forever."""
+
+    async def scenario() -> None:
+        recent_at = _NOW - timedelta(seconds=10)
+        state = RecordingCollection(
+            [
+                {
+                    "_id": "content_preparation_outbox",
+                    "watermark_ready_at": _NOW,
+                    "watermark_id": "recent",
+                }
+            ]
+        )
+        repository = _repository(
+            preparations=RecordingCollection(
+                [{"_id": "recent", "ready_at": recent_at}]
+            ),
+            deliveries=RecordingCollection(),
+            state=state,
+        )
+
+        rewound = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW, guard_seconds=300
+        )
+
+        assert (rewound.scanned_count, rewound.created_count) == (0, 0)
+        assert rewound.completed is True
+        assert state.documents["content_preparation_outbox"]["watermark_ready_at"] == (
+            _NOW - timedelta(seconds=300)
+        )
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_heals_the_window_deferred_by_a_rewound_watermark() -> None:
+    async def scenario() -> None:
+        recent_at = _NOW - timedelta(seconds=10)
+        state = RecordingCollection(
+            [
+                {
+                    "_id": "content_preparation_outbox",
+                    "watermark_ready_at": _NOW,
+                    "watermark_id": "recent",
+                }
+            ]
+        )
+        deliveries = RecordingCollection()
+        repository = _repository(
+            preparations=RecordingCollection(
+                [{"_id": "recent", "ready_at": recent_at}]
+            ),
+            deliveries=deliveries,
+            state=state,
+        )
+        await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW, guard_seconds=300
+        )
+
+        healed = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+        )
+        assert (healed.scanned_count, healed.created_count) == (1, 1)
+        assert set(deliveries.documents) == {"recent"}
+
+        settled = await repository.reconcile_missing_deliveries(
+            limit=100, at=_NOW + timedelta(minutes=6), guard_seconds=300
+        )
+        assert (settled.scanned_count, settled.created_count) == (0, 0)
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_without_guard_keeps_scanning_every_collected_marker() -> None:
+    """Guard zero keeps the original unbounded-forward compatibility mode."""
+
+    async def scenario() -> None:
+        preparations = RecordingCollection(
+            [{"_id": "future", "ready_at": _NOW + timedelta(seconds=5)}]
+        )
+        deliveries = RecordingCollection()
+        repository = _repository(
+            preparations=preparations,
+            deliveries=deliveries,
+            state=RecordingCollection(),
+        )
+
+        result = await repository.reconcile_missing_deliveries(limit=10, at=_NOW)
+
+        assert (result.scanned_count, result.created_count) == (1, 1)
+        assert set(deliveries.documents) == {"future"}
 
     asyncio.run(scenario())

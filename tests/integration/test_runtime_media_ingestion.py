@@ -354,11 +354,19 @@ async def wait_for_count(
     query: dict[str, object],
     count: int,
 ) -> None:
-    """Wait briefly for the already-subscribed live prefix to be consumed."""
-    for _ in range(200):
+    """Wait for the already-subscribed live prefix inside a bounded budget.
+
+    The wait is a bounded poll, not a fixed delay: it returns as soon as the
+    runtime persisted the requested document count. The budget tolerates slow
+    shared CI runners without turning a missing result into a passing test, and
+    the callers keep asserting the exact persisted state after the wait.
+    """
+    deadline = 20.0
+    interval = 0.01
+    for _ in range(int(deadline / interval)):
         if await collection.count_documents(query) == count:
             return
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(interval)
     raise AssertionError("Runtime did not persist the expected bounded result.")
 
 

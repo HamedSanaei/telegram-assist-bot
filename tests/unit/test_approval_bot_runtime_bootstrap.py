@@ -110,6 +110,7 @@ class Foundation:
             approval_outbox_reconcile_batch_size=200,
             approval_outbox_reconcile_interval_seconds=300,
             approval_outbox_reconcile_pause_seconds=2,
+            approval_outbox_reconcile_guard_seconds=300,
             approval_retry_max_attempts=3,
         )
         publishing = SimpleNamespace(
@@ -183,10 +184,11 @@ class IdleReconciliationLoop:
         interval_seconds: float,
         pause_seconds: float,
         clock: object,
+        guard_seconds: float = 0.0,
         logger: object = None,
     ) -> None:
         del repository, batch_size, interval_seconds, pause_seconds
-        del clock, logger
+        del clock, guard_seconds, logger
 
     async def run(self) -> None:
         await asyncio.Event().wait()

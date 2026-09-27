@@ -865,3 +865,28 @@
   این Repository همان نسخه‌ها را از طریق Installer رسمی خود نصب و در Gate
   پذیرش اعتبارسنجی می‌کند. Zombieهای دیده‌شده به‌عنوان پیامد اثبات‌شدهٔ انحصاری
   Healthcheck فرض نشدند؛ `init: true` به‌عنوان reaper قطعی اضافه شد.
+
+## ADR-053 — پنجرهٔ Guard ترمیم Outbox و بازیابی Reboot در لایهٔ Host
+
+- **Status:** Accepted.
+- **Context:** پس از حذف اسکن تاریخی از `claim_ready()`، ترمیم هویتی که نوشتن
+  درون‌خطی‌اش بلافاصله پس از آماده‌شدن شکست خورده است نمی‌تواند به اسکن دوره‌ای
+  تکیه کند. همچنین سیاست `restart: on-failure:20` که restart storm را می‌بندد در
+  Restart خودکار Docker Daemon شرکت نمی‌کند.
+- **Decision:** Reconciliation فقط آماده‌های قدیمی‌تر از
+  `now - approval_outbox_reconcile_guard_seconds` (پیش‌فرض `300`) را اسکن می‌کند؛
+  watermark هرگز داخل این پنجره جلو نمی‌رود و اگر guard بزرگ‌تر شود و watermark
+  داخل یا جلوتر از پنجرهٔ جدید بیفتد، همان pass یک‌بار watermark را به مرز پنجره
+  برمی‌گرداند. بازیابی Reboot به لایهٔ Host منتقل می‌شود:
+  `deploy/systemd/telegram-assist-boot.service` (از نوع `oneshot`) و
+  `deploy/boot_recovery.sh` برای هر Instance یک `docker compose up -d` ایدمپوتنت
+  می‌زنند.
+- **Reason:** Markerهای تازه همیشه جلوتر از watermark می‌مانند، پس هویت گم‌شده در
+  یکی از passهای بعدی ساخته می‌شود و هیچ تأییدیه‌ای گم نمی‌شود، درحالی‌که حجم اسکن
+  به نرخ ورودی نزدیک پنجره محدود می‌ماند. بازیابی Reboot هم بدون بازگرداندن حلقهٔ
+  بی‌پایان ممکن می‌شود.
+- **Consequences:** `approval_outbox_reconcile_guard_seconds` کلید Config جدید است
+  (بازهٔ `0` تا `86400`، پیش‌فرض `300`؛ مقدار `0` حالت forward-only قدیمی را حفظ
+  می‌کند). passهای re-verify که هویتی نمی‌سازند هیچ eventی ثبت نمی‌کنند تا لاگ در
+  حالت پایدار ساکت بماند. Unit بازیابی با `systemctl enable` نصب می‌شود و سیاست
+  Compose بدون تغییر (`on-failure:20`) می‌ماند.

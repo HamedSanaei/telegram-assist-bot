@@ -1039,6 +1039,12 @@ class ApprovalOutboxReconciliationLoop:
     between batches so a large legacy installation cannot create a hot loop, and
     only advances a durable watermark over work it actually scanned. A caught-up
     pass therefore performs one bounded indexed query and writes nothing.
+
+    `guard_seconds` holds the watermark behind the newest readiness markers, which
+    makes the trailing window self-healing: an identity whose inline creation
+    failed is recreated by a later pass while the window still covers it. The
+    window is bounded by ingestion volume near the guard horizon, never by the
+    historical collection size.
     """
 
     def __init__(
@@ -1049,6 +1055,7 @@ class ApprovalOutboxReconciliationLoop:
         interval_seconds: float,
         pause_seconds: float,
         clock: Callable[[], datetime],
+        guard_seconds: float = 0.0,
         logger: StructuredLogger | None = None,
         sleeper: AsyncSleeper = asyncio.sleep,
     ) -> None:
@@ -1059,10 +1066,13 @@ class ApprovalOutboxReconciliationLoop:
             raise ValueError("Reconciliation interval must be positive.")
         if pause_seconds < 0:
             raise ValueError("Reconciliation pause must not be negative.")
+        if guard_seconds < 0:
+            raise ValueError("Reconciliation guard must not be negative.")
         self._repository = repository
         self._batch_size = batch_size
         self._interval_seconds = interval_seconds
         self._pause_seconds = pause_seconds
+        self._guard_seconds = guard_seconds
         self._clock = clock
         self._logger = logger
         self._sleeper = sleeper
@@ -1084,12 +1094,17 @@ class ApprovalOutboxReconciliationLoop:
         caught_up = False
         while not caught_up:
             batch = await self._repository.reconcile_missing_deliveries(
-                limit=self._batch_size, at=self._clock().astimezone(UTC)
+                limit=self._batch_size,
+                at=self._clock().astimezone(UTC),
+                guard_seconds=self._guard_seconds,
             )
             scanned_count += batch.scanned_count
             created_count += batch.created_count
             existing_count += batch.existing_count
-            if batch.scanned_count or batch.created_count:
+            # Only real repairs are reported: a guard-window re-verification that
+            # finds every identity already present must stay silent, otherwise a
+            # healthy idle process would log once per interval forever.
+            if batch.created_count:
                 if not reported:
                     reported = True
                     self._emit("approval_outbox_reconciliation_started")

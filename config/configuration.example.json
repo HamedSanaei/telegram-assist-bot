@@ -34,6 +34,7 @@
       "approval_outbox_reconcile_batch_size": 200,
       "approval_outbox_reconcile_interval_seconds": 300,
       "approval_outbox_reconcile_pause_seconds": 2,
+      "approval_outbox_reconcile_guard_seconds": 300,
       "approval_media_upload_timeout_seconds": 300,
       "approval_claim_lease_seconds": 60,
       "approval_retry_max_attempts": 3,

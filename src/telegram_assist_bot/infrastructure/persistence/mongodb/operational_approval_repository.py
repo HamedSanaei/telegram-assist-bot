@@ -83,12 +83,26 @@ through MongoDB type bracketing.
 
 def outbox_reconciliation_filter(
     watermark: tuple[datetime, str] | None,
+    *,
+    ready_before_or_at: datetime | None = None,
 ) -> Document:
-    """Return the bounded readiness scan predicate of one reconciliation batch."""
+    """Return the bounded readiness scan predicate of one reconciliation batch.
+
+    `ready_before_or_at` is the guard horizon of the trailing re-verification
+    window. When it is provided, the batch can never advance past a readiness
+    marker newer than that horizon, so the newest markers are re-verified by the
+    next passes and an identity whose inline creation failed is still healed
+    without ever rescanning processed history. Callers must rewind a durable
+    watermark that already reached the horizon, otherwise that window would be
+    excluded by the upper bound instead of being verified.
+    """
     ready_at, identifier = watermark or INITIAL_RECONCILIATION_WATERMARK
+    forward: Document = {"ready_at": {"$gt": ready_at}}
+    if ready_before_or_at is not None:
+        forward["ready_at"]["$lte"] = ready_before_or_at
     return {
         "$or": [
-            {"ready_at": {"$gt": ready_at}},
+            forward,
             {"ready_at": ready_at, "_id": {"$gt": identifier}},
         ]
     }
@@ -245,7 +259,11 @@ class MongoOperationalApprovalRepository:
         return False
 
     async def reconcile_missing_deliveries(
-        self, *, limit: int, at: datetime
+        self,
+        *,
+        limit: int,
+        at: datetime,
+        guard_seconds: float = 0.0,
     ) -> ApprovalOutboxReconciliation:
         """Backfill missing identities for legacy ready preparations in one batch.
 
@@ -253,6 +271,12 @@ class MongoOperationalApprovalRepository:
         durable watermark, and therefore never repeats processed history. A batch
         smaller than `limit` means the catch-up reached the end of the collected
         readiness markers.
+
+        A positive `guard_seconds` holds the watermark back by that many seconds,
+        which turns the newest readiness markers into a bounded trailing window
+        that every pass re-verifies. That window is the safety net for an identity
+        whose inline creation failed after its preparation was already marked
+        ready; it stays bounded by ingestion volume and never scans history.
         """
         if self._outbox_state is None:
             raise ValueError("Outbox reconciliation requires its state collection.")
@@ -261,8 +285,22 @@ class MongoOperationalApprovalRepository:
                 "Outbox reconciliation limit must be between 1 and "
                 f"{_MAX_RECONCILIATION_BATCH}."
             )
+        if type(guard_seconds) is bool or float(guard_seconds) < 0:
+            raise ValueError("Outbox reconciliation guard must not be negative.")
+        horizon = (
+            None
+            if float(guard_seconds) == 0
+            else at - timedelta(seconds=float(guard_seconds))
+        )
         watermark = await self._read_reconciliation_watermark()
-        query = outbox_reconciliation_filter(watermark)
+        if horizon is not None and watermark is not None and watermark[0] >= horizon:
+            # A raised guard puts the durable watermark at or beyond the window, so
+            # the deferred markers would never be scanned again. Rewind the durable
+            # watermark to the horizon once; later passes then verify the window
+            # forward from that bound instead of skipping it forever.
+            watermark = (horizon, "")
+            await self._write_reconciliation_watermark(watermark, at=at)
+        query = outbox_reconciliation_filter(watermark, ready_before_or_at=horizon)
         cursor = (
             self._preparations.find(query, projection={"_id": 1, "ready_at": 1})
             .sort([("ready_at", ASCENDING), ("_id", ASCENDING)])

@@ -169,6 +169,64 @@ uv run python scripts/check_text_integrity.py --all
   `tests/unit/deployment -q` (`82 passed`) موفق است.
 - هیچ دادهٔ Production حذف یا بازنویسی نشده و هیچ Tag/Release ساخته نشده است.
 
+## تکمیل — پنجرهٔ Guard، بازیابی Reboot و Audit حلقه‌ها
+
+### پنجرهٔ Guard ترمیم (کد جدید این مرحله)
+
+حذف اسکن تاریخی از `claim_ready()` یک شکاف دوام ایجاد می‌کرد: اگر نوشتن درون‌خطی
+هویت تحویل (`ReadyApprovalOutbox.ensure_delivery`) بلافاصله پس از آماده‌شدن شکست
+می‌خورد، دیگر هیچ اسکن دوره‌ای آن را ترمیم نمی‌کرد و watermark جلوتر از آن رکورد
+می‌ماند. اکنون `reconcile_missing_deliveries` فقط آماده‌های قدیمی‌تر از
+`now - approval_outbox_reconcile_guard_seconds` را اسکن می‌کند:
+
+- watermark هرگز داخل پنجرهٔ اخیر جلو نمی‌رود، پس Marker تازه جلوتر از آن می‌ماند و
+  در یکی از passهای بعدی ساخته می‌شود.
+- اگر guard بزرگ‌تر شود و watermark داخل/جلوتر از پنجرهٔ جدید بیفتد، همان pass
+  یک‌بار watermark را به مرز پنجره برمی‌گرداند؛ بنابراین پنجرهٔ جدید یک‌بار (و
+  bounded) بازبینی می‌شود و هیچ‌گاه بی‌نهایت اسکن نمی‌شود.
+- passهایی که فقط پنجره را re-verify می‌کنند و هویتی نمی‌سازند هیچ eventی ثبت
+  نمی‌کنند، پس لاگ در حالت پایدار ساکت می‌ماند.
+
+### Audit حلقه‌های Polling (کل Repository)
+
+هر حلقهٔ `while True`/`asyncio.sleep` بررسی شد و کار هر poll در حالت بی‌کار
+طبقه‌بندی شد: `ApprovalDeliveryLoop` یک `findAndModify` روی `approval_deliveries`؛
+approval sync یک claim partial روی `sync_required`؛ AI worker یک claim ایندکس‌شده روی
+`ai_jobs`؛ scheduled publication یک claim ایندکس‌شده روی scheduleها؛ album finalizer
+یک claim روی `ix_media_group_finalization_v1`؛ approval cleanup batchهای محدود؛
+live listener رویدادمحور و بدون کار DB. هیچ حلقهٔ دیگری الگوی اسکن/نوشتن تاریخی
+ندارد؛ جدول کامل در `docs/ARCHITECTURE.md` ثبت شده است.
+
+### بازیابی Reboot (لایهٔ Host)
+
+`restart: on-failure:20` عمداً در Restart خودکار Docker Daemon شرکت نمی‌کند، پس
+Recovery در لایهٔ Host اضافه شد: `deploy/systemd/telegram-assist-boot.service`
+(نوع `oneshot`) و `deploy/boot_recovery.sh` که برای هر Instance دارای `compose.yaml`
+یک `docker compose up -d` ایدمپوتنت می‌زند؛ بدون `--force-recreate`، بدون حذف
+Volume و بدون تغییر سیاست Restart. روی سرور Production فعال و یک‌بار اجرا شد
+(`Result=success`، `ExecMainStatus=0`، «2 instance(s) started, 0 failed») و
+Containerهای در حال اجرا دست‌نخورده ماندند.
+
+### راستی‌آزمایی Production (پس از Deploy)
+
+| متریک | قبل | بعد |
+|---|---:|---:|
+| Host load average (۱ دقیقه) | ~۸ | ۳٫۰۶ |
+| approval-bot CPU | ۴۰–۷۰٪ | ۰٫۲۲–۰٫۹۴٪ |
+| MongoDB CPU | ۲۰–۸۸٪ | ۰٫۸۳–۴٫۸٪ |
+| MongoDB ops نصب idle (۱۰s) | هزاران insert/update | `insert=0 query=0 update=0` |
+| MongoDB connections | ثبت نشده | ۱۲–۱۹ |
+| Runtime `RestartCount` | ~۲۸٬۷۷۶ در چهار روز | ۰ (همهٔ Containerها) |
+
+- تصویر Deployشده `revision=e4abbd0509a774082d0a72ddc645dc52cad96a1a` است و
+  Containerهای `mehrdadproxy` یک event `startup_failed_permanently` با
+  `failure_class=permanent`، `error_category=authorization`،
+  `failure_type=TelegramPremiumRequiredError`، `exit_code=4` و سطح `CRITICAL` ثبت
+  کردند؛ سپس تمیز با `exit=0` و بدون restart متوقف ماندند.
+- Backfill بدون حذف داده کامل شد: `content_preparations` و `approval_deliveries`
+  هر دو ۳۲٬۳۲۵ (kingofilter) و ۷٬۷۴۲ (mehrdadproxy) و سند watermark در
+  `approval_outbox_state` پیشرفته است.
+
 ## تعریف انجام‌شدن
 
 مسیر polling تحویل approval دیگر هیچ کاری به اندازهٔ تاریخ `content_preparations`

@@ -164,6 +164,33 @@ Container بدون تکرار بی‌پایان متوقف می‌ماند. خط
 `tabctl --instance X status` و event `container_terminal_startup_failure`
 قابل تشخیص است؛ پس از رفع علت (مثلاً Premium یا Config) یک start دستی کافی است.
 
+### بازیابی خودکار پس از Reboot (سطح Host)
+
+برای اینکه Reboot سرور به Restart دستی نیاز نداشته باشد و در عین حال قرارداد
+محدود `on-failure:20` ضعیف نشود، بازیابی در لایهٔ Host و خارج از Compose انجام
+می‌شود. Unit آماده در `deploy/systemd/telegram-assist-boot.service` و اسکریپت
+`deploy/boot_recovery.sh` قرار دارند و فقط برای هر Instance یک
+`docker compose up -d` ایدمپوتنت اجرا می‌کنند (بدون `--force-recreate`، بدون
+حذف Volume و بدون تغییر سیاست Restart):
+
+```bash
+sudo install -m 0755 deploy/boot_recovery.sh /usr/local/bin/telegram-assist-boot-recovery
+sudo install -m 0644 deploy/systemd/telegram-assist-boot.service \
+  /etc/systemd/system/telegram-assist-boot.service
+sudo systemctl daemon-reload
+sudo systemctl enable telegram-assist-boot.service
+
+# اجرای دستی همان مسیر بدون Reboot (اختیاری)
+sudo TAB_INSTANCE_ROOT=/opt/telegram-assist-bot/instances \
+  /usr/local/bin/telegram-assist-boot-recovery
+```
+
+رفتار مورد انتظار: Containerهای در حال اجرا دست‌نخورده می‌مانند، Containerهای
+متوقف (از جمله توقف عمدی به‌دلیل خطای دائمی) یک‌بار در هر Reboot بالا می‌آیند و
+در صورت تداوم خطای دائمی دوباره تمیز متوقف می‌شوند؛ یعنی بازیابی Reboot وجود دارد
+ولی حلقهٔ بی‌پایان برنمی‌گردد. مسیر Instanceها با متغیر
+`TAB_INSTANCE_ROOT` قابل تغییر است.
+
 ## Reconciliation هویت‌های Outbox تحویل
 
 هویت تحویل هر Post دقیقاً در لحظهٔ آماده‌شدن پایدار در `approval_deliveries`
@@ -176,6 +203,16 @@ watermark-محور اجرا می‌کند:
 | `telegram.bot.approval_outbox_reconcile_batch_size` | `200` | سقف رکورد در هر batch (۱ تا ۱۰۰۰) |
 | `telegram.bot.approval_outbox_reconcile_interval_seconds` | `300` | فاصلهٔ بین passها (۳۰ تا ۳۶۰۰) |
 | `telegram.bot.approval_outbox_reconcile_pause_seconds` | `2` | مکث بین batchها در یک catch-up بزرگ |
+| `telegram.bot.approval_outbox_reconcile_guard_seconds` | `300` | پنجرهٔ re-verify دنباله؛ watermark هرگز داخل این پنجره جلو نمی‌رود |
+
+`approval_outbox_reconcile_guard_seconds` یک پنجرهٔ امنیتی است: هر آماده‌شدنی
+که جدیدتر از `now - guard` باشد در Reconciliation فعلی اسکن نمی‌شود و فقط وقتی
+از پنجره بیرون رفت اجازهٔ اسکن می‌گیرد. اگر نوشتن درون‌خطی هویت تحویل بلافاصله
+پس از آماده‌شدن شکست بخورد، همان Marker همچنان جلوتر از watermark می‌ماند و در
+یکی از passهای بعدی ترمیم می‌شود؛ پس هیچ تأییدیه‌ای گم نمی‌شود و در عین حال اسکن
+همیشه bounded می‌ماند. اگر مقدار guard بزرگ‌تر شود و watermark داخل/جلوتر از
+پنجرهٔ جدید بیفتد، همان pass یک‌بار watermark را به مرز پنجره برمی‌گرداند و از
+آن نقطه به بعد پنجره را می‌بیند.
 
 پیشرفت در سند `content_preparation_outbox` در Collection `approval_outbox_state`
 ذخیره می‌شود، پس restart دوباره از ابتدا اسکن نمی‌کند و هیچ pass دوره‌ای کلیدی

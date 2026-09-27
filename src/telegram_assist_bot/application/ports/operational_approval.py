@@ -99,7 +99,8 @@ class OperationalApprovalRepository(ReadyApprovalOutbox, Protocol):
     from `approval_deliveries` alone and must never enumerate or write historical
     `content_preparations` documents. Outbox identities are created exactly when a
     preparation becomes durably ready, and `reconcile_missing_deliveries` only
-    backfills legacy records in bounded, watermark-anchored batches.
+    backfills legacy records in bounded, watermark-anchored batches whose newest
+    readiness markers stay inside a trailing re-verification window.
     """
 
     async def claim_ready(
@@ -115,9 +116,15 @@ class OperationalApprovalRepository(ReadyApprovalOutbox, Protocol):
         ...
 
     async def reconcile_missing_deliveries(
-        self, *, limit: int, at: datetime
+        self, *, limit: int, at: datetime, guard_seconds: float = 0.0
     ) -> ApprovalOutboxReconciliation:
-        """Backfill missing delivery identities for legacy ready preparations."""
+        """Backfill missing identities for legacy ready preparations.
+
+        A positive `guard_seconds` keeps the newest readiness markers inside a
+        bounded trailing window that every pass re-verifies, so a delivery
+        identity whose inline creation failed is still created later without any
+        historical scan.
+        """
         ...
 
     async def complete_delivery(self, post_id: str, *, owner: str) -> bool:
