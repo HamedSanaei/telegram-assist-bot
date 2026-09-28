@@ -33,6 +33,7 @@ from telegram_assist_bot.application.operational_approval import (
     ApprovalCallbackExecutor,
     ApprovalDeliveryLoop,
     ApprovalDeliveryWorker,
+    ApprovalOutboxReconciliationLoop,
     OperationalDestination,
 )
 from telegram_assist_bot.application.ports import AdvertisementReportKind, BotUpdate
@@ -43,7 +44,10 @@ from telegram_assist_bot.bootstrap.admin_approval import (
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
     FoundationStartupError,
+    classify_startup_failure,
     create_foundation_application,
+    emit_startup_failure,
+    startup_exit_code,
 )
 from telegram_assist_bot.domain import (
     Administrator,
@@ -70,6 +74,7 @@ from telegram_assist_bot.presentation.bot.advertisement_reports import (
 )
 from telegram_assist_bot.presentation.bot.runtime_handlers import OperationalBotHandlers
 from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.errors import StartupFailureClass
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -84,7 +89,19 @@ if TYPE_CHECKING:
 
 
 class ApprovalBotStartupError(RuntimeError):
-    """Report safe polling startup failure."""
+    """Report a safe polling startup failure with its restart classification."""
+
+    def __init__(
+        self,
+        *,
+        cause: BaseException | None = None,
+        failure_class: StartupFailureClass = StartupFailureClass.TRANSIENT,
+    ) -> None:
+        """Retain a cause and its classification without copying its message."""
+        super().__init__("The approval Bot lifecycle could not be started.")
+        self.failure_class = failure_class
+        if cause is not None:
+            self.__cause__ = cause
 
 
 class ApprovalBackgroundTaskStoppedError(RuntimeError):
@@ -122,6 +139,7 @@ class ApprovalBotApplication:
         self._dispatcher: Dispatcher | None = None
         self._polling_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
+        self._reconciliation_task: asyncio.Task[None] | None = None
         self._sync_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._gateway: AiogramAdminMessagingGateway | None = None
@@ -153,6 +171,7 @@ class ApprovalBotApplication:
                 database["content_preparations"],
                 deliveries,
                 max_attempts=settings.telegram.bot.approval_retry_max_attempts,
+                outbox_state=database["approval_outbox_state"],
             )
             heartbeat = MongoRuntimeHeartbeatRepository(database["runtime_heartbeats"])
 
@@ -370,6 +389,21 @@ class ApprovalBotApplication:
             self._delivery_task = asyncio.create_task(
                 loop.run(), name="approval-delivery"
             )
+            reconciliation = ApprovalOutboxReconciliationLoop(
+                operational,
+                batch_size=(settings.telegram.bot.approval_outbox_reconcile_batch_size),
+                interval_seconds=float(
+                    settings.telegram.bot.approval_outbox_reconcile_interval_seconds
+                ),
+                pause_seconds=float(
+                    settings.telegram.bot.approval_outbox_reconcile_pause_seconds
+                ),
+                clock=_utc_now,
+                logger=self._foundation.logger,
+            )
+            self._reconciliation_task = asyncio.create_task(
+                reconciliation.run(), name="approval-outbox-reconciliation"
+            )
             cleanup_repository = MongoApprovalCleanupRepository(
                 database["approval_references"],
                 database["approval_callbacks"],
@@ -419,8 +453,17 @@ class ApprovalBotApplication:
             await self.shutdown()
             raise
         except Exception as error:
+            failure_class = classify_startup_failure(error)
+            with suppress(RuntimeError):
+                emit_startup_failure(
+                    self._foundation.logger,
+                    failure_class=failure_class,
+                    error=error,
+                )
             await self.shutdown()
-            raise ApprovalBotStartupError from error
+            raise ApprovalBotStartupError(
+                cause=error, failure_class=failure_class
+            ) from error
 
     async def wait(self) -> None:
         """Run Aiogram long polling until cancellation or transport failure."""
@@ -440,6 +483,7 @@ class ApprovalBotApplication:
             watched = {
                 polling,
                 self._delivery_task,
+                self._reconciliation_task,
                 self._sync_task,
                 self._cleanup_task,
             }
@@ -491,6 +535,10 @@ class ApprovalBotApplication:
             self._delivery_task.cancel()
             await asyncio.gather(self._delivery_task, return_exceptions=True)
             self._delivery_task = None
+        if self._reconciliation_task is not None:
+            self._reconciliation_task.cancel()
+            await asyncio.gather(self._reconciliation_task, return_exceptions=True)
+            self._reconciliation_task = None
         if self._sync_task is not None:
             self._sync_task.cancel()
             await asyncio.gather(self._sync_task, return_exceptions=True)
@@ -531,6 +579,8 @@ async def run_approval_bot_application(
         await application.shutdown()
         if isinstance(error.__cause__, FoundationStartupError):
             return error.__cause__.exit_code
+        if error.failure_class is StartupFailureClass.PERMANENT:
+            return startup_exit_code(error.failure_class)
         return FoundationExitCode.INFRASTRUCTURE_ERROR
     await application.shutdown()
     return FoundationExitCode.SUCCESS

@@ -459,6 +459,19 @@ worker به‌اندازهٔ `approval_delivery_batch_pause_seconds` (default `1
 ترتیب claim بر پایهٔ زمان تلاش بعدی، زمان ایجاد و شناسهٔ پایدار است و پیشرفت هر
 مدیر جداگانه نگه‌داری می‌شود.
 
+polling تحویل فقط `approval_deliveries` را می‌خواند و هیچ اسکنی روی
+`content_preparations` تاریخی انجام نمی‌دهد: هویت durable هر Post دقیقاً در
+لحظهٔ آماده‌شدن پایدار ساخته می‌شود. آماده‌های legacy با catch-up محدود و
+watermark-محور (`approval_outbox_reconcile_batch_size`،
+`approval_outbox_reconcile_interval_seconds` و
+`approval_outbox_reconcile_pause_seconds`) یک‌بار و افزاینده backfill می‌شوند.
+
+در سطح Container نیز یک خطای Startup دائمی و غیرقابل‌retry (مثل اکانت Telegram
+بدون Premium) با exit code `4`، یک event `startup_failed_permanently` و توقف تمیز
+شناسانده می‌شود؛ سیاست `restart: on-failure:20` فقط خطاهای گذرا را با backoff
+محدود restart می‌کند تا هیچ restart storm رخ ندهد. جزئیات عملیاتی در
+`docs/OPERATIONS.md` آمده است.
+
 صف تحویل تأیید را می‌توان بدون بارگذاری متن یا مسیر Media و بدون اجرای Telegram
 به‌صورت read-only دید:
 

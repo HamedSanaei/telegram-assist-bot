@@ -220,6 +220,15 @@ class TelegramBotConfig(_FrozenConfigModel):
         StrictInt, Field(ge=1, le=3600)
     ] = 10
     approval_delivery_max_per_startup: Annotated[StrictInt, Field(ge=1, le=1000)] = 10
+    approval_outbox_reconcile_batch_size: Annotated[StrictInt, Field(ge=1, le=1000)] = (
+        200
+    )
+    approval_outbox_reconcile_interval_seconds: Annotated[
+        StrictInt, Field(ge=30, le=3600)
+    ] = 300
+    approval_outbox_reconcile_pause_seconds: Annotated[
+        StrictInt, Field(ge=0, le=60)
+    ] = 2
     approval_media_upload_timeout_seconds: Annotated[
         StrictInt, Field(ge=1, le=3600)
     ] = 300

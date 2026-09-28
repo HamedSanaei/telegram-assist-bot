@@ -1010,6 +1010,77 @@ class RunApplication:
         self.shutdowns += 1
 
 
+def test_non_premium_account_is_a_permanent_startup_failure() -> None:
+    @dataclass
+    class NonPremiumGateway(Gateway):
+        async def validate_account(self) -> TelegramAccount:
+            self.order.append("validate_account")
+            return TelegramAccount(42, False)
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = NonPremiumGateway((), [], order)
+        app = application(gateway, foundation)
+
+        result = await run_text_ingestion_application(
+            app, Path("synthetic.json"), environ={}
+        )
+
+        assert result is FoundationExitCode.PERMANENT_STARTUP_FAILURE
+        assert foundation.shutdown_calls == 1
+        assert foundation.shutdown_reasons == ["startup_failed"]
+        assert gateway.close_calls == 1
+        assert gateway.subscription is None
+        permanent = [
+            event
+            for event in sink.events
+            if event["event_name"] == "startup_failed_permanently"
+        ]
+        assert len(permanent) == 1
+        assert permanent[0]["level"] == "CRITICAL"
+        assert permanent[0]["failure_class"] == "permanent"
+        assert permanent[0]["failure_type"] == "TelegramPremiumRequiredError"
+        assert permanent[0]["failure_category"] == "authorization"
+        assert permanent[0]["exit_code"] == 4
+
+    run(scenario())
+
+
+def test_transient_validation_failure_stays_restartable() -> None:
+    @dataclass
+    class UnavailableGateway(Gateway):
+        async def validate_account(self) -> TelegramAccount:
+            self.order.append("validate_account")
+            raise TelegramTransientError
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        gateway = UnavailableGateway((), [], order)
+        app = application(gateway, foundation)
+
+        result = await run_text_ingestion_application(
+            app, Path("synthetic.json"), environ={}
+        )
+
+        assert result is FoundationExitCode.INFRASTRUCTURE_ERROR
+        transient = [
+            event
+            for event in sink.events
+            if event["event_name"] == "startup_failed_transient"
+        ]
+        assert len(transient) == 1
+        assert transient[0]["level"] == "ERROR"
+        assert transient[0]["failure_class"] == "transient"
+        assert transient[0]["exit_code"] == 3
+        assert [
+            event
+            for event in sink.events
+            if event["event_name"] == "startup_failed_permanently"
+        ] == []
+
+    run(scenario())
+
+
 def test_run_wrapper_returns_success_and_always_shuts_down() -> None:
     fake = RunApplication()
 

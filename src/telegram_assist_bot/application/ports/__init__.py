@@ -98,11 +98,13 @@ from telegram_assist_bot.application.ports.native_scheduling import (
 from telegram_assist_bot.application.ports.operational_approval import (
     ApprovalAdministratorDeliveryState,
     ApprovalDeliveryClaim,
+    ApprovalOutboxReconciliation,
     ApprovalPost,
     ApprovalPostLoader,
     ApprovalSyncClaim,
     DestinationPublicationState,
     OperationalApprovalRepository,
+    ReadyApprovalOutbox,
 )
 from telegram_assist_bot.application.ports.post_repository import (
     AdvertisementPostRepository,
@@ -248,6 +250,7 @@ __all__ = (
     "ApprovalMediaRejectionReason",
     "ApprovalMediaUploadTimeoutError",
     "ApprovalMessageDeleteGateway",
+    "ApprovalOutboxReconciliation",
     "ApprovalPost",
     "ApprovalPostLoader",
     "ApprovalRepository",
@@ -315,6 +318,7 @@ __all__ = (
     "PublicationRetractionRepository",
     "PublicationRetractionRequestOutcome",
     "PublisherError",
+    "ReadyApprovalOutbox",
     "ResolvedTelegramChannel",
     "ScheduleRepository",
     "ScheduleReservation",

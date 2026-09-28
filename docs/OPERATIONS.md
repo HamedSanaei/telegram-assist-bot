@@ -133,6 +133,94 @@ docker exec "$RUNTIME" /app/.venv/bin/python -m telegram_assist_bot \
 همین فرمان با `media-cleanup-worker` نسخهٔ دوره‌ای را اجرا می‌کند؛ Service
 `media-cleanup-worker` نیز در Compose همین فرمان را اجرا می‌کند.
 
+## قرارداد Restart و خطای Startup دائمی
+
+سه Service برنامه (`runtime`، `approval-bot`، `media-cleanup-worker`) با سیاست
+محدود `restart: on-failure:20` اجرا می‌شوند و Image نیز از
+`telegram_assist_bot.container_entrypoint` بالا می‌آید. رفتار قابل انتظار:
+
+| نوع خطا | exit code برنامه | نتیجه در Container |
+|---|---|---|
+| موفقیت | `0` | توقف عادی |
+| Config نامعتبر | `2` | restart محدود (خطای قابل اصلاح) |
+| زیرساخت/شبکه گذرا | `3` | restart محدود با backoff |
+| خطای دائمی و غیرقابل‌retry | `4` | توقف تمیز و بدون restart |
+
+خطای دائمی (برای نمونه اکانت Telegram بدون Premium، Authorization نامعتبر یا
+خطای اعلام‌شدهٔ `permanent`/`validation`/`configuration`/`authorization`)
+دقیقاً یک event ساختاریافتهٔ `startup_failed_permanently` در سطح `CRITICAL` با
+`failure_class`، `failure_category`، `failure_type` و `exit_code` ثبت می‌کند و
+Container بدون تکرار بی‌پایان متوقف می‌ماند. خطاهای گذرا با
+`startup_failed_transient` در سطح `ERROR` ثبت می‌شوند و مسیر restart و بازیابی
+را حفظ می‌کنند. هیچ‌یک از این eventها مقدار Secret ندارد.
+
+خطاهای ناشناخته همیشه transient در نظر گرفته می‌شوند تا بازیابی زیرساختی از دست
+نرود؛ فقط categoryی که خود خطا اعلام می‌کند مبنای تصمیم است. بنابراین یک
+`TelegramPremiumRequiredError` هرگز restart storm نمی‌سازد.
+
+نکتهٔ عملیاتی: سیاست `on-failure` در Restart خودکار Docker Daemon شرکت نمی‌کند.
+پس از Reboot سرور، Serviceها را با `tabctl --instance X start` یا
+`docker compose up -d` بالا بیاورید. وضعیت یک Container متوقف‌شدهٔ عمدی با
+`tabctl --instance X status` و event `container_terminal_startup_failure`
+قابل تشخیص است؛ پس از رفع علت (مثلاً Premium یا Config) یک start دستی کافی است.
+
+## Reconciliation هویت‌های Outbox تحویل
+
+هویت تحویل هر Post دقیقاً در لحظهٔ آماده‌شدن پایدار در `approval_deliveries`
+ساخته می‌شود و polling تحویل فقط همین Collection را می‌خواند. برای نصب‌های
+قدیمی که آماده‌های بدون هویت دارند، `approval-bot` یک catch-up محدود و
+watermark-محور اجرا می‌کند:
+
+| کلید Config | پیش‌فرض | توضیح |
+|---|---|---|
+| `telegram.bot.approval_outbox_reconcile_batch_size` | `200` | سقف رکورد در هر batch (۱ تا ۱۰۰۰) |
+| `telegram.bot.approval_outbox_reconcile_interval_seconds` | `300` | فاصلهٔ بین passها (۳۰ تا ۳۶۰۰) |
+| `telegram.bot.approval_outbox_reconcile_pause_seconds` | `2` | مکث بین batchها در یک catch-up بزرگ |
+
+پیشرفت در سند `content_preparation_outbox` در Collection `approval_outbox_state`
+ذخیره می‌شود، پس restart دوباره از ابتدا اسکن نمی‌کند و هیچ pass دوره‌ای کلیدی
+جز کلیدهای تازه‌آماده‌شده نمی‌بیند. لاگ این مسیر فقط aggregate است
+(`scanned_count`، `created_count`، `existing_count`، `watermark`، `duration_seconds`)
+و یک pass بدون کار هیچ eventی ثبت نمی‌کند. هیچ‌گاه داده تاریخی MongoDB را دستی
+پاک یا بازنویسی نکنید؛ Backfill از همین مسیر انجام می‌شود.
+
+## توصیهٔ Resource Guardrails
+
+خدمات پس‌زمینه به‌طور پیش‌فرض هیچ CPU/Memory/PID محدودیتی ندارند و Compose این
+Repository نیز محدودیت اعمال نمی‌کند. علت اصلی حادثهٔ CPU اشباع، الگوریتم polling
+بود و نه نبود limit؛ بنابراین limit جایگزین رفع باگ نیست. اگر پس از رفع باگ،
+سخت‌گیرانه‌تر کردن مرزها لازم بود، از یک override محلی استفاده کنید و مقادیر را
+محافظه‌کارانه نگه دارید:
+
+```yaml
+# compose.override.yaml (اختیاری، فقط در همان Host)
+services:
+  runtime:
+    cpus: "2.0"
+    mem_limit: 2g
+    pids_limit: 512
+  approval-bot:
+    cpus: "2.0"
+    mem_limit: 1536m
+    pids_limit: 512
+  media-cleanup-worker:
+    cpus: "1.5"
+    mem_limit: 1g
+    pids_limit: 256
+```
+
+این اعداد فقط توصیه‌اند: مقادیر کوچک‌تر از ظرفیت واقعی می‌تواند پردازش Media،
+تحویل Telegram یا `runtime check` را در burstهای قانونی کند یا متوقف کند. سقف
+PID تنها زمانی مفید است که ده‌ها Process موازی غیرمنتظره وجود داشته باشد؛
+صورت‌حساب اصلی همیشه تعداد عملیات MongoDB و الگوریتم پردازش است. MongoDB را
+محدود نکنید مگر اندازهٔ مجموعه و الگوی دسترسی آن به‌صورت مستقل اندازه‌گیری شده
+باشد؛ محدودیت تنگ روی MongoDB کل سرویس را از کار می‌اندازد.
+
+Healthcheck دیتابیس هر ۳۰ ثانیه (`start_interval: 2s` فقط در بازهٔ Startup) یک
+`mongosh ping` کوتاه اجرا می‌کند و `init: true` نیز Processهای کوتاه‌عمر را
+reap می‌کند تا Zombie انباشته نشود. اگر Host شما Docker قدیمی‌تر از پشتیبانی
+رسمی این Repository دارد، پیش از Deploy با `tabctl doctor` سازگاری را بررسی کنید.
+
 ## ایمنی و مخرب‌ها
 
 - هیچ فرمانی `docker volume prune` یا `docker system prune` را اجرا نمی‌کند.
@@ -149,5 +237,7 @@ docker exec "$RUNTIME" /app/.venv/bin/python -m telegram_assist_bot \
 | Docker در دسترس نیست | منوی ۱۶ Doctor؛ رفع دسترسی و `logout/login` |
 | Config نامعتبر | `tabctl --instance X config check` |
 | Login ناقص | منوی ۲: `stop`، سپس login، سپس `start` |
+| Container متوقف شده و event `startup_failed_permanently` دارد | علت دائمی را رفع کنید (مثلاً Premium یا Authorization)، سپس سرویس را با `tabctl --instance X start` بالا بیاورید |
+| Container پر `restart` است | `tabctl --instance X logs --tail 200` و جست‌وجوی `startup_failed_transient`/`startup_failed_permanently` برای تفکیک خطای گذرا از دائمی |
 | Backup خراب | `tabctl --instance X backup verify ID` پیش از restore |
 | Update ناموفق | `tabctl --instance X update --rollback` |

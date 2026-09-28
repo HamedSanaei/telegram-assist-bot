@@ -446,11 +446,49 @@ if ! cmp -s "$TMP_ROOT/$restored/config/configuration.json" \
   exit 1
 fi
 printf '%s\n' 'checkpoint=restore_runtime_check'
-if ! compose "$restored" ps --status running | grep -F runtime; then
-  echo "Restored runtime is not running." >&2
+# The acceptance fixture has no real Telegram session, so the restored runtime
+# service must stop through the classified terminal startup contract instead of
+# restarting forever. Reaching this checkpoint with a crash-looping runtime is a
+# regression of the bounded restart contract, not a healthy restore.
+runtime_container="$(compose "$restored" ps -aq runtime)"
+if [[ -z "$runtime_container" ]]; then
+  echo "Restored runtime container was not created." >&2
   compose "$restored" ps --all >&2 || true
   exit 1
 fi
+runtime_status="$(docker inspect --format '{{.State.Status}}' "$runtime_container")"
+runtime_exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$runtime_container")"
+runtime_restarts="$(docker inspect --format '{{.RestartCount}}' "$runtime_container")"
+if [[ ! "$runtime_restarts" =~ ^[0-9]+$ ]]; then
+  echo "Restored runtime restart count is unreadable: $runtime_restarts" >&2
+  exit 1
+fi
+if (( runtime_restarts > 2 )); then
+  echo "Restored runtime restarted $runtime_restarts times; the restart policy is not bounded." >&2
+  compose "$restored" ps --all >&2 || true
+  exit 1
+fi
+case "$runtime_status" in
+  running) ;;
+  exited)
+    if [[ "$runtime_exit_code" != "0" ]]; then
+      echo "Restored runtime stopped with unexpected exit code $runtime_exit_code." >&2
+      compose "$restored" logs --no-color --tail 100 runtime >&2 || true
+      exit 1
+    fi
+    if ! compose "$restored" logs --no-color --tail 200 runtime \
+      | grep -Fq '"event_name":"startup_failed_permanently"'; then
+      echo "Restored runtime stopped without a classified permanent startup event." >&2
+      compose "$restored" logs --no-color --tail 200 runtime >&2 || true
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Restored runtime is in an unexpected state: $runtime_status" >&2
+    compose "$restored" ps --all >&2 || true
+    exit 1
+    ;;
+esac
 printf '%s\n' 'checkpoint=restore_status_check'
 if ! tabctl --instance "$restored" status --json \
   | grep -F '"instance": "acceptance-restored"'; then

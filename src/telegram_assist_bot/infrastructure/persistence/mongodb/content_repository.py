@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from pymongo import ASCENDING, ReturnDocument
@@ -25,8 +26,6 @@ from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMed
 from telegram_assist_bot.domain.posts import PostId, TelegramEntity
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from pymongo.asynchronous.collection import AsyncCollection
 
 type Document = dict[str, Any]
@@ -106,6 +105,10 @@ async def initialize_content_preparation_indexes(
             ("duplicate_result.checked_at", ASCENDING),
         ],
         name="ix_exact_duplicate_window_v1",
+    )
+    await preparations.create_index(
+        [("ready_at", ASCENDING), ("_id", ASCENDING)],
+        name="ix_content_preparation_readiness_v1",
     )
 
 
@@ -1148,8 +1151,17 @@ class MongoContentPreparationRepository:
             current["content_policy_version"],
         )
 
-    async def mark_preparation_ready(self, post_id: PostId, *, at: datetime) -> bool:
-        """Atomically create readiness exactly once."""
+    async def mark_preparation_ready(
+        self, post_id: PostId, *, at: datetime
+    ) -> datetime | None:
+        """Atomically create readiness exactly once and return its durable time.
+
+        The returned timestamp is the canonical durable readiness instant of the
+        preparation. It equals `at` for the transition created by this call and the
+        previously stored instant when readiness already existed, so a caller can
+        create the matching approval-outbox identity without re-reading or
+        rewriting the readiness marker.
+        """
         try:
             result = await self._preparations.update_one(
                 {"_id": post_id.value, "ready_at": {"$exists": False}},
@@ -1157,5 +1169,17 @@ class MongoContentPreparationRepository:
                 upsert=True,
             )
         except DuplicateKeyError:
-            return False
-        return result.modified_count == 1 or result.upserted_id is not None
+            return await self._stored_readiness(post_id)
+        if result.modified_count == 1 or result.upserted_id is not None:
+            return at
+        return await self._stored_readiness(post_id)
+
+    async def _stored_readiness(self, post_id: PostId) -> datetime | None:
+        """Load the stored readiness instant of one preparation when present."""
+        document = await self._preparations.find_one(
+            {"_id": post_id.value}, projection={"ready_at": 1}
+        )
+        if document is None:
+            return None
+        ready_at = document.get("ready_at")
+        return ready_at if type(ready_at) is datetime else None

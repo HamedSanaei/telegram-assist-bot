@@ -137,6 +137,55 @@ class AlreadyCompletedError(ApplicationError):
     safe_message = "The operation was already completed."
 
 
+class StartupFailureClass(StrEnum):
+    """Classify a startup failure for the bounded container restart contract.
+
+    A `PERMANENT` failure is a non-retryable validation or configuration problem
+    that an operator must resolve; restarting the process cannot change it. A
+    `TRANSIENT` failure is an infrastructure, network, provider, or unknown
+    failure for which container restart and recovery must stay available.
+    """
+
+    PERMANENT = "permanent"
+    TRANSIENT = "transient"
+
+
+_PERMANENT_STARTUP_CATEGORIES = frozenset(
+    {
+        ErrorCategory.VALIDATION,
+        ErrorCategory.CONFIGURATION,
+        ErrorCategory.AUTHORIZATION,
+        ErrorCategory.PERMISSION,
+        ErrorCategory.PERMANENT,
+    }
+)
+
+
+def classify_declared_failure(error: BaseException) -> StartupFailureClass:
+    """Classify one failure by its own declared category, defaulting to transient.
+
+    Only a failure that declares a non-retryable category itself, either as an
+    `ApplicationError` subclass or through its own `error_category` attribute, is
+    treated as permanent. Unknown exceptions stay transient so that bounded
+    infrastructure recovery remains available instead of stopping the process
+    forever. Composition roots whose wrapper exceptions are not authoritative must
+    classify the wrapped failure instead of the wrapper.
+    """
+    if isinstance(error, ApplicationError):
+        category = error.classification.category
+    else:
+        declared = getattr(type(error), "error_category", None)
+        if type(declared) is not str:
+            return StartupFailureClass.TRANSIENT
+        try:
+            category = ErrorCategory(declared)
+        except ValueError:
+            return StartupFailureClass.TRANSIENT
+    if category in _PERMANENT_STARTUP_CATEGORIES:
+        return StartupFailureClass.PERMANENT
+    return StartupFailureClass.TRANSIENT
+
+
 def classify_error(error: BaseException) -> ErrorClassification:
     """Classify known application errors; unknown failures are permanent."""
     if isinstance(error, ApplicationError):
@@ -168,7 +217,9 @@ __all__ = (
     "PermanentOperationError",
     "PermissionDeniedError",
     "RateLimitError",
+    "StartupFailureClass",
     "TransientOperationError",
     "ValidationError",
+    "classify_declared_failure",
     "classify_error",
 )

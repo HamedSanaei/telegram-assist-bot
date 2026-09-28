@@ -201,6 +201,15 @@ release `v1.1.4` رفع می‌کند.
 |---|---|---|---|---|
 | [T099](tasks/T099-v1-1-4-media-cleanup-fairness-and-approval-expiration.md) | v1.1.4 Media Cleanup Fairness and Approval-Expiration Patch | T014، T078، T079 | `5.4`، `5.5`، `5.12–5.19`، `13`، `16` | Completed |
 
+## Milestone 15 — Production Incident Hardening (Approval Outbox و Restart Contract)
+
+هدف: رفع علت ریشه‌ای اشباع CPU/DB در polling تحویل approval و توقف restart storm
+ناشی از خطای پیکربندی دائمی، بدون تغییر دوام، retry و lease موجود.
+
+| ID | Task | وابستگی | نیازمندی | وضعیت |
+|---|---|---|---|---|
+| [T100](tasks/T100-approval-outbox-and-bounded-restart-contract.md) | Approval Delivery Outbox و قرارداد Restart محدود | T061، T066، T079 | `5.12–5.19`، `13`، `14`، `16` | Completed |
+
 ## Maintenance
 
 | ID | Task | وابستگی | نیازمندی | وضعیت |

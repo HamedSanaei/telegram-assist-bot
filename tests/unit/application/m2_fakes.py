@@ -30,6 +30,7 @@ class FakePreparationRepository:
     cleaned: set[str] = field(default_factory=set)
     active_storage_paths: set[str] = field(default_factory=set)
     ready: set[str] = field(default_factory=set)
+    ready_at: dict[str, datetime] = field(default_factory=dict)
     cleanup_next_check: dict[str, datetime] = field(default_factory=dict)
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
@@ -318,9 +319,11 @@ class FakePreparationRepository:
     ) -> DestinationArtifact | None:
         return self.artifacts.get((post_id.value, destination_id))
 
-    async def mark_preparation_ready(self, post_id: PostId, *, at: datetime) -> bool:
-        del at
+    async def mark_preparation_ready(
+        self, post_id: PostId, *, at: datetime
+    ) -> datetime | None:
         if post_id.value in self.ready:
-            return False
+            return self.ready_at.get(post_id.value, at)
         self.ready.add(post_id.value)
-        return True
+        self.ready_at[post_id.value] = at
+        return at

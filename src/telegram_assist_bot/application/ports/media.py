@@ -337,6 +337,8 @@ class ContentPreparationRepository(Protocol):
         """Load a previously completed destination stage."""
         ...
 
-    async def mark_preparation_ready(self, post_id: PostId, *, at: datetime) -> bool:
-        """Atomically create the final readiness marker once."""
+    async def mark_preparation_ready(
+        self, post_id: PostId, *, at: datetime
+    ) -> datetime | None:
+        """Atomically create the readiness marker once and return its durable time."""
         ...

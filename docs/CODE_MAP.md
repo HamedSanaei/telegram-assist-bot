@@ -189,19 +189,20 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `src/telegram_assist_bot/__init__.py` | metadata عمومی Package و نسخه `0.1.0` |
 | `src/telegram_assist_bot/__main__.py` | Entry point بدون side effect برای `python -m telegram_assist_bot` |
 | `bootstrap/cli.py` | parsing امن `--config`، commandهای runtime/approval و inspection/cancellation صریح صف، و exit codeهای پایدار |
-| `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client |
+| `bootstrap/runtime.py` | Composition Root concrete، lifecycle async، readiness، eventهای audit و ownership/cleanup دقیق Mongo client؛ exit code پایدار `4`، classification خطای Startup دائمی/گذرا و event واحد `startup_failed_permanently`/`startup_failed_transient` |
 | `bootstrap/telegram_login.py` | Composition Root ورود صریح و prompt امن بدون Secret در CLI/log |
 | `bootstrap/telegram_validation.py` | اتصال validation غیرتعاملی Session/Premium/channel به Startup |
 | `bootstrap/text_ingestion.py` | orchestration یک Session؛ retry محدود validation/open، stop event، supervision taskهای حیاتی، heartbeat/publication/live پیش از crawl background و shutdown معکوس |
-| `bootstrap/approval_bot.py` | long polling، delivery/sync worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
+| `bootstrap/approval_bot.py` | long polling، delivery/sync/reconciliation worker، `/start`، callback و cleanup دقیق Bot/MongoDB |
+| `container_entrypoint.py` | Entry point container؛ نگاشت exit code دائمی `4` به توقف تمیز بدون restart و event `container_terminal_startup_failure` |
 | `bootstrap/publication_queue.py` | projection امن و read-only صف، لغو صریح، و recovery دقیق dry-run/clear/requeue برای failure اثبات‌شدهٔ pre-send همراه با درخواست sync صفحه‌کلید، بدون Telegram Session |
 | `bootstrap/approval_queue.py` | projection امن صف approval، retry صریح و recovery محدود/dry-run فقط برای Documentهای `media_rejected` بدون reset مدیران موفق |
-| `application/operational_approval.py` | delivery content-first و recovery هر مدیر؛ callback-to-command با لغو idempotent terminal failure، جبران CAS ناموفق و sync canonical بدون Telegram SDK |
-| `application/ports/operational_approval.py` | DTO/Portهای outbox approval و loader محتوای آماده |
+| `application/operational_approval.py` | delivery content-first و recovery هر مدیر؛ callback-to-command با لغو idempotent terminal failure، جبران CAS ناموفق و sync canonical بدون Telegram SDK؛ `ApprovalOutboxReconciliationLoop` برای backfill محدود و watermark-محور آماده‌های legacy |
+| `application/ports/operational_approval.py` | DTO/Portهای outbox approval، `ReadyApprovalOutbox`، نتیجهٔ batch reconciliation و loader محتوای آماده |
 | `application/ports/native_scheduling.py` | DTO، state و Portهای command/receipt/lease و gateway زمان‌بندی بومی |
 | `application/native_scheduling.py` | claim، Slot پنج‌دقیقه‌ای، cancellation و reconciliation بومی restart-safe |
 | `presentation/bot/runtime_handlers.py` | handlerهای SDK-independent برای `/start` و callback عملیاتی |
-| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim/lease منصفانه با `claim_due_at`، وضعیت retry/permanent هر مدیر، heartbeat Runtime، status/due/sync outbox و loader تأیید |
+| `infrastructure/persistence/mongodb/operational_approval_repository.py` | claim ارزان و ایندکس‌شدهٔ فقط `approval_deliveries`، `ensure_delivery` idempotent، reconciliation محدود watermark-محور، وضعیت retry/permanent هر مدیر، heartbeat Runtime، status/due/sync outbox و loader تأیید |
 | `bootstrap/media_cleanup.py` | Composition Root مشترک cleanup یک‌مرحله‌ای و Worker دوره‌ای با Config/Logging/lifecycle موجود |
 | `bootstrap/scheduling.py` | Composition Root legacy؛ CLI عمومی آن پیش از Session fail-closed است |
 | `bootstrap/__init__.py` | API عمومی Composition Root و CLI بدون اجرای Startup هنگام import |
@@ -275,7 +276,7 @@ Session محافظت‌شده، validation حساب/کانال، crawl روز ج
 | `infrastructure/persistence/mongodb/semantic_duplicate_candidates.py` | query حداقلی MongoDB برای نامزدهای معتبر ۱۴روزه با ترتیب قطعی |
 | `infrastructure/persistence/mongodb/post_mapper.py` | Schema `1`، round-trip Domain/UTC/Entity/URL-button و state/result تبلیغ و semantic با default امن legacy |
 | `infrastructure/persistence/mongodb/post_repository.py` | insert/duplicate/canonical conflict، claim مرحله بعد و CAS اتمیک lifecycle/پردازش تبلیغ و semantic |
-| `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار، انتخاب candidate دو‌کلاسی و منصفانه (فیلترهای `never_attempted_candidate_filter` / `due_retry_candidate_filter` و index `ix_media_cleanup_fairness_v4`)‌، آزادسازی مرجع Approval منقضی و recheck consumerهای پایدار و state آماده‌سازی/Album |
+| `infrastructure/persistence/mongodb/content_repository.py` | expiration مستقل و legacy-safe Media، index نسخه‌دار (شامل `ix_content_preparation_readiness_v1` روی `(ready_at, _id)`)، انتخاب candidate دو‌کلاسی و منصفانه (فیلترهای `never_attempted_candidate_filter` / `due_retry_candidate_filter` و index `ix_media_cleanup_fairness_v4`)‌، بازگرداندن timestamp آماده‌شدن canonical از `mark_preparation_ready`، آزادسازی مرجع Approval منقضی و recheck consumerهای پایدار و state آماده‌سازی/Album |
 | `infrastructure/persistence/mongodb/publication_repository.py` | unique index، claim/lease اتمیک Publication، retraction و Schedule، cancel/recompact |
 | `infrastructure/persistence/mongodb/native_schedule_repository.py` | outbox مستقل native schedule، receipt ID، request boundary و lease مقصد |
 | `infrastructure/persistence/mongodb/publication_payload_loader.py` | بازسازی payload آمادهٔ متن/Media/Album، metadata اختیاری `text_url` و ردیف‌های دکمهٔ URL بدون binary در MongoDB |
@@ -447,6 +448,21 @@ token، delivery، keyboard، toggle و sync را دارد. `application/ports/a
 `presentation/bot/handlers.py` فقط mapping و dispatch مجوزمحور انجام می‌دهد و
 `bootstrap/admin_approval.py` Composition Root صریح و بدون side effect import است.
 
+جریان دائم تحویل جدا از این مسیر است:
+
+```text
+PreparePostPipeline -> mark_preparation_ready -> ReadyApprovalOutbox.ensure_delivery
+    -> approval_deliveries (یک هویت منطقی)
+ApprovalDeliveryLoop -> claim_ready (یک findAndModify ایندکس‌شده)
+    -> DeliverApproval -> record/complete/release
+ApprovalOutboxReconciliationLoop -> batch محدود ready_at/watermark (فقط legacy)
+```
+
+موتور claim هیچ‌گاه `content_preparations` را نمی‌خواند؛ این تفکیک در
+`tests/unit/infrastructure/persistence/test_operational_approval_outbox.py` و
+`tests/integration/mongodb/test_approval_outbox_reconciliation.py` با assert تعداد
+عملیات و `explain` محافظت می‌شود.
+
 ## جریان Observability و Retry
 
 ```text
@@ -469,6 +485,21 @@ Configuration، Authorization، Permission، Permanent، Conflict و Already-com
 خودکار retry نمی‌شوند. هیچ Adapter موجود به executor متصل نشده است؛ T005 فقط
 قرارداد و Foundation مستقل را فراهم می‌کند.
 
+## قرارداد Restart و Container
+
+```text
+خطای Startup دائمی/غیرقابلretry
+    -> exit 4 + event واحد startup_failed_permanently (CRITICAL)
+    -> container_entrypoint: exit 4 -> exit 0 (توقف تمیز، بدون restart)
+خطای گذرا یا نامشخص
+    -> exit 3 + event واحد startup_failed_transient (ERROR)
+    -> سیاست Compose on-failure:20 با backoff داخلی Docker
+```
+
+healthcheck MongoDB در حالت پایدار هر ۳۰ ثانیه یک‌بار اجرا می‌شود،
+`start_interval: 2s` تشخیص Startup را سریع نگه می‌دارد و `init: true` روی سرویس
+دیتابیس، proccessهای healthcheck را reap می‌کند.
+
 ## Tooling و Quality Gateها
 
 | مسیر | مسئولیت |
@@ -489,6 +520,17 @@ Build رسمی CI از `hatchling==1.31.0` موجود در گروه قفل‌ش�
 ## تست‌ها
 
 - `test_package_import.py`: import همهٔ لایه‌ها و تطبیق نسخه Package/Distribution.
+- `bootstrap/test_startup_failure_contract.py`: classification خطای Startup
+  دائمی/گذرا، exit code پایدار `4`/`3`، تک‌event بودن و عدم نشت Secret.
+- `deployment/test_container_entrypoint.py`: نگاشت exit code دائمی به توقف تمیز،
+  حفظ exit codeهای گذرا و event ساختاریافته بدون Secret.
+- `infrastructure/persistence/test_operational_approval_outbox.py`: اثبات عدم
+  دسترسی مسیر polling به `content_preparations`، idempotency `ensure_delivery`،
+  حفظ پیشرفت موجود و bounded/incremental بودن reconciliation.
+- `application/test_approval_outbox_reconciliation.py`: batch محدود، مکث،
+  aggregate eventها، سکوت pass بی‌کار و رد Config نامحدود.
+- `deployment/test_compose_contract.py`: سیاست restart محدود، healthcheck
+  کم‌هزینهٔ MongoDB، `init: true` و entrypoint یکسان.
 - `test_text_integrity.py`: UTF-8 سخت‌گیرانه، BOM، Mojibake، allowlist محدود،
   path discovery و round-trip دقیق متن فارسی/Emoji/نیم‌فاصله.
 - `test_repository_policy.py`: رفتار واقعی `.gitignore` برای مسیرهای حساس،
@@ -671,7 +713,7 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | مسیر | مسئولیت |
 |---|---|
 | `Dockerfile` و `.dockerignore` | Build چندمرحله‌ای Wheel قفل‌شده، runtime غیرroot و حذف context محلی/Secret |
-| `compose.yaml` و `deploy/compose.env.example` | MongoDB و سه Process برنامه با resourceهای per-instance |
+| `compose.yaml` و `deploy/compose.env.example` | MongoDB و سه Process برنامه با resourceهای per-instance، سیاست `on-failure:20` برای Processهای برنامه، healthcheck ساده/کم‌هزینهٔ MongoDB با `init: true` |
 | `install.sh` و `install.ps1` | نصب هدایت‌شده، preflight، dry-run و Config مستقل Linux/Windows |
 | `deploy/manage.sh` و `deploy/manage.ps1` | lifecycle، login، backup، update، uninstall و purge صریح یک Instance |
 | `deploy/permissions.sh` و `deploy/permissions.ps1` | audit/repair متمرکز و idempotent مالکیت و permission بدون تغییر محتوای Instance |

@@ -786,3 +786,82 @@
   Media یا upload محلی در این مسیر وجود ندارد؛ پس پاک‌شدن همزمان فایل محلی
   امن است. تحویل تمام‌شده نیز دوباره claim نمی‌شود، چون `claim_ready` فقط
   `pending`، `retry` موعد-رسیده و `claimed` با lease منقضی را می‌گیرد.
+
+## ADR-050 — هویت تحویل Approval در مرز آماده‌شدن ساخته می‌شود و polling هرگز تاریخی اسکن نمی‌کند
+
+- **Status:** Accepted
+- **Context:** در Production،
+  `MongoOperationalApprovalRepository.claim_ready()` در هر poll هر ۵ ثانیه کل
+  `content_preparations` آماده را اسکن می‌کرد و برای هر رکورد یک تلاش
+  `insert_one` و یک `update_one` انجام می‌داد. با ۵۰۰۰+ آمادهٔ تاریخی این کار
+  حدود ۴۰–۷۰٪ یک CPU روی `approval-bot` و ترافیک داخلی ~۸۵/۱۵۴ GB در چهار روز
+  بین هر approval-bot و MongoDB تولید می‌کرد؛ هیچ‌کدام از این هزینه‌ها به تعداد
+  کار واقعی وابسته نبود.
+- **Decision:** هویت durable هر تحویل (`approval_deliveries._id = post_id`) دقیقاً
+  در مرز آماده‌شدن پایدار ساخته می‌شود: `PreparePostPipeline` پس از
+  `mark_preparation_ready` — که اکنون timestamp آماده‌شدن canonical را برمی‌گرداند —
+  `ReadyApprovalOutbox.ensure_delivery` را با همان مقدار صدا می‌زند. این upsert
+  فقط با `$setOnInsert` روی `_id` می‌نویسد، idempotent و safe تحت اجرای تکراری و
+  هم‌زمان است و هیچ status، پیشرفت یا ordering موجودی را بازنویسی نمی‌کند.
+  `claim_ready()` فقط یک `find_one_and_update` ایندکس‌شده روی
+  `approval_deliveries` است و مجاز نیست `content_preparations` را بخواند،
+  بشمارد یا بنویسد. برای آماده‌های legacy، `ApprovalOutboxReconciliationLoop` یک
+  catch-up محدود، watermark-محور و restart-safe اجرا می‌کند که watermark پایدار
+  خود را در `approval_outbox_state` نگه می‌دارد.
+- **Reason:** حذف کامل وابستگی هزینهٔ idle poll به تاریخ، بدون حذف دوام، retry،
+  lease یا مسیر بازیابی و بدون migration دستی مخرب. وابسته‌کردن cost به کار واقعی
+  به‌جای اندازهٔ دیتابیس، تنها اصلاح علت ریشه‌ای است؛ افزایش
+  `approval_delivery_poll_seconds` فقط Frequency را کم می‌کند و O(N) باقی می‌ماند.
+- **Consequences:** `ensure_delivery` بخشی از قرارداد
+  `OperationalApprovalRepository` نیست بلکه Protocol جداگانهٔ `ReadyApprovalOutbox`
+  است تا نوشتن هویت به مسیر آماده‌سازی تزریق شود. reconciliation فقط در
+  `approval-bot` اجرا می‌شود و در هر pass حداکثر یک batch (پیش‌فرض `200`) را
+  می‌خواند؛ pass بدون کار صفر نوشتن و صفر event دارد. index
+  `ix_content_preparation_readiness_v1` روی `(ready_at, _id)` تنها ساختمان
+  افزودنی موردنیاز این اسکن مرزدار است. مطابق این ADR، بازگرداندن هر Query
+  `content_preparations` به مسیر hot polling یک Regression است و Test دارد.
+
+## ADR-051 — Restart محدود برای خطای Startup گذرا و توقف قطعی برای خطای دائمی
+
+- **Status:** Accepted
+- **Context:** یک نصب Production با `restart: unless-stopped` روی
+  `telegram-assist-mehrdadproxy-runtime-1` به‌دلیل `TelegramPremiumRequiredError`
+  حدود ۲۸٬۷۷۶ بار در چهار روز restart شد. خطای Premium یک خطای پیکربندی دائمی و
+  غیرقابل‌retry است، اما Docker نمی‌تواند کلاس exception را تشخیص دهد و
+  `unless-stopped` بین خطای دائمی و گذرا تفاوت نمی‌گذارد.
+- **Decision:** قرارداد Process/Container سه لایه دارد: (۱) exit code پایدار `4`
+  برای خطای Startup دائمی که بر پایهٔ category اعلام‌شدهٔ خود خطا تعیین می‌شود؛
+  (۲) `telegram_assist_bot.container_entrypoint` که فقط exit code `4` را به توقف
+  تمیز (exit `0`) نگاشت می‌کند و یک event `container_terminal_startup_failure`
+  در سطح `CRITICAL` ثبت می‌کند؛ (۳) سیاست `restart: on-failure:20` برای سه Service
+  برنامه که restart خطاهای گذرا را محدود و backoff-دار نگه می‌دارد.
+- **Reason:** تصمیم‌گیری بر پایهٔ نوع خطا باید در Application باشد، نه در Docker؛
+  در همان حال هیچ خطای ناشناخته‌ای نباید مسیر بازیابی زیرساختی را از دست بدهد.
+  classification فقط category خود خطا را می‌پذیرد و errorهای ناشناخته همیشه
+  transient می‌مانند تا توقف دائمی اشتباه رخ ندهد.
+- **Consequences:** sleep مصنوعی در Application حل نیست؛ Docker signal و lifecycle
+  دست‌نخورده می‌ماند. هزینهٔ پذیرفته‌شده: سیاست `on-failure` در Restart خودکار
+  Docker Daemon شرکت نمی‌کند، بنابراین پس از Reboot سرور Serviceها باید با
+  `tabctl start` یا `docker compose up -d` بالا بیایند؛ این مورد در
+  `docs/OPERATIONS.md` مستند شده است. هر خطای Startup جدید باید category خود را
+  صریح اعلام کند، وگرنه transient تلقی می‌شود.
+
+## ADR-052 — Healthcheck دیتابیس ارزان و reaped باقی می‌ماند
+
+- **Status:** Accepted
+- **Context:** Healthcheck پیشین هر ۵ ثانیه یک Process کامل `mongosh` با Ping
+  اجرا می‌کرد؛ در دو نصب Production این کار روزانه ده‌ها هزار Process کوتاه‌عمر
+  و تعدادی `<defunct>` روی Host تولید می‌کرد. Healthcheck همان لحظه‌ای که CPU و
+  I/O سرور اشباع بود، به فشار اضافه دامن می‌زد.
+- **Decision:** فاصلهٔ پایدار به `30s` با `timeout: 10s`، `retries: 5` و
+  `start_period: 60s` تغییر می‌کند و تشخیص سریع Startup با `start_interval: 2s`
+  حفظ می‌شود. `mongosh ping` همان دستور باقی می‌ماند (تنها مکانیزم قابل‌اعتماد در
+  Image رسمی MongoDB برای این نسخه) و `init: true` روی Service دیتابیس اضافه می‌شود
+  تا Processهای کوتاه‌عمر reap شوند.
+- **Reason:** کاهش حدود شش‌برابری تعداد Process در حالت پایدار بدون افزودن تأخیر
+  Startup غیرقابل‌قبول و بدون تضعیف معناداری Healthcheck؛ Healthcheck هنگام
+  در‌دسترس‌نبودن واقعی MongoDB همچنان fail می‌شود.
+- **Consequences:** `start_interval` نیازمند Docker Engine و Compose امروزی است؛
+  این Repository همان نسخه‌ها را از طریق Installer رسمی خود نصب و در Gate
+  پذیرش اعتبارسنجی می‌کند. Zombieهای دیده‌شده به‌عنوان پیامد اثبات‌شدهٔ انحصاری
+  Healthcheck فرض نشدند؛ `init: true` به‌عنوان reaper قطعی اضافه شد.

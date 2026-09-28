@@ -13,6 +13,7 @@ from telegram_assist_bot.application.detect_exact_duplicate import DetectExactDu
 from telegram_assist_bot.application.ports import (
     ContentPreparationRepository,
     DestinationArtifact,
+    ReadyApprovalOutbox,
 )
 from telegram_assist_bot.application.prepare_destination_content import (
     prepare_destination_content,
@@ -80,9 +81,19 @@ class PreparationResult:
 class PreparePostPipeline:
     """Resume idempotent stages using repository-owned canonical assignments."""
 
-    def __init__(self, repository: ContentPreparationRepository) -> None:
-        """Initialize the shared durable preparation repository."""
+    def __init__(
+        self,
+        repository: ContentPreparationRepository,
+        outbox: ReadyApprovalOutbox | None = None,
+    ) -> None:
+        """Initialize the preparation repository and its approval outbox.
+
+        The optional outbox receives the durable delivery identity of every ready
+        preparation at the exact readiness transition, so approval delivery never
+        has to discover readiness by scanning historical preparations.
+        """
         self._repository = repository
+        self._outbox = outbox
         self._duplicates = DetectExactDuplicate(repository)
 
     async def execute(self, request: PreparationInput) -> PreparationResult:
@@ -131,5 +142,9 @@ class PreparePostPipeline:
                 prepared.content_policy_version,
             )
             artifacts.append(await self._repository.save_destination_artifact(artifact))
-        await self._repository.mark_preparation_ready(request.post_id, at=request.now)
+        ready_at = await self._repository.mark_preparation_ready(
+            request.post_id, at=request.now
+        )
+        if ready_at is not None and self._outbox is not None:
+            await self._outbox.ensure_delivery(request.post_id.value, ready_at=ready_at)
         return PreparationResult(duplicate, category, tuple(artifacts))

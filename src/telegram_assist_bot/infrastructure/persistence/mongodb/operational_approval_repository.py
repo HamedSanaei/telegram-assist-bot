@@ -1,19 +1,26 @@
-"""MongoDB outbox, leases, status, and prepared approval loading."""
+"""MongoDB outbox, leases, status, and prepared approval loading.
+
+The delivery outbox is the only collection the polling claim path touches. One
+identity per durably ready preparation is created at the readiness transition and
+missing legacy identities are backfilled by a bounded, watermark-anchored
+reconciliation instead of a historical scan on every poll.
+"""
 
 from __future__ import annotations
 
 from contextlib import suppress
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pymongo import ASCENDING, ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from telegram_assist_bot.application.ports import (
     ApprovalAdministratorDeliveryState,
     ApprovalContent,
     ApprovalDeliveryClaim,
     ApprovalMedia,
+    ApprovalOutboxReconciliation,
     ApprovalPost,
     ApprovalSyncClaim,
     DestinationPublicationState,
@@ -21,29 +28,123 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.domain.posts import TelegramEntity
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from pymongo.asynchronous.collection import AsyncCollection
 
     from telegram_assist_bot.domain.categories import Category
 
 type Document = dict[str, Any]
 
+APPROVAL_CLAIM_SORT: list[tuple[str, int]] = [
+    ("claim_due_at", ASCENDING),
+    ("created_at", ASCENDING),
+    ("_id", ASCENDING),
+]
+"""Stable claim order shared by the repository and its query-plan proof."""
+
+
+def approval_claim_filter(
+    *,
+    now: datetime,
+    ready_after: datetime | None = None,
+    ready_before_or_at: datetime | None = None,
+) -> Document:
+    """Return the exact indexed claim predicate used by the polling hot path.
+
+    The predicate only references `approval_deliveries` fields, so no poll can
+    ever enumerate readiness documents or historical preparations.
+    """
+    if ready_after is not None and ready_before_or_at is not None:
+        raise ValueError("Approval claim watermark bounds are mutually exclusive.")
+    query: Document = {
+        "$or": [
+            {"status": "pending"},
+            {"status": "retry", "next_attempt_at": {"$lte": now}},
+            {"status": "claimed", "lease_until": {"$lte": now}},
+        ]
+    }
+    if ready_after is not None:
+        query["ready_at"] = {"$gt": ready_after}
+    elif ready_before_or_at is not None:
+        query["ready_at"] = {"$lte": ready_before_or_at}
+    return query
+
+
+INITIAL_RECONCILIATION_WATERMARK: tuple[datetime, str] = (
+    datetime.min.replace(tzinfo=UTC),
+    "",
+)
+"""First reconciliation position: before every possible readiness instant.
+
+A concrete lower bound keeps the first batch on the readiness index instead of a
+collection scan, because a datetime range excludes documents without `ready_at`
+through MongoDB type bracketing.
+"""
+
+
+def outbox_reconciliation_filter(
+    watermark: tuple[datetime, str] | None,
+) -> Document:
+    """Return the bounded readiness scan predicate of one reconciliation batch."""
+    ready_at, identifier = watermark or INITIAL_RECONCILIATION_WATERMARK
+    return {
+        "$or": [
+            {"ready_at": {"$gt": ready_at}},
+            {"ready_at": ready_at, "_id": {"$gt": identifier}},
+        ]
+    }
+
+
+_RECONCILIATION_STATE_ID = "content_preparation_outbox"
+"""Document identifier of the durable outbox reconciliation watermark."""
+
+_MAX_RECONCILIATION_BATCH = 1000
+"""Upper bound of one reconciliation batch so no poll can become unbounded."""
+
 
 async def initialize_operational_approval_indexes(
     deliveries: AsyncCollection[Document],
 ) -> None:
-    """Create the durable delivery claim and retry index."""
+    """Create the durable claim, retry, lease, and UI-sync delivery indexes.
+
+    The claim index bounds every branch of the polling query by leading equality
+    on `status`, walks `claim_due_at`/`created_at`/`_id` in the exact claim sort
+    order, and keeps the retry and lease predicates inside the index so the query
+    planner never has to fetch non-matching delivery documents. The small partial
+    index serves the `sync_required` polling query that previously had no index.
+    """
     await deliveries.create_index(
         [
             ("status", ASCENDING),
             ("claim_due_at", ASCENDING),
             ("created_at", ASCENDING),
-            ("lease_until", ASCENDING),
             ("_id", ASCENDING),
+            ("lease_until", ASCENDING),
+            ("next_attempt_at", ASCENDING),
         ],
-        name="ix_approval_delivery_claim_v2",
+        name="ix_approval_delivery_claim_v3",
     )
+    await deliveries.create_index(
+        [("ready_at", ASCENDING), ("_id", ASCENDING)],
+        name="ix_approval_delivery_sync_v1",
+        partialFilterExpression={"sync_required": True},
+    )
+    with suppress(OperationFailure):
+        await deliveries.drop_index("ix_approval_delivery_claim_v2")
+
+
+def _outbox_document(post_id: str, *, ready_at: datetime) -> Document:
+    """Build the initial durable delivery identity for one ready preparation."""
+    return {
+        "status": "pending",
+        "ready_at": ready_at,
+        "created_at": ready_at,
+        "claim_due_at": ready_at,
+        "attempt_count": 0,
+        "administrator_deliveries": {},
+        "destination_statuses": {},
+        "sync_version": 0,
+        "sync_required": False,
+    }
 
 
 class MongoRuntimeHeartbeatRepository:
@@ -107,13 +208,131 @@ class MongoOperationalApprovalRepository:
         deliveries: AsyncCollection[Document],
         *,
         max_attempts: int = 3,
+        outbox_state: AsyncCollection[Document] | None = None,
     ) -> None:
-        """Store ready-preparation and durable-delivery collections."""
+        """Store readiness, durable-delivery, and reconciliation-state handles."""
         if not 1 <= max_attempts <= 10:
             raise ValueError("max_attempts must be between 1 and 10")
         self._preparations = preparations
         self._deliveries = deliveries
         self._max_attempts = max_attempts
+        self._outbox_state = outbox_state
+
+    async def ensure_delivery(self, post_id: str, *, ready_at: datetime) -> bool:
+        """Create one missing durable delivery identity without touching history.
+
+        The upsert is idempotent, safe under duplicate and concurrent execution,
+        and never overwrites an existing identity, its progress, or its status. A
+        pending identity written before ordering fields existed is repaired in
+        place so historical ordering semantics stay correct.
+        """
+        result = await self._deliveries.update_one(
+            {"_id": post_id},
+            {"$setOnInsert": _outbox_document(post_id, ready_at=ready_at)},
+            upsert=True,
+        )
+        if result.upserted_id is not None:
+            return True
+        with suppress(DuplicateKeyError):
+            await self._deliveries.update_one(
+                {
+                    "_id": post_id,
+                    "status": "pending",
+                    "claim_due_at": {"$exists": False},
+                },
+                {"$set": {"claim_due_at": ready_at, "created_at": ready_at}},
+            )
+        return False
+
+    async def reconcile_missing_deliveries(
+        self, *, limit: int, at: datetime
+    ) -> ApprovalOutboxReconciliation:
+        """Backfill missing identities for legacy ready preparations in one batch.
+
+        The scan is bounded by `limit`, ordered by the readiness key, anchored on a
+        durable watermark, and therefore never repeats processed history. A batch
+        smaller than `limit` means the catch-up reached the end of the collected
+        readiness markers.
+        """
+        if self._outbox_state is None:
+            raise ValueError("Outbox reconciliation requires its state collection.")
+        if type(limit) is not int or not 1 <= limit <= _MAX_RECONCILIATION_BATCH:
+            raise ValueError(
+                "Outbox reconciliation limit must be between 1 and "
+                f"{_MAX_RECONCILIATION_BATCH}."
+            )
+        watermark = await self._read_reconciliation_watermark()
+        query = outbox_reconciliation_filter(watermark)
+        cursor = (
+            self._preparations.find(query, projection={"_id": 1, "ready_at": 1})
+            .sort([("ready_at", ASCENDING), ("_id", ASCENDING)])
+            .limit(limit)
+        )
+        candidates = [item async for item in cursor]
+        known_ids: set[str] = set()
+        if candidates:
+            known = self._deliveries.find(
+                {"_id": {"$in": [item["_id"] for item in candidates]}},
+                projection={"_id": 1},
+            )
+            known_ids = {str(item["_id"]) async for item in known}
+        created_count = 0
+        existing_count = 0
+        last_key: tuple[datetime, str] | None = None
+        for item in candidates:
+            post_id = str(item["_id"])
+            last_key = (item["ready_at"], post_id)
+            if post_id in known_ids:
+                existing_count += 1
+                continue
+            if await self.ensure_delivery(post_id, ready_at=item["ready_at"]):
+                created_count += 1
+            else:
+                existing_count += 1
+        if last_key is not None:
+            await self._write_reconciliation_watermark(last_key, at=at)
+        return ApprovalOutboxReconciliation(
+            scanned_count=len(candidates),
+            created_count=created_count,
+            existing_count=existing_count,
+            completed=len(candidates) < limit,
+            watermark=None if last_key is None else last_key[0],
+        )
+
+    async def _read_reconciliation_watermark(self) -> tuple[datetime, str] | None:
+        """Load the durable reconciliation position when it already exists."""
+        if self._outbox_state is None:
+            return None
+        document = await self._outbox_state.find_one(
+            {"_id": _RECONCILIATION_STATE_ID},
+            projection={"watermark_ready_at": 1, "watermark_id": 1},
+        )
+        if document is None:
+            return None
+        ready_at = document.get("watermark_ready_at")
+        identifier = document.get("watermark_id")
+        if type(ready_at) is not datetime or type(identifier) is not str:
+            return None
+        return ready_at, identifier
+
+    async def _write_reconciliation_watermark(
+        self, key: tuple[datetime, str], *, at: datetime
+    ) -> None:
+        """Persist the exact reconciliation position of the last scanned batch."""
+        if self._outbox_state is None:
+            return
+        ready_at, identifier = key
+        await self._outbox_state.update_one(
+            {"_id": _RECONCILIATION_STATE_ID},
+            {
+                "$set": {
+                    "watermark_ready_at": ready_at,
+                    "watermark_id": identifier,
+                    "updated_at": at,
+                }
+            },
+            upsert=True,
+        )
 
     async def claim_ready(
         self,
@@ -124,49 +343,17 @@ class MongoOperationalApprovalRepository:
         ready_after: datetime | None = None,
         ready_before_or_at: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
-        """Seed missing outbox identities, then claim one eligible delivery."""
-        cursor = self._preparations.find(
-            {"ready_at": {"$exists": True}}, projection={"_id": 1, "ready_at": 1}
-        ).sort([("ready_at", ASCENDING), ("_id", ASCENDING)])
-        async for item in cursor:
-            with suppress(DuplicateKeyError):
-                await self._deliveries.insert_one(
-                    {
-                        "_id": item["_id"],
-                        "status": "pending",
-                        "ready_at": item["ready_at"],
-                        "created_at": item["ready_at"],
-                        "claim_due_at": item["ready_at"],
-                        "attempt_count": 0,
-                        "administrator_deliveries": {},
-                        "destination_statuses": {},
-                        "sync_version": 0,
-                        "sync_required": False,
-                    }
-                )
-            await self._deliveries.update_one(
-                {"_id": item["_id"], "claim_due_at": {"$exists": False}},
-                {
-                    "$set": {
-                        "claim_due_at": item["ready_at"],
-                        "created_at": item["ready_at"],
-                        "administrator_deliveries": {},
-                    }
-                },
-            )
-        query: Document = {
-            "$or": [
-                {"status": "pending"},
-                {"status": "retry", "next_attempt_at": {"$lte": now}},
-                {"status": "claimed", "lease_until": {"$lte": now}},
-            ]
-        }
-        if ready_after is not None and ready_before_or_at is not None:
-            raise ValueError("Approval claim watermark bounds are mutually exclusive.")
-        if ready_after is not None:
-            query["ready_at"] = {"$gt": ready_after}
-        elif ready_before_or_at is not None:
-            query["ready_at"] = {"$lte": ready_before_or_at}
+        """Claim one pending, retry-due, or lease-expired delivery identity.
+
+        This is the polling hot path and stays a single indexed claim over
+        `approval_deliveries`. It never enumerates or writes historical
+        `content_preparations` documents.
+        """
+        query = approval_claim_filter(
+            now=now,
+            ready_after=ready_after,
+            ready_before_or_at=ready_before_or_at,
+        )
         document = await self._deliveries.find_one_and_update(
             query,
             {
@@ -179,11 +366,7 @@ class MongoOperationalApprovalRepository:
                 },
                 "$inc": {"attempt_count": 1},
             },
-            sort=[
-                ("claim_due_at", ASCENDING),
-                ("created_at", ASCENDING),
-                ("_id", ASCENDING),
-            ],
+            sort=APPROVAL_CLAIM_SORT,
             return_document=ReturnDocument.AFTER,
         )
         if document is None:
@@ -624,7 +807,11 @@ class MongoApprovalPostLoader:
 
 
 __all__ = (
+    "APPROVAL_CLAIM_SORT",
+    "INITIAL_RECONCILIATION_WATERMARK",
     "MongoApprovalPostLoader",
     "MongoOperationalApprovalRepository",
+    "approval_claim_filter",
     "initialize_operational_approval_indexes",
+    "outbox_reconciliation_filter",
 )

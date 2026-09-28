@@ -94,6 +94,7 @@ def test_ready_delivery_is_claimed_once_and_expired_lease_recovers(
             await preparations.insert_one({"_id": "ready-1", "ready_at": now})
             first = MongoOperationalApprovalRepository(preparations, deliveries)
             second = MongoOperationalApprovalRepository(preparations, deliveries)
+            assert await first.ensure_delivery("ready-1", ready_at=now)
             claims = await asyncio.gather(
                 first.claim_ready(
                     owner="one", now=now, lease_until=now + timedelta(seconds=30)
@@ -147,6 +148,7 @@ def test_ready_delivery_is_claimed_once_and_expired_lease_recovers(
             bounded = MongoOperationalApprovalRepository(
                 preparations, deliveries, max_attempts=1
             )
+            assert await bounded.ensure_delivery("bounded", ready_at=now)
             bounded_claim = await bounded.claim_ready(
                 owner="bounded",
                 now=now,
@@ -193,6 +195,10 @@ def test_delivery_claim_order_backoff_permanent_failure_and_explicit_retry(
                 ]
             )
             repository = MongoOperationalApprovalRepository(preparations, deliveries)
+            assert await repository.ensure_delivery("failing", ready_at=now)
+            assert await repository.ensure_delivery(
+                "healthy", ready_at=now + timedelta(microseconds=1)
+            )
             first = await repository.claim_ready(
                 owner="worker", now=now, lease_until=now + timedelta(seconds=30)
             )

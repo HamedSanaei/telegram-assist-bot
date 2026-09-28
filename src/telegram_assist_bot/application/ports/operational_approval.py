@@ -37,6 +37,17 @@ class ApprovalAdministratorDeliveryState:
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovalOutboxReconciliation:
+    """Report one bounded outbox reconciliation batch and its progress."""
+
+    scanned_count: int
+    created_count: int
+    existing_count: int
+    completed: bool
+    watermark: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalSyncClaim:
     """Identify one leased durable UI synchronization request."""
 
@@ -73,8 +84,23 @@ class ApprovalPost:
     media_count: int = 0
 
 
-class OperationalApprovalRepository(Protocol):
-    """Persist delivery leases and canonical operational status."""
+class ReadyApprovalOutbox(Protocol):
+    """Create durable delivery identities for durably ready content."""
+
+    async def ensure_delivery(self, post_id: str, *, ready_at: datetime) -> bool:
+        """Create one missing delivery identity idempotently; return whether new."""
+        ...
+
+
+class OperationalApprovalRepository(ReadyApprovalOutbox, Protocol):
+    """Persist delivery leases and canonical operational status.
+
+    `claim_ready` is the polling hot path. It must claim one eligible delivery
+    from `approval_deliveries` alone and must never enumerate or write historical
+    `content_preparations` documents. Outbox identities are created exactly when a
+    preparation becomes durably ready, and `reconcile_missing_deliveries` only
+    backfills legacy records in bounded, watermark-anchored batches.
+    """
 
     async def claim_ready(
         self,
@@ -85,7 +111,13 @@ class OperationalApprovalRepository(Protocol):
         ready_after: datetime | None = None,
         ready_before_or_at: datetime | None = None,
     ) -> ApprovalDeliveryClaim | None:
-        """Claim one ready, incomplete, or lease-expired delivery."""
+        """Claim one pending, retry-due, or lease-expired delivery identity."""
+        ...
+
+    async def reconcile_missing_deliveries(
+        self, *, limit: int, at: datetime
+    ) -> ApprovalOutboxReconciliation:
+        """Backfill missing delivery identities for legacy ready preparations."""
         ...
 
     async def complete_delivery(self, post_id: str, *, owner: str) -> bool:
@@ -173,9 +205,11 @@ class ApprovalPostLoader(Protocol):
 __all__ = (
     "ApprovalAdministratorDeliveryState",
     "ApprovalDeliveryClaim",
+    "ApprovalOutboxReconciliation",
     "ApprovalPost",
     "ApprovalPostLoader",
     "ApprovalSyncClaim",
     "DestinationPublicationState",
     "OperationalApprovalRepository",
+    "ReadyApprovalOutbox",
 )

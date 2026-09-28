@@ -78,9 +78,18 @@ Readiness تا پایان ping و Index setup false است. client تنها reso
 Application logger Level تنظیم‌شده را حفظ می‌کند، ولی lifecycle audit logger با
 همان Sink، correlation و Secretهای resolveشده در Redactor، eventهای الزامی را
 حتی در Levelهای `ERROR` و `CRITICAL` ثبت می‌کند. خروجی CLI JSON خطی UTF-8 روی
-stderr است. exit codeهای پایدار `0` برای success، `2` برای Configuration و `3`
-برای Infrastructure هستند. command پیش‌فرض همان Startup check T006 است و پس از
-readiness فوراً shutdown می‌شود. command صریح `login` تنها مسیر prompt ورود است.
+stderr است. exit codeهای پایدار `0` برای success، `2` برای Configuration، `3`
+برای Infrastructure و `4` برای خطای Startup دائمی و غیرقابل‌retry هستند.
+classification فقط بر پایهٔ category اعلام‌شدهٔ خود خطا انجام می‌شود؛ wrapperهای
+Bootstrap معتبر نیستند و خطای ناشناخته همیشه transient می‌ماند تا مسیر بازیابی
+زیرساختی از دست نرود. هر شکست Startup یک event ساختاریافتهٔ واحد
+(`startup_failed_permanently` در CRITICAL یا `startup_failed_transient` در ERROR)
+با `failure_class`، `failure_category`، `failure_type` و `exit_code` امن ثبت
+می‌کند. `telegram_assist_bot.container_entrypoint` تنها exit code `4` را به توقف
+تمیز (exit 0) نگاشت می‌کند و Compose سه Process برنامه را با `on-failure:20` محدود
+نگه می‌دارد؛ بنابراین خطای دائمی هیچ‌گاه restart storm نمی‌سازد و خطای گذرا مسیر
+restart و بازیابی محدود خود را حفظ می‌کند. command پیش‌فرض همان Startup check
+T006 است و پس از readiness فوراً shutdown می‌شود. command صریح `login` تنها مسیر prompt ورود است.
 command عمومی `ingest` و alias سازگار `ingest-text` پس از Foundation و validation،
 subscription را پیش از crawl می‌سازند تا gap حداقل شود. همان Telethon client/session
 برای History، Listener و `TelethonMediaSource` reuse می‌شود. هر DTO از مسیر مشترک
@@ -137,6 +146,40 @@ Approval Bot را متوقف نمی‌کند.
 مسیر Media را بار نمی‌کند. `publication-cancel` فقط job ID صریح را از مسیر
 `CancelScheduledPost` و policy موجود لغو می‌کند؛ هیچ command بازرسی Session را باز
 نمی‌کند.
+
+### چرخهٔ عمر Outbox تحویل approval
+
+هویت هر تحویل منطقی یک رکورد durable در `approval_deliveries` است، نه یک اسکن
+آماده‌های تاریخی. مرز ایجاد آن دقیقاً آماده‌شدن پایدار preparation است:
+`PreparePostPipeline` پس از `mark_preparation_ready` که timestamp آماده‌شدن
+canonical را برمی‌گرداند، `ReadyApprovalOutbox.ensure_delivery` را با همان مقدار
+صدا می‌زند. این upsert با `$setOnInsert` روی `_id` انجام می‌شود، idempotent و
+safe تحت اجرای تکراری و هم‌زمان است، هیچ status یا پیشرفت موجودی را بازنویسی
+نمی‌کند و فقط فیلدهای ترتیب غایب رکوردهای `pending` قدیمی را اصلاح می‌کند.
+
+مسیر polling فقط `approval_deliveries` را می‌بیند:
+
+```text
+content آماده می‌شود
+    -> یک هویت outbox idempotent ساخته می‌شود
+    -> ApprovalDeliveryLoop فقط approval_deliveries را poll می‌کند
+    -> یک findAndModify ایندکس‌شده یک مورد واجدشرایط را claim می‌کند
+```
+
+**قاعدهٔ الزامی:** `claim_ready()` و هیچ poll دوره‌ای دیگری مجاز نیست
+`content_preparations` را scan کند، بشمارد یا در آن بنویسد. اگر مقصد تحویل به
+آماده‌شدن قدیمی نیاز داشته باشد، فقط مسیر reconciliation محدود زیر اجازه دارد.
+
+برای نصب‌هایی که آماده‌های legacy بدون هویت outbox دارند،
+`ApprovalOutboxReconciliationLoop` در `approval-bot` یک catch-up محدود، افزاینده و
+restart-safe اجرا می‌کند: هر batch حداکثر `approval_outbox_reconcile_batch_size`
+(پیش‌فرض `200`) آمادهٔ `(ready_at, _id)` بزرگ‌تر از watermark پایدار در
+`approval_outbox_state` را می‌خواند، برای هر رکورد فقط در صورت نبود هویت
+می‌نویسد و سپس watermark را دقیقاً تا آخرین کلید اسکن‌شده جلو می‌برد. بین
+batchها مکث bounded انجام می‌شود و هر `approval_outbox_reconcile_interval_seconds`
+(پیش‌فرض `300`) یک pass جدید آغاز می‌شود. pass بدون کار فقط یک query محدود
+ایندکس‌شده روی `(ready_at, _id)` و هیچ نوشتنی ندارد؛ ابطال‌شده یا کامل‌شده‌ها
+دوباره claim نمی‌شوند.
 
 Outbox تحویل approval از watermark زمان شروع برای تفکیک backlog تاریخی و کار جدید
 استفاده می‌کند. مقدار سازگار `approval_delivery_max_per_startup` اندازهٔ batch
@@ -439,13 +482,20 @@ Collectionهای پیاده‌شدهٔ Milestone 2:
   deadlineهای quiet/max-wait بر پایهٔ زمان مشاهده، و state اتمیک
   claim/lease/retry/permanent-failure برای finalization؛
 - `content_preparation`: نتیجه‌های نسخه‌دار duplicate/category، artifact مستقل هر
-  مقصد و marker یکتای readiness.
+  مقصد و marker یکتای readiness (`ready_at`) با index
+  `ix_content_preparation_readiness_v1` روی `(ready_at, _id)` برای اسکن محدود
+  reconciliation.
 
 Collectionهای بعدی فقط برای Taskهای صریح آینده برنامه‌ریزی شده‌اند:
 
 - `approvals`: Reference پیام‌های تأیید و وضعیت آخرین Sync؛
 - `approval_deliveries`: outbox منطقی آماده‌ها، claim/lease تحویل، retry، وضعیت امن
-  مقصدها و درخواست پایدار همگام‌سازی UI؛
+  مقصدها و درخواست پایدار همگام‌سازی UI؛ indexهای `ix_approval_delivery_claim_v3`
+  برای pending/retry/lease و `ix_approval_delivery_sync_v1` (partial روی
+  `sync_required: true`) برای polling همگام‌سازی UI؛
+- `approval_outbox_state`: سند واحد watermark افزایندهٔ reconciliation آماده‌های
+  legacy (`content_preparation_outbox`) که هر batch را bounded و restart-safe
+  نگه می‌دارد؛
 - `publications`: Unique Idempotency Key برای هر تصمیم انتشار، receipt مقصد و
   state/lease/retry درخواست retraction؛
 - `scheduled_publications`: Index روی `status + due_at`، Unique Key و فیلدهای Lease؛

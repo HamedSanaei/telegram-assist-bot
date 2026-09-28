@@ -22,6 +22,7 @@ from telegram_assist_bot.bootstrap.runtime import (
 )
 from telegram_assist_bot.domain import Administrator, AdminPermission
 from telegram_assist_bot.shared.config import LogLevel
+from telegram_assist_bot.shared.errors import AuthorizationError, StartupFailureClass
 from telegram_assist_bot.shared.observability import (
     Redactor,
     StructuredEvent,
@@ -106,6 +107,9 @@ class Foundation:
             approval_claim_lease_seconds=60,
             approval_delivery_poll_seconds=5,
             approval_delivery_max_per_startup=10,
+            approval_outbox_reconcile_batch_size=200,
+            approval_outbox_reconcile_interval_seconds=300,
+            approval_outbox_reconcile_pause_seconds=2,
             approval_retry_max_attempts=3,
         )
         publishing = SimpleNamespace(
@@ -165,6 +169,24 @@ class IdleCleanupLoop:
         interval_seconds: float,
     ) -> None:
         del cleanup, batch_size, interval_seconds
+
+    async def run(self) -> None:
+        await asyncio.Event().wait()
+
+
+class IdleReconciliationLoop:
+    def __init__(
+        self,
+        repository: object,
+        *,
+        batch_size: int,
+        interval_seconds: float,
+        pause_seconds: float,
+        clock: object,
+        logger: object = None,
+    ) -> None:
+        del repository, batch_size, interval_seconds, pause_seconds
+        del clock, logger
 
     async def run(self) -> None:
         await asyncio.Event().wait()
@@ -262,6 +284,9 @@ def test_approval_bot_start_and_shutdown_own_resources_once(
         monkeypatch.setattr(module, "initialize_approval_cleanup_indexes", initialize)
         monkeypatch.setattr(module, "ApprovalDeliveryLoop", IdleDeliveryLoop)
         monkeypatch.setattr(module, "ApprovalCleanupLoop", IdleCleanupLoop)
+        monkeypatch.setattr(
+            module, "ApprovalOutboxReconciliationLoop", IdleReconciliationLoop
+        )
         monkeypatch.setattr(module, "ApprovalCallbackExecutor", Callbacks)
         monkeypatch.setattr(module, "Router", CapturingRouter)
         monkeypatch.setattr(module, "Dispatcher", Poller)
@@ -344,6 +369,30 @@ def test_approval_bot_run_boundary_maps_success_and_failure() -> None:
             module.create_approval_bot_application(sink=cast("Any", object())),
             module.ApprovalBotApplication,
         )
+
+    asyncio.run(scenario())
+
+
+def test_approval_bot_classifies_non_retryable_startup_failure() -> None:
+    class FailingFoundation(Foundation):
+        async def start(self, path: object, *, environ: object) -> None:
+            del path, environ
+            raise AuthorizationError
+
+    async def scenario() -> None:
+        foundation = FailingFoundation()
+        application = module.ApprovalBotApplication(cast("Any", foundation))
+
+        with pytest.raises(module.ApprovalBotStartupError) as captured:
+            await application.start(cast("Any", "config.json"), environ={})
+
+        assert captured.value.failure_class is StartupFailureClass.PERMANENT
+        assert isinstance(captured.value.__cause__, AuthorizationError)
+        assert foundation.closed == 1
+        result = await module.run_approval_bot_application(
+            cast("Any", application), cast("Any", "config.json"), environ={}
+        )
+        assert result is FoundationExitCode.PERMANENT_STARTUP_FAILURE
 
     asyncio.run(scenario())
 

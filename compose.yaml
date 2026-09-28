@@ -1,9 +1,13 @@
 name: ${COMPOSE_PROJECT_NAME:-telegram-assist-default}
 
+# Application services use a bounded restart policy. A non-retryable startup
+# failure exits the container cleanly through the entrypoint contract, so a
+# terminal failure is never restarted, while transient infrastructure failures
+# keep a bounded number of Docker backoff restarts before the container stops.
 x-application: &application
   image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.4}
   user: ${TAB_RUNTIME_UID:-10001}:${TAB_RUNTIME_GID:-10001}
-  restart: unless-stopped
+  restart: on-failure:20
   init: true
   depends_on:
     mongodb:
@@ -65,6 +69,7 @@ services:
   mongodb:
     image: ${TAB_MONGODB_IMAGE:-mongo:7.0.32}
     restart: unless-stopped
+    init: true
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${TAB_MONGODB_USERNAME:?required}
       MONGO_INITDB_ROOT_PASSWORD: ${TAB_MONGODB_PASSWORD:?required}
@@ -78,10 +83,11 @@ services:
           --password "$$MONGO_INITDB_ROOT_PASSWORD"
           --authenticationDatabase admin
           --eval "quit(db.runCommand({ ping: 1 }).ok ? 0 : 1)"
-      interval: 5s
-      timeout: 5s
-      retries: 24
-      start_period: 10s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+      start_interval: 2s
     volumes:
       - type: volume
         source: mongodb_data

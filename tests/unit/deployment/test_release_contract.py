@@ -220,3 +220,14 @@ def test_acceptance_exercises_required_management_commands_and_rollbacks() -> No
     assert "backups/config" in acceptance
     assert "stat -c '%a'" in acceptance
     assert "Diagnostics exposed an acceptance credential fixture" in acceptance
+
+
+def test_acceptance_asserts_the_bounded_restart_contract_after_restore() -> None:
+    acceptance = (ROOT / "scripts" / "v1_acceptance.sh").read_text(encoding="utf-8")
+
+    assert "checkpoint=restore_runtime_check" in acceptance
+    assert "{{.RestartCount}}" in acceptance
+    assert "restart policy is not bounded" in acceptance
+    assert "startup_failed_permanently" in acceptance
+    assert "without a classified permanent startup event" in acceptance
+    assert "Restored runtime is not running." not in acceptance

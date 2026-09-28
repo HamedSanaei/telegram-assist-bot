@@ -26,6 +26,11 @@ from telegram_assist_bot.shared.config import (
     ResolvedSecrets,
     load_configuration,
 )
+from telegram_assist_bot.shared.errors import (
+    StartupFailureClass,
+    classify_declared_failure,
+    classify_error,
+)
 from telegram_assist_bot.shared.observability import (
     CorrelationContext,
     EventClock,
@@ -51,11 +56,73 @@ if TYPE_CHECKING:
 
 
 class FoundationExitCode(IntEnum):
-    """Define the stable process exit codes owned by the foundation CLI."""
+    """Define the stable process exit codes owned by the foundation CLI.
+
+    `PERMANENT_STARTUP_FAILURE` marks a non-retryable startup validation failure
+    such as a missing Telegram Premium account or invalid account authorization.
+    The container contract must treat that code as terminal and must not restart
+    the container again, while `INFRASTRUCTURE_ERROR` stays retryable through a
+    bounded restart policy.
+    """
 
     SUCCESS = 0
     CONFIGURATION_ERROR = 2
     INFRASTRUCTURE_ERROR = 3
+    PERMANENT_STARTUP_FAILURE = 4
+
+
+STARTUP_FAILURE_EVENT_NAMES = {
+    StartupFailureClass.PERMANENT: "startup_failed_permanently",
+    StartupFailureClass.TRANSIENT: "startup_failed_transient",
+}
+"""Map each startup failure class to its dedicated low-noise event name."""
+
+
+def classify_startup_failure(error: BaseException) -> StartupFailureClass:
+    """Classify one startup failure for the bounded container restart contract.
+
+    Foundation wrappers own their stable exit codes and their inherited category
+    is not authoritative, so only a configuration failure counts as permanent
+    there. Every other failure is classified by its own declared category, and an
+    unknown failure stays transient.
+    """
+    if isinstance(error, FoundationStartupError):
+        if isinstance(error, FoundationConfigurationError):
+            return StartupFailureClass.PERMANENT
+        return StartupFailureClass.TRANSIENT
+    return classify_declared_failure(error)
+
+
+def startup_exit_code(failure_class: StartupFailureClass) -> FoundationExitCode:
+    """Return the stable exit code that represents one classified failure."""
+    if failure_class is StartupFailureClass.PERMANENT:
+        return FoundationExitCode.PERMANENT_STARTUP_FAILURE
+    return FoundationExitCode.INFRASTRUCTURE_ERROR
+
+
+def emit_startup_failure(
+    logger: StructuredLogger,
+    *,
+    failure_class: StartupFailureClass,
+    error: BaseException,
+) -> None:
+    """Emit exactly one classified startup event without sensitive details."""
+    exit_code = startup_exit_code(failure_class)
+    logger.emit(
+        level=(
+            LogLevel.CRITICAL
+            if failure_class is StartupFailureClass.PERMANENT
+            else LogLevel.ERROR
+        ),
+        event_name=STARTUP_FAILURE_EVENT_NAMES[failure_class],
+        fields={
+            "exit_code": int(exit_code),
+            "failure_category": classify_error(error).category.value,
+            "failure_class": failure_class.value,
+            "failure_type": type(error).__name__,
+        },
+        error=error,
+    )
 
 
 class FoundationStartupError(RuntimeError):
@@ -728,6 +795,7 @@ def create_foundation_application(
 
 
 __all__ = (
+    "STARTUP_FAILURE_EVENT_NAMES",
     "BinaryEventStream",
     "ConfigurationLoader",
     "EventOutputError",
@@ -746,5 +814,8 @@ __all__ = (
     "MongoConnectionVerifier",
     "MongoIndexInitializer",
     "PostRepositoryFactory",
+    "classify_startup_failure",
     "create_foundation_application",
+    "emit_startup_failure",
+    "startup_exit_code",
 )

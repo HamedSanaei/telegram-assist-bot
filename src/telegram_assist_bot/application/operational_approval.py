@@ -71,6 +71,7 @@ if TYPE_CHECKING:
         ApprovalReference,
     )
     from telegram_assist_bot.shared.observability import StructuredLogger
+    from telegram_assist_bot.shared.retry import AsyncSleeper
 
 
 STATUS_LABELS = {
@@ -1031,6 +1032,100 @@ class ApprovalCallbackExecutor:
             self._logger.emit(level=LogLevel.INFO, event_name=event_name, fields=fields)
 
 
+class ApprovalOutboxReconciliationLoop:
+    """Backfill legacy approval outbox identities with bounded batches.
+
+    Every pass scans at most `batch_size` readiness markers per batch, pauses
+    between batches so a large legacy installation cannot create a hot loop, and
+    only advances a durable watermark over work it actually scanned. A caught-up
+    pass therefore performs one bounded indexed query and writes nothing.
+    """
+
+    def __init__(
+        self,
+        repository: OperationalApprovalRepository,
+        *,
+        batch_size: int,
+        interval_seconds: float,
+        pause_seconds: float,
+        clock: Callable[[], datetime],
+        logger: StructuredLogger | None = None,
+        sleeper: AsyncSleeper = asyncio.sleep,
+    ) -> None:
+        """Store bounded reconciliation settings and its durable repository."""
+        if batch_size < 1:
+            raise ValueError("Reconciliation batch size must be positive.")
+        if interval_seconds <= 0:
+            raise ValueError("Reconciliation interval must be positive.")
+        if pause_seconds < 0:
+            raise ValueError("Reconciliation pause must not be negative.")
+        self._repository = repository
+        self._batch_size = batch_size
+        self._interval_seconds = interval_seconds
+        self._pause_seconds = pause_seconds
+        self._clock = clock
+        self._logger = logger
+        self._sleeper = sleeper
+
+    async def run(self) -> None:
+        """Reconcile one bounded catch-up pass per interval until cancellation."""
+        while True:
+            await self.reconcile_once()
+            await self._sleeper(self._interval_seconds)
+
+    async def reconcile_once(self) -> bool:
+        """Run bounded batches until one pass catches up; report created work."""
+        started = self._clock().astimezone(UTC)
+        scanned_count = 0
+        created_count = 0
+        existing_count = 0
+        batches = 0
+        reported = False
+        caught_up = False
+        while not caught_up:
+            batch = await self._repository.reconcile_missing_deliveries(
+                limit=self._batch_size, at=self._clock().astimezone(UTC)
+            )
+            scanned_count += batch.scanned_count
+            created_count += batch.created_count
+            existing_count += batch.existing_count
+            if batch.scanned_count or batch.created_count:
+                if not reported:
+                    reported = True
+                    self._emit("approval_outbox_reconciliation_started")
+                self._emit(
+                    "approval_outbox_reconciliation_batch_processed",
+                    scanned_count=batch.scanned_count,
+                    created_count=batch.created_count,
+                    existing_count=batch.existing_count,
+                    completed=batch.completed,
+                    watermark=(
+                        None
+                        if batch.watermark is None
+                        else batch.watermark.astimezone(UTC).isoformat()
+                    ),
+                )
+            batches += 1
+            caught_up = batch.completed
+            if not caught_up:
+                await self._sleeper(self._pause_seconds)
+        if reported:
+            duration = (self._clock().astimezone(UTC) - started).total_seconds()
+            self._emit(
+                "approval_outbox_reconciliation_completed",
+                scanned_count=scanned_count,
+                created_count=created_count,
+                existing_count=existing_count,
+                batch_count=batches,
+                duration_seconds=round(duration, 3),
+            )
+        return created_count > 0
+
+    def _emit(self, event_name: str, **fields: object) -> None:
+        if self._logger is not None:
+            self._logger.emit(level=LogLevel.INFO, event_name=event_name, fields=fields)
+
+
 class ApprovalDeliveryLoop:
     """Run bounded delivery polling until cancellation."""
 
@@ -1067,5 +1162,6 @@ __all__ = (
     "ApprovalCallbackExecutor",
     "ApprovalDeliveryLoop",
     "ApprovalDeliveryWorker",
+    "ApprovalOutboxReconciliationLoop",
     "OperationalDestination",
 )

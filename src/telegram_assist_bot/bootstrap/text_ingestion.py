@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import IntEnum
@@ -57,7 +58,10 @@ from telegram_assist_bot.application.validate_telegram_session import (
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
     FoundationStartupError,
+    classify_startup_failure,
     create_foundation_application,
+    emit_startup_failure,
+    startup_exit_code,
 )
 from telegram_assist_bot.bootstrap.telegram_validation import validate_telegram_startup
 from telegram_assist_bot.domain.categories import Category
@@ -84,6 +88,7 @@ from telegram_assist_bot.infrastructure.telegram.user import (
     TelethonTextIngestionGateway,
 )
 from telegram_assist_bot.shared.config import LoadedConfiguration, LogLevel
+from telegram_assist_bot.shared.errors import StartupFailureClass
 from telegram_assist_bot.shared.retry import RetryPolicy, execute_with_retry
 from telegram_assist_bot.workers import LiveTextListener, ScheduledPublicationWorker
 
@@ -103,13 +108,24 @@ if TYPE_CHECKING:
 
 
 class TextIngestionStartupError(RuntimeError):
-    """Report a safe failure before the text-ingestion lifecycle becomes ready."""
+    """Report a safe failure before the text-ingestion lifecycle becomes ready.
+
+    `failure_class` carries the classification of the wrapped startup failure so
+    the CLI process contract can distinguish a non-retryable validation failure
+    from a transient infrastructure failure without inspecting the cause again.
+    """
 
     error_category = "permanent"
 
-    def __init__(self, *, cause: BaseException | None = None) -> None:
-        """Retain a cause without copying provider details into the message."""
+    def __init__(
+        self,
+        *,
+        cause: BaseException | None = None,
+        failure_class: StartupFailureClass = StartupFailureClass.TRANSIENT,
+    ) -> None:
+        """Retain a cause and its classification without copying its message."""
         super().__init__("Telegram text ingestion could not be started.")
+        self.failure_class = failure_class
         if cause is not None:
             self.__cause__ = cause
 
@@ -646,10 +662,31 @@ class TextIngestionApplication:
         except Exception as error:
             self._set_shutdown_reason("startup_failed")
             self._state = _State.FAILED
+            failure_class = (
+                error.failure_class
+                if isinstance(error, TextIngestionStartupError)
+                else classify_startup_failure(error)
+            )
+            self._report_startup_failure(failure_class, error)
             await self._cleanup()
             if isinstance(error, TextIngestionStartupError):
                 raise
-            raise TextIngestionStartupError(cause=error) from error
+            raise TextIngestionStartupError(
+                cause=error, failure_class=failure_class
+            ) from error
+
+    def _report_startup_failure(
+        self,
+        failure_class: StartupFailureClass,
+        error: BaseException,
+    ) -> None:
+        """Emit one classified startup event when the foundation logger exists."""
+        with suppress(RuntimeError):
+            emit_startup_failure(
+                self._dependencies.foundation.logger,
+                failure_class=failure_class,
+                error=error,
+            )
 
     async def wait(self) -> None:
         """Wait for an explicit stop or one genuinely critical runtime task."""
@@ -833,7 +870,14 @@ async def _create_runtime_ingestor(
     groups = database["media_groups"]
     preparations = database["content_preparations"]
     await initialize_content_preparation_indexes(media, groups, preparations)
+    deliveries = database["approval_deliveries"]
+    await initialize_operational_approval_indexes(deliveries)
     repository = MongoContentPreparationRepository(media, groups, preparations)
+    approval_outbox = MongoOperationalApprovalRepository(
+        preparations,
+        deliveries,
+        outbox_state=database["approval_outbox_state"],
+    )
     storage = LocalMediaStorage(
         settings.media.root,
         preview_enabled=settings.media.preview_enabled,
@@ -908,7 +952,7 @@ async def _create_runtime_ingestor(
         storage=storage,
         downloader=downloader,
         assembler=assembler,
-        pipeline=PreparePostPipeline(repository),
+        pipeline=PreparePostPipeline(repository, approval_outbox),
         policy=policy,
         clock=clock,
         logger=foundation.logger,
@@ -1625,6 +1669,8 @@ async def run_text_ingestion_application(
         await application.shutdown()
         if isinstance(error.__cause__, FoundationStartupError):
             return error.__cause__.exit_code
+        if error.failure_class is StartupFailureClass.PERMANENT:
+            return startup_exit_code(error.failure_class)
         return FoundationExitCode.INFRASTRUCTURE_ERROR
     except Exception:  # noqa: BLE001 - safe long-running CLI boundary.
         await application.shutdown()

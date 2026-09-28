@@ -47,5 +47,5 @@ WORKDIR /app
 COPY --from=builder --chown=10001:10001 /build/.venv /app/.venv
 
 USER 10001:10001
-ENTRYPOINT ["/app/.venv/bin/python", "-m", "telegram_assist_bot"]
+ENTRYPOINT ["/app/.venv/bin/python", "-m", "telegram_assist_bot.container_entrypoint"]
 CMD ["check", "--config", "/app/config/configuration.json"]
