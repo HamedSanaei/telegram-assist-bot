@@ -28,6 +28,7 @@ from telegram_assist_bot.shared.observability import (
     StructuredEvent,
     StructuredLogger,
 )
+from telegram_assist_bot.workers.background import supervise_background_task
 from tests.unit.application.approvals.test_admin_approval import MemoryRepository
 
 if TYPE_CHECKING:
@@ -585,5 +586,80 @@ def test_approval_shutdown_drains_polling_before_closing_bot_session() -> None:
         ]
         assert gateway.closed == 1
         assert not loop_errors
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("permanent", [True, False])
+def test_supervised_background_failure_keeps_polling_and_siblings_available(
+    permanent: bool,
+) -> None:
+    async def scenario() -> None:
+        polling_started = asyncio.Event()
+        suspended = asyncio.Event()
+        attempts = 0
+        events: list[StructuredEvent] = []
+
+        class BlockingPoller(Poller):
+            async def start_polling(self, bot: object, **kwargs: object) -> None:
+                del bot, kwargs
+                polling_started.set()
+                await asyncio.Event().wait()
+
+        def capture(event: StructuredEvent) -> None:
+            events.append(event)
+            if event["event_name"] == "approval_background_task_suspended":
+                suspended.set()
+
+        logger = StructuredLogger(
+            sink=capture,
+            clock=lambda: datetime(2026, 7, 13, tzinfo=UTC),
+            redactor=Redactor(),
+            minimum_level=LogLevel.DEBUG,
+        )
+        foundation = Foundation()
+        foundation.logger = cast("Any", logger)
+        app = module.ApprovalBotApplication(cast("Any", foundation))
+        app._started = True
+        app._dispatcher = cast("Any", BlockingPoller())
+        app._gateway = cast("Any", Gateway())
+
+        async def fail() -> None:
+            nonlocal attempts
+            attempts += 1
+            if permanent:
+                raise AuthorizationError
+            raise RuntimeError("synthetic private error")
+
+        async def pause(_delay: float) -> None:
+            await asyncio.sleep(0)
+
+        app._sync_task = asyncio.create_task(
+            supervise_background_task(
+                fail,
+                task_name="approval-sync",
+                logger=logger,
+                retry_seconds=5,
+                sleeper=pause,
+            ),
+            name="approval-sync",
+        )
+
+        async def sibling() -> None:
+            await asyncio.Event().wait()
+
+        app._delivery_task = asyncio.create_task(sibling(), name="approval-delivery")
+        waiting = asyncio.create_task(app.wait())
+        await asyncio.wait_for(polling_started.wait(), timeout=1)
+        await asyncio.wait_for(suspended.wait(), timeout=1)
+        assert attempts == (1 if permanent else 3)
+        assert not waiting.done()
+        assert not app._delivery_task.done()
+        assert app._polling_task is not None
+        assert not app._polling_task.done()
+        assert events[-1]["level"] == "CRITICAL"
+        assert "synthetic private error" not in str(events)
+        await app.shutdown()
+        await asyncio.gather(waiting, return_exceptions=True)
 
     asyncio.run(scenario())

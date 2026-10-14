@@ -27,6 +27,9 @@ from telegram_assist_bot.application.ports import (
     PublicationPreparationOutcome,
     PublicationRetractionRequestOutcome,
 )
+from telegram_assist_bot.application.ports.operational_approval import (
+    ApprovalContentUnavailableError,
+)
 from telegram_assist_bot.application.scheduling import (
     CancelRequest,
     CancelScheduledPost,
@@ -1010,7 +1013,27 @@ class ApprovalCallbackExecutor:
         )
         if claim is None:
             return False
-        await self._sync(claim.post_id, claim.version, now)
+        try:
+            await self._sync(claim.post_id, claim.version, now)
+        except ApprovalContentUnavailableError:
+            retired = await self._operational.terminalize_sync(
+                claim.post_id,
+                owner=owner,
+                version=claim.version,
+                at=self._clock().astimezone(UTC),
+            )
+            if self._logger is not None:
+                self._logger.emit(
+                    level=LogLevel.WARNING,
+                    event_name="approval_sync_content_unavailable",
+                    fields={
+                        "approval_post_id": claim.post_id,
+                        "sync_version": claim.version,
+                        "terminal": retired,
+                        "failure_category": "permanent",
+                    },
+                )
+            return True
         references = await self._approvals.list_active_references(claim.post_id)
         if all(item.sync_state.value == "current" for item in references):
             await self._operational.complete_sync(

@@ -217,6 +217,7 @@ def validate_wheel(wheel_path: Path) -> None:
                 f"{EXPECTED_IMPORT_PACKAGE}/infrastructure/media/local_storage.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/content_preparation.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/media_cleanup.py",
+                f"{EXPECTED_IMPORT_PACKAGE}/workers/background.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/media_group_assembler.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/workers/scheduled_publication_worker.py",
                 f"{EXPECTED_IMPORT_PACKAGE}/presentation/bot/__init__.py",

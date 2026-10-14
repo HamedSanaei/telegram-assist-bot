@@ -5,6 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from telegram_assist_bot.shared.errors import (
+    StartupFailureClass,
+    classify_declared_failure,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from datetime import datetime
@@ -17,6 +22,7 @@ if TYPE_CHECKING:
     from telegram_assist_bot.shared.retry.executor import AsyncSleeper
 
 type BatchObserver = Callable[[CleanupBatchResult], Awaitable[None]]
+type CycleFailureObserver = Callable[[BaseException, int, float | None], None]
 
 
 async def cleanup_media_once(
@@ -38,6 +44,7 @@ class PeriodicMediaCleanupWorker:
         max_batches_per_cycle: int,
         on_batch_completed: BatchObserver | None = None,
         batch_yield: AsyncSleeper = asyncio.sleep,
+        on_cycle_failed: CycleFailureObserver | None = None,
     ) -> None:
         """Initialize a validated periodic wake-up and drain policy."""
         if type(interval_seconds) is not int or not 60 <= interval_seconds <= 604_800:
@@ -53,18 +60,48 @@ class PeriodicMediaCleanupWorker:
         self._max_batches = max_batches_per_cycle
         self._on_batch_completed = on_batch_completed
         self._batch_yield = batch_yield
+        self._on_cycle_failed = on_cycle_failed
 
     async def run(self, stop_event: asyncio.Event) -> int:
         """Drain bounded batches per cycle with cancellation-safe sleep."""
         iterations = 0
         while not stop_event.is_set():
-            await self._drain_cycle(stop_event)
+            if not await self._recover_cycle(stop_event):
+                break
             iterations += 1
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._interval)
             except TimeoutError:
                 continue
         return iterations
+
+    async def _recover_cycle(self, stop_event: asyncio.Event) -> bool:
+        """Recover temporary batch failures before requesting a process restart."""
+        for attempt in range(1, 4):
+            try:
+                await self._drain_cycle(stop_event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                terminal = (
+                    classify_declared_failure(error) is StartupFailureClass.PERMANENT
+                    or attempt == 3
+                )
+                delay = (
+                    None if terminal else min(5.0 * 2 ** (attempt - 1), self._interval)
+                )
+                if self._on_cycle_failed is not None:
+                    self._on_cycle_failed(error, attempt, delay)
+                if terminal:
+                    raise
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=delay)
+                except TimeoutError:
+                    continue
+                return False
+            else:
+                return True
+        return False  # pragma: no cover - terminal attempt raises.
 
     async def _drain_cycle(self, stop_event: asyncio.Event) -> int:
         """Process one wake-up: up to the safety bound of bounded batches."""

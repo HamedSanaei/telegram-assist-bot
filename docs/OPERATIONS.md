@@ -278,3 +278,27 @@ reap می‌کند تا Zombie انباشته نشود. اگر Host شما Docke
 | Container پر `restart` است | `tabctl --instance X logs --tail 200` و جست‌وجوی `startup_failed_transient`/`startup_failed_permanently` برای تفکیک خطای گذرا از دائمی |
 | Backup خراب | `tabctl --instance X backup verify ID` پیش از restore |
 | Update ناموفق | `tabctl --instance X update --rollback` |
+
+## Background recovery and cleanup shutdown (T101)
+
+- `approval_background_task_retry` records the task, safe failure class/type,
+  attempt and backoff. After three lifetime starts, or a declared permanent
+  error, `approval_background_task_suspended` is CRITICAL. The Bot keeps polling;
+  fix the cause and use `tabctl --instance X service restart approval-bot`.
+- `approval_sync_content_unavailable` warns that an absent original post was
+  retired with an atomic guard (`terminal=true`); `terminal=false` means a newer
+  version, owner or lease superseded that claim. No publication history is deleted.
+  Inspect the additive `sync_terminal_reason`/`sync_terminal_at` fields read-only.
+  Restoring content does not automatically re-enable a retired approval.
+- `media_cleanup_worker_started` records the configured interval/batch limit.
+  `media_cleanup_cycle_failed` records safe retry metadata; cycles wait 5/10
+  seconds before retry and exit 3 after exhaustion. Docker retains `on-failure:20`.
+- `media_cleanup_worker_stopped` now records `shutdown_reason`, `signal_number`
+  and `exit_code`. The reported legacy incident (four completed cycles, exit 0,
+  no OOM and no restarts) was a graceful stop, consistent with signal shutdown;
+  the old logs cannot identify the sender. SIGINT/SIGTERM now drain and exit 3,
+  making external signals restartable. An explicit Compose stop suppresses
+  Docker restart; an injected application stop event exits 0.
+- No live instance, session or volume is modified by this patch. Deploy the
+  verified image and recreate the affected services using the normal update
+  workflow; do not delete volumes to apply this fix.

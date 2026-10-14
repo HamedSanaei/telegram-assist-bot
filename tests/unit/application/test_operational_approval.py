@@ -50,6 +50,9 @@ from telegram_assist_bot.application.ports import (
 from telegram_assist_bot.application.ports import (
     ScheduleRepository as ScheduleRepositoryPort,
 )
+from telegram_assist_bot.application.ports.operational_approval import (
+    ApprovalContentUnavailableError,
+)
 from telegram_assist_bot.application.scheduling import CancelScheduledPost, SchedulePost
 from telegram_assist_bot.domain import (
     Administrator,
@@ -1542,5 +1545,65 @@ def test_operational_edge_paths_remain_safe_and_retryable() -> None:
         executor._logger = cast("Any", logger)
         executor._emit("safe_event", post_id="post-1")
         assert logger.called
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("retired", [True, False])
+def test_missing_sync_content_is_retired_without_touching_history(
+    retired: bool,
+) -> None:
+    async def scenario() -> None:
+        executor, _, _, operational = build_executor()
+        operational.sync_claim = ApprovalSyncClaim("post-1", 5, "sync")
+        operational.statuses[DESTINATION] = "published"
+        calls: list[dict[str, object]] = []
+        events: list[StructuredEvent] = []
+        executor._logger = StructuredLogger(
+            sink=lambda event: events.append(event),
+            clock=lambda: NOW,
+            redactor=Redactor(),
+            minimum_level=LogLevel.DEBUG,
+        )
+
+        async def missing(post_id: str) -> ApprovalPost:
+            del post_id
+            raise ApprovalContentUnavailableError
+
+        async def retire(post_id: str, **options: object) -> bool:
+            calls.append({"post_id": post_id, **options})
+            return retired
+
+        executor._loader.load = missing  # type: ignore[method-assign]
+        operational.terminalize_sync = retire  # type: ignore[attr-defined]
+        references = dict(cast("MemoryRepository", executor._approvals).references)
+        assert await executor.synchronize_pending_once(owner="sync", lease_seconds=30)
+        assert calls == [
+            {"post_id": "post-1", "owner": "sync", "version": 5, "at": NOW}
+        ]
+        assert operational.statuses == {DESTINATION: "published"}
+        assert cast("MemoryRepository", executor._approvals).references == references
+        assert operational.sync_completed == 0
+        assert not cast("Gateway", executor._gateway).edits
+        assert events[-1]["event_name"] == "approval_sync_content_unavailable"
+        assert events[-1]["terminal"] == retired
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", [ValueError, TimeoutError])
+def test_unrelated_loader_failures_are_not_retired(failure: type[Exception]) -> None:
+    async def scenario() -> None:
+        executor, _, _, operational = build_executor()
+        operational.sync_claim = ApprovalSyncClaim("post-1", 5, "sync")
+
+        async def fail(post_id: str) -> ApprovalPost:
+            del post_id
+            raise failure()
+
+        executor._loader.load = fail  # type: ignore[method-assign]
+        with pytest.raises(failure):
+            await executor.synchronize_pending_once(owner="sync", lease_seconds=30)
+        assert operational.sync_completed == 0
 
     asyncio.run(scenario())

@@ -25,6 +25,7 @@ from telegram_assist_bot.infrastructure.persistence.mongodb.content_repository i
     initialize_content_preparation_indexes,
 )
 from telegram_assist_bot.shared.config import ApplicationConfig, LogLevel
+from telegram_assist_bot.shared.errors import classify_declared_failure
 from telegram_assist_bot.workers.media_cleanup import PeriodicMediaCleanupWorker
 
 if TYPE_CHECKING:
@@ -161,6 +162,13 @@ async def run_media_cleanup_worker(
     owned_stop = stop_event is None
     shutdown = stop_event or asyncio.Event()
     registered: list[signal.Signals] = []
+    received_signal: int | None = None
+
+    def request_signal_stop(signum: int) -> None:
+        nonlocal received_signal
+        received_signal = signum
+        shutdown.set()
+
     try:
         await foundation.start(configuration_path, environ=environ)
         use_case, settings = await _build_cleanup_use_case(foundation)
@@ -168,7 +176,7 @@ async def run_media_cleanup_worker(
             loop = asyncio.get_running_loop()
             for signum in (signal.SIGINT, signal.SIGTERM):
                 try:
-                    loop.add_signal_handler(signum, shutdown.set)
+                    loop.add_signal_handler(signum, request_signal_stop, signum)
                 except (NotImplementedError, RuntimeError, ValueError):
                     continue
                 registered.append(signum)
@@ -180,17 +188,55 @@ async def run_media_cleanup_worker(
                 fields=_batch_result_fields(result),
             )
 
+        def observe_failure(
+            error: BaseException, attempt: int, delay: float | None
+        ) -> None:
+            foundation.logger.emit(
+                level=LogLevel.CRITICAL if delay is None else LogLevel.ERROR,
+                event_name="media_cleanup_cycle_failed",
+                fields={
+                    "task_name": "media-cleanup-worker",
+                    "failure_type": type(error).__name__,
+                    "failure_category": classify_declared_failure(error).value,
+                    "retry_attempt": attempt,
+                    "retry_delay_seconds": delay,
+                    "terminal": delay is None,
+                },
+            )
+
+        foundation.logger.emit(
+            level=LogLevel.INFO,
+            event_name="media_cleanup_worker_started",
+            fields={
+                "cleanup_interval_seconds": settings.media.cleanup_interval_seconds,
+                "cleanup_max_batches_per_cycle": (
+                    settings.media.cleanup_max_batches_per_cycle
+                ),
+            },
+        )
         iterations = await PeriodicMediaCleanupWorker(
             use_case,
             _SystemClock(),
             interval_seconds=settings.media.cleanup_interval_seconds,
             max_batches_per_cycle=settings.media.cleanup_max_batches_per_cycle,
             on_batch_completed=observe_batch,
+            on_cycle_failed=observe_failure,
         ).run(shutdown)
         foundation.logger.emit(
             level=LogLevel.INFO,
             event_name="media_cleanup_worker_stopped",
-            fields={"completed_iteration_count": iterations},
+            fields={
+                "completed_iteration_count": iterations,
+                "shutdown_reason": "signal"
+                if received_signal is not None
+                else "requested",
+                "signal_number": received_signal,
+                "exit_code": int(
+                    FoundationExitCode.INFRASTRUCTURE_ERROR
+                    if received_signal is not None
+                    else FoundationExitCode.SUCCESS
+                ),
+            },
         )
     except asyncio.CancelledError:
         await foundation.shutdown()
@@ -212,7 +258,11 @@ async def run_media_cleanup_worker(
             for signum in registered:
                 loop.remove_signal_handler(signum)
     await foundation.shutdown()
-    return FoundationExitCode.SUCCESS
+    return (
+        FoundationExitCode.INFRASTRUCTURE_ERROR
+        if received_signal is not None
+        else FoundationExitCode.SUCCESS
+    )
 
 
 __all__ = ("run_media_cleanup", "run_media_cleanup_worker")

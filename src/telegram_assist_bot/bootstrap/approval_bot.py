@@ -75,6 +75,7 @@ from telegram_assist_bot.presentation.bot.advertisement_reports import (
 from telegram_assist_bot.presentation.bot.runtime_handlers import OperationalBotHandlers
 from telegram_assist_bot.shared.config import LogLevel
 from telegram_assist_bot.shared.errors import StartupFailureClass
+from telegram_assist_bot.workers.background import supervise_background_task
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -387,7 +388,15 @@ class ApprovalBotApplication:
                 ),
             )
             self._delivery_task = asyncio.create_task(
-                loop.run(), name="approval-delivery"
+                supervise_background_task(
+                    loop.run,
+                    task_name="approval-delivery",
+                    logger=self._foundation.logger,
+                    retry_seconds=float(
+                        settings.telegram.bot.approval_delivery_poll_seconds
+                    ),
+                ),
+                name="approval-delivery",
             )
             reconciliation = ApprovalOutboxReconciliationLoop(
                 operational,
@@ -405,7 +414,15 @@ class ApprovalBotApplication:
                 logger=self._foundation.logger,
             )
             self._reconciliation_task = asyncio.create_task(
-                reconciliation.run(), name="approval-outbox-reconciliation"
+                supervise_background_task(
+                    reconciliation.run,
+                    task_name="approval-outbox-reconciliation",
+                    logger=self._foundation.logger,
+                    retry_seconds=float(
+                        settings.telegram.bot.approval_delivery_poll_seconds
+                    ),
+                ),
+                name="approval-outbox-reconciliation",
             )
             cleanup_repository = MongoApprovalCleanupRepository(
                 database["approval_references"],
@@ -430,7 +447,15 @@ class ApprovalBotApplication:
                 interval_seconds=float(settings.media.cleanup_interval_seconds),
             )
             self._cleanup_task = asyncio.create_task(
-                cleanup_loop.run(), name="approval-cleanup"
+                supervise_background_task(
+                    cleanup_loop.run,
+                    task_name="approval-cleanup",
+                    logger=self._foundation.logger,
+                    retry_seconds=float(
+                        settings.telegram.bot.approval_delivery_poll_seconds
+                    ),
+                ),
+                name="approval-cleanup",
             )
             sync_owner = f"approval-sync-{uuid4().hex}"
 
@@ -447,7 +472,17 @@ class ApprovalBotApplication:
                             float(settings.telegram.bot.approval_delivery_poll_seconds)
                         )
 
-            self._sync_task = asyncio.create_task(run_sync(), name="approval-sync")
+            self._sync_task = asyncio.create_task(
+                supervise_background_task(
+                    run_sync,
+                    task_name="approval-sync",
+                    logger=self._foundation.logger,
+                    retry_seconds=float(
+                        settings.telegram.bot.approval_delivery_poll_seconds
+                    ),
+                ),
+                name="approval-sync",
+            )
             self._started = True
             self._foundation.logger.emit(
                 level=LogLevel.INFO, event_name="approval_bot_started"

@@ -736,3 +736,16 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `.github/workflows/release.yml` | validation Tag/نسخه، Build wheel/sdist و Bundle، GHCR چندسکویی، SBOM/provenance و ایجاد/تکمیل idempotent GitHub Release |
 | `scripts/v1_acceptance.sh` | smoke nonroot، Installer و isolation دو Instance بدون Telegram live |
 | `docs/RELEASE_CHECKLIST.md` | Gate دستی Tag و GitHub Release `v1.1.2` |
+
+## T101 runtime recovery paths
+
+| Path | Responsibility |
+|---|---|
+| `workers/background.py` | Bounded approval lifetime retry and CRITICAL suspension; cancellation propagation |
+| `bootstrap/approval_bot.py` | Wraps delivery, sync, cleanup and reconciliation independently of polling |
+| `application/ports/operational_approval.py` | Explicit absent-original / not-ready outcomes and terminal sync port |
+| `application/operational_approval.py` | Retires irrecoverable sync requests through the application port |
+| `infrastructure/persistence/mongodb/operational_approval_repository.py` | Atomic terminal owner/version/lease guard; preserves publication history |
+| `workers/media_cleanup.py`, `bootstrap/media_cleanup.py` | Cycle backoff, safe failure events and restartable signal exit |
+| `tests/integration/mongodb/test_orphan_approval_sync.py` | Real MongoDB history preservation, concurrency and restart regressions |
+| `tests/unit/workers/test_background.py` | Recovery budgets, critical errors, clean exits and cancellation |

@@ -147,6 +147,35 @@ Approval Bot را متوقف نمی‌کند.
 `CancelScheduledPost` و policy موجود لغو می‌کند؛ هیچ command بازرسی Session را باز
 نمی‌کند.
 
+### Approval background recovery and absent original content (T101)
+
+`approval-delivery`, `approval-sync`, `approval-cleanup` and outbox reconciliation
+run inside `workers/background.py`. Each lifetime has three starts per process,
+exponential recovery from the configured approval poll interval capped at 60
+seconds, and cancellation-safe shutdown. Declared permanent errors or exhaustion
+emit `approval_background_task_suspended` at CRITICAL and suspend that worker;
+polling and sibling workers remain available. An operator restarts the service
+once the underlying problem is fixed. Polling failures still reach the lifecycle
+boundary; unexpected exits outside the recovery wrapper remain detectable.
+
+Missing `posts` content raises `ApprovalContentUnavailableError`; an original
+that exists without ready preparation raises `ApprovalPreparationNotReadyError`
+and remains recoverable. The application retires only the former sync with an
+atomic owner/version/live-lease guard. Additive `sync_terminal_reason` and
+`sync_terminal_at` fields plus `approval_expired` prevent new approval actions and
+repeat sync claims. Delivery progress, references, callbacks, destination state,
+preparations and publication receipts are retained. Independent publication
+status updates still persist, atomically without reviving a retired sync. No
+content is reconstructed from incomplete historical artifacts.
+
+Media cleanup retries a failed cycle at most three times, with 5/10-second waits
+that shutdown can interrupt; permanent errors do not retry. Exhaustion exits 3
+for the existing bounded Docker policy. SIGINT/SIGTERM now record the signal and
+exit 3 after draining, so an external signal can recover under `on-failure:20`.
+Docker suppresses automatic restart for an explicit `docker compose stop`; an
+injected application stop event still exits 0. Configured interval, batch limits,
+reference checks and private-media confinement stay intact.
+
 ### چرخهٔ عمر Outbox تحویل approval
 
 هویت هر تحویل منطقی یک رکورد durable در `approval_deliveries` است، نه یک اسکن

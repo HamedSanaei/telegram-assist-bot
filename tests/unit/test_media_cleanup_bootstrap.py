@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from telegram_assist_bot.bootstrap.runtime import (
     FoundationConfigurationError,
     FoundationExitCode,
 )
+from telegram_assist_bot.container_entrypoint import container_exit_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -313,10 +315,11 @@ def test_periodic_cleanup_uses_configured_interval_and_shutdown(
             interval_seconds: int,
             max_batches_per_cycle: int,
             on_batch_completed: object | None = None,
+            on_cycle_failed: object | None = None,
         ) -> None:
             intervals.append(interval_seconds)
             batches.append(max_batches_per_cycle)
-            del on_batch_completed
+            del on_batch_completed, on_cycle_failed
 
         async def run(self, stop_event: asyncio.Event) -> int:
             assert stop_event.is_set()
@@ -341,3 +344,53 @@ def test_periodic_cleanup_uses_configured_interval_and_shutdown(
     assert foundation.logger.events[-1]["event_name"] == (
         "media_cleanup_worker_stopped"
     )
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_signal_shutdown_is_restartable_and_preserves_cleanup(
+    monkeypatch: pytest.MonkeyPatch, signum: signal.Signals
+) -> None:
+    foundation = Foundation()
+    setup(monkeypatch, foundation)
+    registered: dict[int, tuple[Callable[..., None], tuple[object, ...]]] = {}
+    removed: list[int] = []
+
+    class SignalWorker:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, stop_event: asyncio.Event) -> int:
+            callback, args = registered[signum]
+            callback(*args)
+            assert stop_event.is_set()
+            return 4
+
+    async def scenario() -> FoundationExitCode:
+        loop = asyncio.get_running_loop()
+
+        def register(number: int, callback: Callable[..., None], *args: object) -> None:
+            registered[number] = (callback, args)
+
+        monkeypatch.setattr(loop, "add_signal_handler", register)
+        monkeypatch.setattr(
+            loop, "remove_signal_handler", lambda number: removed.append(number)
+        )
+        monkeypatch.setattr(cleanup_module, "PeriodicMediaCleanupWorker", SignalWorker)
+        return await run_media_cleanup_worker(
+            Path("synthetic.json"),
+            environ={},
+            sink=cast("EventSink", lambda _event: None),
+        )
+
+    result = run(scenario())
+    assert result is FoundationExitCode.INFRASTRUCTURE_ERROR
+    assert container_exit_code(result) != 0
+    assert foundation.shutdowns == 1
+    fields = cast("dict[str, object]", foundation.logger.events[-1]["fields"])
+    assert fields == {
+        "completed_iteration_count": 4,
+        "shutdown_reason": "signal",
+        "signal_number": signum,
+        "exit_code": 3,
+    }
+    assert set(removed) == {signal.SIGINT, signal.SIGTERM}

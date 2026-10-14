@@ -890,3 +890,22 @@
   می‌کند). passهای re-verify که هویتی نمی‌سازند هیچ eventی ثبت نمی‌کنند تا لاگ در
   حالت پایدار ساکت بماند. Unit بازیابی با `systemctl enable` نصب می‌شود و سیاست
   Compose بدون تغییر (`on-failure:20`) می‌ماند.
+
+## ADR-054 — Terminal orphan sync and independent approval background recovery
+
+- **Status:** Accepted.
+- **Context:** Original posts expire under TTL while approval/publication history
+  remains. A generic loader ValueError could terminate sync and all Bot polling.
+  A cleanup signal also returned 0, which `on-failure:20` correctly left stopped.
+- **Decision:** Retire missing-original sync atomically using owner/version/live
+  lease and additive terminal metadata, without deleting or rewriting publication
+  history. Missing preparation with a surviving original remains recoverable.
+  Retry each approval background lifetime independently within a three-start
+  budget, then suspend it with CRITICAL visibility while polling stays available.
+  Cleanup cycles retry three times; exhausted cycles and signal shutdown exit 3.
+- **Consequences:** Historical callbacks become non-actionable. Status updates
+  from publishers still persist without re-enabling orphan sync. Operators must
+  fix the underlying fault and restart suspended approval workers. Explicit
+  Docker stops stay stopped; externally delivered signals become restartable.
+  Existing data/session formats and bounded restart policy need no destructive
+  migration. The signal sender cannot be identified from the old log.

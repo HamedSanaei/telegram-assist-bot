@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from telegram_assist_bot.application.ports.admin import ApprovalContent
+
+
+class ApprovalContentUnavailableError(ValueError):
+    """Report absent durable content separately from transport/loading failures."""
+
+    def __init__(self) -> None:
+        """Preserve the legacy safe message without exposing stored content."""
+        super().__init__("Ready approval content does not exist.")
+
+
+class ApprovalPreparationNotReadyError(ValueError):
+    """Report preparation that may recover while the original post still exists."""
+
+    error_category: ClassVar[str] = "transient"
+
+    def __init__(self) -> None:
+        """Use the legacy safe loading message for compatibility."""
+        super().__init__("Ready approval content does not exist.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +218,12 @@ class OperationalApprovalRepository(ReadyApprovalOutbox, Protocol):
         """Complete one synchronization unless a newer version arrived."""
         ...
 
+    async def terminalize_sync(
+        self, post_id: str, *, owner: str, version: int, at: datetime
+    ) -> bool:
+        """Retire an owned orphan sync without changing publication history."""
+        ...
+
 
 class ApprovalPostLoader(Protocol):
     """Load prepared approval content without exposing MongoDB documents."""
@@ -211,10 +235,12 @@ class ApprovalPostLoader(Protocol):
 
 __all__ = (
     "ApprovalAdministratorDeliveryState",
+    "ApprovalContentUnavailableError",
     "ApprovalDeliveryClaim",
     "ApprovalOutboxReconciliation",
     "ApprovalPost",
     "ApprovalPostLoader",
+    "ApprovalPreparationNotReadyError",
     "ApprovalSyncClaim",
     "DestinationPublicationState",
     "OperationalApprovalRepository",

@@ -25,6 +25,10 @@ from telegram_assist_bot.application.ports import (
     ApprovalSyncClaim,
     DestinationPublicationState,
 )
+from telegram_assist_bot.application.ports.operational_approval import (
+    ApprovalContentUnavailableError,
+    ApprovalPreparationNotReadyError,
+)
 from telegram_assist_bot.domain.posts import TelegramEntity
 
 if TYPE_CHECKING:
@@ -580,19 +584,27 @@ class MongoOperationalApprovalRepository:
         key = f"destination_statuses.{destination_id}"
         await self._deliveries.update_one(
             {"_id": post_id, f"{key}.version": {"$not": {"$gt": version}}},
-            {
-                "$set": {
-                    key: {
-                        "status": status,
-                        "version": version,
-                        "updated_at": at,
-                        "action": action,
-                        "due_at": due_at,
-                    },
-                    "sync_required": True,
+            [
+                {
+                    "$set": {
+                        key: {
+                            "$literal": {
+                                "status": status,
+                                "version": version,
+                                "updated_at": at,
+                                "action": action,
+                                "due_at": due_at,
+                            }
+                        },
+                        "sync_required": {
+                            "$eq": [{"$ifNull": ["$sync_terminal_reason", None]}, None]
+                        },
+                        "sync_version": {
+                            "$add": [{"$ifNull": ["$sync_version", 0]}, 1]
+                        },
+                    }
                 },
-                "$inc": {"sync_version": 1},
-            },
+            ],
         )
 
     async def destination_statuses(self, post_id: str) -> dict[int, str]:
@@ -633,6 +645,7 @@ class MongoOperationalApprovalRepository:
         document = await self._deliveries.find_one_and_update(
             {
                 "sync_required": True,
+                "sync_terminal_reason": None,
                 "$or": [
                     {"sync_lease_until": None},
                     {"sync_lease_until": {"$exists": False}},
@@ -658,6 +671,30 @@ class MongoOperationalApprovalRepository:
                     "sync_required": False,
                     "sync_owner": None,
                     "sync_lease_until": None,
+                }
+            },
+        )
+        return result.modified_count == 1
+
+    async def terminalize_sync(
+        self, post_id: str, *, owner: str, version: int, at: datetime
+    ) -> bool:
+        """Retire absent content atomically while retaining all durable history."""
+        result = await self._deliveries.update_one(
+            {
+                "_id": post_id,
+                "sync_owner": owner,
+                "sync_version": version if version else {"$in": [0, None]},
+                "sync_lease_until": {"$gt": at},
+            },
+            {
+                "$set": {
+                    "sync_required": False,
+                    "sync_owner": None,
+                    "sync_lease_until": None,
+                    "sync_terminal_reason": "content_unavailable",
+                    "sync_terminal_at": at,
+                    "approval_expired": True,
                 }
             },
         )
@@ -691,8 +728,10 @@ class MongoApprovalPostLoader:
             {"_id": post_id, "ready_at": {"$exists": True}}
         )
         post = await self._posts.find_one({"_id": post_id})
-        if preparation is None or post is None:
-            raise ValueError("Ready approval content does not exist.")
+        if post is None:
+            raise ApprovalContentUnavailableError
+        if preparation is None:
+            raise ApprovalPreparationNotReadyError
         artifacts = preparation.get("artifacts", {})
         artifact = next(
             (artifacts[name] for name in self._destination_names if name in artifacts),

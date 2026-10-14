@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from telegram_assist_bot.application.cleanup_expired_media import CleanupBatchResult
+from telegram_assist_bot.shared.errors import ConfigurationError
 from telegram_assist_bot.workers.media_cleanup import (
     PeriodicMediaCleanupWorker,
     cleanup_media_once,
@@ -216,3 +217,107 @@ def test_cleanup_media_once_delegates_the_explicit_time() -> None:
 
     assert result == CleanupBatchResult()
     assert cleanup.calls == [now]
+
+
+@pytest.mark.parametrize("failures", [1, 2, 3])
+def test_cleanup_cycle_recovery_is_bounded_and_observable(
+    monkeypatch: pytest.MonkeyPatch, failures: int
+) -> None:
+    async def scenario() -> None:
+        stop = asyncio.Event()
+        calls = 0
+        waits: list[float] = []
+        events: list[tuple[str, int, float | None]] = []
+
+        class FailingCleanup:
+            async def execute(self, *, now: datetime) -> CleanupBatchResult:
+                nonlocal calls
+                del now
+                calls += 1
+                if calls <= failures:
+                    raise RuntimeError("synthetic private error")
+                stop.set()
+                return CleanupBatchResult(deleted=1)
+
+        async def wait_for(waiter: object, **options: float) -> bool:
+            cast("Coroutine[object, object, bool]", waiter).close()
+            timeout = options["timeout"]
+            waits.append(timeout)
+            if timeout < 60:
+                raise TimeoutError
+            return True
+
+        monkeypatch.setattr(asyncio, "wait_for", wait_for)
+        worker = PeriodicMediaCleanupWorker(
+            cast("CleanupExpiredMedia", FailingCleanup()),
+            cast("Clock", FixedClock(datetime(2026, 7, 27, tzinfo=UTC))),
+            interval_seconds=60,
+            max_batches_per_cycle=10,
+            on_cycle_failed=lambda error, attempt, delay: events.append(
+                (type(error).__name__, attempt, delay)
+            ),
+        )
+        if failures == 3:
+            with pytest.raises(RuntimeError, match="synthetic private"):
+                await worker.run(stop)
+        else:
+            assert await worker.run(stop) == 1
+        assert calls == min(failures + 1, 3)
+        assert waits[:failures] == [5.0, 10.0][:failures]
+        assert events == [
+            ("RuntimeError", i + 1, delay)
+            for i, delay in enumerate([5.0, 10.0, None][:failures])
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_cleanup_shutdown_interrupts_retry_delay() -> None:
+    async def scenario() -> None:
+        stop = asyncio.Event()
+
+        class FailingCleanup:
+            async def execute(self, *, now: datetime) -> CleanupBatchResult:
+                del now
+                raise RuntimeError
+
+        def observe(_error: BaseException, _attempt: int, _delay: float | None) -> None:
+            stop.set()
+
+        worker = PeriodicMediaCleanupWorker(
+            cast("CleanupExpiredMedia", FailingCleanup()),
+            cast("Clock", FixedClock(datetime(2026, 7, 27, tzinfo=UTC))),
+            interval_seconds=60,
+            max_batches_per_cycle=10,
+            on_cycle_failed=observe,
+        )
+        assert await worker.run(stop) == 0
+
+    asyncio.run(scenario())
+
+
+def test_cleanup_declared_permanent_failure_is_not_retried() -> None:
+    async def scenario() -> None:
+        calls = 0
+        failures: list[float | None] = []
+
+        class InvalidCleanup:
+            async def execute(self, *, now: datetime) -> CleanupBatchResult:
+                nonlocal calls
+                del now
+                calls += 1
+                raise ConfigurationError
+
+        worker = PeriodicMediaCleanupWorker(
+            cast("CleanupExpiredMedia", InvalidCleanup()),
+            cast("Clock", FixedClock(datetime(2026, 7, 27, tzinfo=UTC))),
+            interval_seconds=60,
+            max_batches_per_cycle=10,
+            on_cycle_failed=lambda _error, _attempt, delay: failures.append(delay),
+        )
+        with pytest.raises(ConfigurationError):
+            await worker.run(asyncio.Event())
+        assert calls == 1
+        assert failures == [None]
+
+    asyncio.run(scenario())

@@ -209,6 +209,7 @@ release `v1.1.4` رفع می‌کند.
 | ID | Task | وابستگی | نیازمندی | وضعیت |
 |---|---|---|---|---|
 | [T100](tasks/T100-approval-outbox-and-bounded-restart-contract.md) | Approval Delivery Outbox، قرارداد Restart محدود، پنجرهٔ Guard ترمیم و بازیابی Reboot در لایهٔ Host | T061، T066، T079 | `5.12–5.19`، `13`، `14`، `16` | Completed |
+| [T101](tasks/T101-background-recovery-and-orphan-approvals.md) | Orphan approval sync, independent background recovery and restartable media cleanup | T064، T072، T079، T099، T100 | `5.4–5.5`، `5.12–5.19`، `13`، `14`، `16` | Completed |
 
 ## Maintenance
 
