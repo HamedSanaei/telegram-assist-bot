@@ -1,5 +1,29 @@
 # Release Notes
 
+## v1.1.5 — Bounded ingestion recovery and resilient background workers
+
+- History collection now streams acknowledged pages with durable checkpoints,
+  bounded classified retries and server-respecting FloodWait. Completed content
+  skips expensive work; partial work resumes without bypassing idempotency.
+- Oversized/permanently failed media receives a durable auditable disposition;
+  it cannot restart the whole crawl. The existing size limit is unchanged.
+  Authorized `media-retry` queues explicit recovery without opening Telegram.
+- Missing original approval content is retired atomically while preserving all
+  publication and administrator history. Approval background workers recover
+  independently and emit CRITICAL on suspension without stopping Bot polling.
+- Approval delivery polls the indexed outbox rather than scanning historical
+  preparations. Legacy identities reconcile in bounded restart-safe batches.
+- Media cleanup recovers failed cycles with bounded backoff; signal shutdown is
+  observable and restartable under the existing bounded Docker policy.
+- Database changes are additive, with a dedicated TTL only on original-message
+  snapshots. No configuration keys, media limits or existing sessions change.
+
+For an incident installation, update runtime and media-cleanup-worker together
+using the scoped digest-pinned procedure in OPERATIONS.md. Keep runtime restart
+set to `no` during observation. MongoDB and approval-bot need no recreation.
+Rollback of runtime must leave the affected old runtime stopped; keep compatible
+cleanup patched. Existing volumes and all audit/publication records are retained.
+
 ## v1.1.4 — Fair media cleanup and expired-approval media release
 
 This patch release fixes two production media-cleanup defects observed in a

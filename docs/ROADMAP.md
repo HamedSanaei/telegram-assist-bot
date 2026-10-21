@@ -211,6 +211,7 @@ release `v1.1.4` رفع می‌کند.
 | [T100](tasks/T100-approval-outbox-and-bounded-restart-contract.md) | Approval Delivery Outbox، قرارداد Restart محدود، پنجرهٔ Guard ترمیم و بازیابی Reboot در لایهٔ Host | T061، T066، T079 | `5.12–5.19`، `13`، `14`، `16` | Completed |
 | [T101](tasks/T101-background-recovery-and-orphan-approvals.md) | Orphan approval sync, independent background recovery and restartable media cleanup | T064، T072، T079، T099، T100 | `5.4–5.5`، `5.12–5.19`، `13`، `14`، `16` | Completed |
 | [T102](tasks/T102-ingestion-cpu-and-history-recovery.md) | Durable ingestion rejection, bounded retries, incremental history and measured CPU recovery | T009–T019، T064، T077، T101 | `5.2–5.7`، `5.9`، `13`، `14`، `16` | Completed |
+| [T103](tasks/T103-v1-1-5-release-and-kingofilter-rollout.md) | v1.1.5 release and scoped kingofilter rollout | T100–T102 | `18.7–18.8`، `19` | In progress |
 
 ## Maintenance
 
