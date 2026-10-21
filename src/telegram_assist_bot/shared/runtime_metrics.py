@@ -35,39 +35,41 @@ def process_resources() -> dict[str, int | float]:
 
 
 def _windows_memory() -> dict[str, int]:
-    """Read working-set counters from the current Windows process only."""
-    import ctypes
-    from ctypes import wintypes
+    """Read Windows counters, or return no samples on other platforms."""
+    result: dict[str, int] = {}
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
 
-    class MemoryCounters(ctypes.Structure):
-        _fields_ = (
-            ("cb", wintypes.DWORD),
-            ("page_faults", wintypes.DWORD),
-            ("peak_working_set", ctypes.c_size_t),
-            ("working_set", ctypes.c_size_t),
-            ("peak_paged_pool", ctypes.c_size_t),
-            ("paged_pool", ctypes.c_size_t),
-            ("peak_nonpaged_pool", ctypes.c_size_t),
-            ("nonpaged_pool", ctypes.c_size_t),
-            ("pagefile", ctypes.c_size_t),
-            ("peak_pagefile", ctypes.c_size_t),
+        class MemoryCounters(ctypes.Structure):
+            _fields_ = (
+                ("cb", wintypes.DWORD),
+                ("page_faults", wintypes.DWORD),
+                ("peak_working_set", ctypes.c_size_t),
+                ("working_set", ctypes.c_size_t),
+                ("peak_paged_pool", ctypes.c_size_t),
+                ("paged_pool", ctypes.c_size_t),
+                ("peak_nonpaged_pool", ctypes.c_size_t),
+                ("nonpaged_pool", ctypes.c_size_t),
+                ("pagefile", ctypes.c_size_t),
+                ("peak_pagefile", ctypes.c_size_t),
+            )
+
+        counters = MemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(MemoryCounters),
+            wintypes.DWORD,
         )
-
-    counters = MemoryCounters()
-    counters.cb = ctypes.sizeof(counters)
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    psapi = ctypes.WinDLL("psapi", use_last_error=True)
-    kernel.GetCurrentProcess.restype = wintypes.HANDLE
-    psapi.GetProcessMemoryInfo.argtypes = (
-        wintypes.HANDLE,
-        ctypes.POINTER(MemoryCounters),
-        wintypes.DWORD,
-    )
-    if psapi.GetProcessMemoryInfo(
-        kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb
-    ):
-        return {
-            "rss_bytes": counters.working_set,
-            "peak_rss_bytes": counters.peak_working_set,
-        }
-    return {}
+        if psapi.GetProcessMemoryInfo(
+            kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+        ):
+            result = {
+                "rss_bytes": counters.working_set,
+                "peak_rss_bytes": counters.peak_working_set,
+            }
+    return result

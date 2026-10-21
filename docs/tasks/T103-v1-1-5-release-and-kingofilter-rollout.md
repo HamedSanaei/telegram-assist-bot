@@ -91,3 +91,13 @@ sessions preserved, actual results/limitations recorded and documentation commit
   Telegram session and media archives under a root-only timestamped directory.
 - CI publication and scoped deployment are pending; no production service has
   been restarted at this checkpoint.
+
+- First CI run `39660172668`: all application tests and Docker/installer
+  acceptance passed, but Linux mypy rejected Windows-only `ctypes.WinDLL` use
+  inside the resource sampler. Necessary release prerequisite: guard the entire
+  Windows counter block by platform and retain an empty sample elsewhere. Two
+  host-resource regressions passed; strict mypy with both `--platform linux` and
+  `--platform win32` now passes. No ingestion/publication behavior changed.
+- Server backup completed with four hashed/readable archives; MongoDB dump
+  compression integrity passed. Existing publication count 931 and approval
+  reference count 127558 were recorded before rollout (live counts may grow).
