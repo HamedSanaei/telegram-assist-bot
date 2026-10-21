@@ -101,3 +101,10 @@ sessions preserved, actual results/limitations recorded and documentation commit
 - Server backup completed with four hashed/readable archives; MongoDB dump
   compression integrity passed. Existing publication count 931 and approval
   reference count 127558 were recorded before rollout (live counts may grow).
+
+- Second CI run `39660863014`: tests, Linux typing and Docker acceptance passed.
+  The secret hook required two synthetic-fixture baseline line numbers to move
+  from 307/308 to 313/314. Reproduced scanning in a read-only Linux container;
+  no new finding fingerprints, detector changes, filters or suppressions were
+  added. Updated only those line numbers and reran the exact CI gate.
+- Re-read and verified SHA256SUMS for all four server-side backup archives.
