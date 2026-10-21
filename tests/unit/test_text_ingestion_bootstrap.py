@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -346,24 +346,21 @@ def test_subscribes_before_crawl_then_consumes_overlap_idempotently() -> None:
     run(scenario())
 
 
-def test_partial_startup_failure_cleans_reverse_owned_resources() -> None:
+def test_history_failure_does_not_stop_live_ingestion_or_cleanup() -> None:
     async def scenario() -> None:
         foundation, _, order = setup()
         gateway = Gateway((), [], order, fail_history=True)
         app = application(gateway, foundation)
 
-        with (
-            bind_log_context(CorrelationContext(correlation_id="diagnostic-test")),
-            pytest.raises(TextIngestionStartupError),
-        ):
-            await app.start(Path("synthetic.json"), environ={})
-
-        assert app.is_ready is False
+        await app.start(Path("synthetic.json"), environ={})
+        assert app.is_ready
+        await app.wait()
+        await app.shutdown()
         assert gateway.subscription is not None
         assert gateway.subscription.close_calls == 1
         assert gateway.close_calls == 1
         assert foundation.shutdown_calls == 1
-        assert foundation.shutdown_reasons == ["startup_failed"]
+        assert foundation.shutdown_reasons == ["requested"]
         assert order[-3:] == [
             "subscription_close",
             "telegram_close",
@@ -550,7 +547,7 @@ class RuntimeGateway(Gateway):
         assert self.history_entered is not None
         self.history_entered.set()
         if self.fail_first_history and self.history_attempts == 1:
-            raise RuntimeError("synthetic history failure")
+            raise TelegramTransientError
         assert self.history_release is not None
         await self.history_release.wait()
         yield TelegramHistoryPage(())
@@ -835,6 +832,18 @@ def test_normally_returned_critical_worker_is_an_infrastructure_failure() -> Non
 
 def test_album_finalizer_failure_uses_real_logger_and_reports_exact_task() -> None:
     class FailingRuntimeIngestor:
+        async def set_history_hold(
+            self,
+            source_channel_id: int,
+            *,
+            held: bool,
+            snapshot_end: datetime | None = None,
+        ) -> None:
+            self.history_hold = (source_channel_id, held, snapshot_end)
+
+        def metrics_snapshot(self) -> dict[str, int]:
+            return {}
+
         async def finalize_due_groups(self) -> None:
             raise ValueError("synthetic private provider detail")
 
@@ -889,6 +898,18 @@ def test_album_finalizer_failure_uses_real_logger_and_reports_exact_task() -> No
 
 def test_isolated_album_deferral_keeps_publication_heartbeat_and_live_active() -> None:
     class IsolatedAlbumIngestor:
+        async def set_history_hold(
+            self,
+            source_channel_id: int,
+            *,
+            held: bool,
+            snapshot_end: datetime | None = None,
+        ) -> None:
+            self.history_hold = (source_channel_id, held, snapshot_end)
+
+        def metrics_snapshot(self) -> dict[str, int]:
+            return {}
+
         def __init__(self) -> None:
             self.finalizer_polled = asyncio.Event()
 
@@ -1173,3 +1194,54 @@ def test_concrete_factory_and_gateway_factory_are_inert() -> None:
     assert gateway.session.connection_retries == 3
     assert gateway.session.retry_delay_seconds == 1
     assert SystemClock().utc_now().tzinfo is UTC
+
+
+def test_permanent_source_failure_visits_next_source_without_whole_crawl_retry() -> (
+    None
+):
+    @dataclass
+    class SourcesGateway(Gateway):
+        visited: list[int] = field(default_factory=list)
+
+        async def iter_history_pages(
+            self, query: TelegramHistoryQuery
+        ) -> AsyncIterator[TelegramHistoryPage]:
+            self.visited.append(query.source_channel_id)
+            if query.source_channel_id == -1000000000101:
+                raise RuntimeError("private history details must not be logged")
+            yield TelegramHistoryPage(())
+
+    async def scenario() -> None:
+        foundation, sink, order = setup()
+        source = foundation.loaded.settings.source_channels[0]
+        second = source.model_copy(
+            update={
+                "name": "second",
+                "username": "second_source",
+                "telegram_channel_id": -1000000000102,
+            }
+        )
+        foundation.loaded = replace(
+            foundation.loaded,
+            settings=foundation.loaded.settings.model_copy(
+                update={
+                    "source_channels": (source, second),
+                }
+            ),
+        )
+        gateway = SourcesGateway((), [], order)
+        app = application(gateway, foundation)
+        await app.start(Path("synthetic.json"), environ={})
+        await app.wait()
+        await app.shutdown()
+        assert gateway.visited == [-1000000000101, -1000000000102]
+        failures = [
+            event
+            for event in sink.events
+            if event["event_name"] == "history_crawl_failed"
+        ]
+        assert len(failures) == 1
+        assert "private history details" not in repr(sink.events)
+        assert gateway.close_calls == foundation.shutdown_calls == 1
+
+    run(scenario())

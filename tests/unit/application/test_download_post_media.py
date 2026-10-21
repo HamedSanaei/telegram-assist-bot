@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from telegram_assist_bot.application.ports import (
     MediaRateLimitError,
     MediaTransientError,
 )
+from telegram_assist_bot.application.ports.media import MediaPermanentError
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
 from telegram_assist_bot.infrastructure.media import LocalMediaStorage
 from tests.unit.application.m2_fakes import FakePreparationRepository
@@ -119,6 +121,8 @@ def test_file_commit_database_failure_recovers_without_truncation(
         files = tuple((tmp_path / "sha256").rglob("*"))
         committed = next(path for path in files if path.is_file())
         before = committed.read_bytes()
+        # Simulate an explicit new operation budget after the exhausted failure.
+        repository.failures.pop(spec.identity.key)
         recovered = await use_case.execute(spec)
         assert committed.read_bytes() == before
         assert recovered.size_bytes == len(before)
@@ -166,7 +170,7 @@ def test_timeout_and_cancellation_cleanup_partial(tmp_path: Path) -> None:
                 repository,
                 maximum_bytes=100,
                 timeout_seconds=10,
-            ).execute(spec)
+            ).execute(replace(spec, identity=MediaIdentity(-100, 90)))
         )
         await asyncio.sleep(0)
         task.cancel()
@@ -177,7 +181,9 @@ def test_timeout_and_cancellation_cleanup_partial(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_rate_limit_wait_is_capped_and_retry_is_bounded(tmp_path: Path) -> None:
+def test_rate_limit_above_wait_budget_defers_without_shortening_floodwait(
+    tmp_path: Path,
+) -> None:
     class RateLimitedSource(Source):
         async def open(self, opaque_reference: str) -> AsyncIterator[bytes]:
             self.opens += 1
@@ -203,18 +209,19 @@ def test_rate_limit_wait_is_capped_and_retry_is_bounded(tmp_path: Path) -> None:
             maximum_rate_limit_delay_seconds=2,
             sleeper=lambda delay: _record_delay(delay, delays),
         )
-        await use_case.execute(
-            MediaDownloadSpec(
-                MediaIdentity(-100, 10),
-                MediaType.PHOTO,
-                "opaque",
-                None,
-                None,
-                datetime.now(UTC) + timedelta(days=14),
+        with pytest.raises(MediaRateLimitError):
+            await use_case.execute(
+                MediaDownloadSpec(
+                    MediaIdentity(-100, 10),
+                    MediaType.PHOTO,
+                    "opaque",
+                    None,
+                    None,
+                    datetime.now(UTC) + timedelta(days=14),
+                )
             )
-        )
-        assert delays == [2]
-        assert source.opens == 2
+        assert delays == []
+        assert source.opens == 1
 
     async def _record_delay(delay: float, delays: list[float]) -> None:
         delays.append(delay)
@@ -234,3 +241,146 @@ def test_rate_limit_wait_is_capped_and_retry_is_bounded(tmp_path: Path) -> None:
             timeout_seconds=1,
             maximum_rate_limit_delay_seconds=-1,
         )
+
+
+def test_transient_attempts_are_bounded_and_deferred_state_blocks_hot_replay(
+    tmp_path: Path,
+) -> None:
+    class UnavailableSource(Source):
+        async def open(self, opaque_reference: str) -> AsyncIterator[bytes]:
+            del opaque_reference
+            self.opens += 1
+            raise MediaTransientError("Synthetic temporary outage.")
+
+    async def scenario() -> None:
+        source = UnavailableSource()
+        repository = FakePreparationRepository()
+        delays: list[float] = []
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        downloader = DownloadPostMedia(
+            source,
+            LocalMediaStorage(tmp_path),
+            repository,
+            maximum_bytes=100,
+            timeout_seconds=1,
+            maximum_attempts=2,
+            sleeper=sleep,
+        )
+        spec = MediaDownloadSpec(
+            MediaIdentity(-100, 11),
+            MediaType.DOCUMENT,
+            "opaque",
+            None,
+            None,
+            datetime.now(UTC) + timedelta(days=2),
+        )
+        with pytest.raises(MediaTransientError):
+            await downloader.execute(spec)
+        assert source.opens == 2
+        assert len(delays) == 1
+        failure = await repository.get_media_failure(spec.identity)
+        assert failure is not None
+        assert failure.attempts == 2
+        assert failure.category == "retry_exhausted"
+        assert failure.retry_at is None
+        with pytest.raises(MediaPermanentError):
+            await downloader.execute(spec)
+        assert source.opens == 2
+
+    asyncio.run(scenario())
+
+
+def test_metadata_retry_resumes_commit_without_redownloading(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        source = Source()
+        repository = FailingRepository()
+
+        async def sleep(delay: float) -> None:
+            del delay
+
+        downloader = DownloadPostMedia(
+            source,
+            LocalMediaStorage(tmp_path),
+            repository,
+            maximum_bytes=100,
+            timeout_seconds=1,
+            maximum_attempts=2,
+            sleeper=sleep,
+        )
+        spec = MediaDownloadSpec(
+            MediaIdentity(-100, 12),
+            MediaType.DOCUMENT,
+            "opaque",
+            None,
+            None,
+            datetime.now(UTC) + timedelta(days=2),
+        )
+        media = await downloader.execute(spec)
+        assert source.opens == 1
+        assert media.size_bytes == len("سلام 😀".encode())
+        assert await repository.get_media_failure(spec.identity) is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+def test_concurrent_same_item_waits_without_reinterpreting_in_progress_as_floodwait(
+    tmp_path: Path,
+    cancel_waiter: bool,
+) -> None:
+    class HoldingSource(Source):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def open(self, opaque_reference: str) -> AsyncIterator[bytes]:
+            assert opaque_reference == "opaque"
+            self.opens += 1
+            self.started.set()
+
+            async def stream() -> AsyncIterator[bytes]:
+                yield b"first"
+                await self.release.wait()
+                yield b"second"
+
+            return stream()
+
+    async def scenario() -> None:
+        source, repository = HoldingSource(), FakePreparationRepository()
+        storage = LocalMediaStorage(tmp_path)
+        downloader = DownloadPostMedia(
+            source,
+            storage,
+            repository,
+            maximum_bytes=100,
+            timeout_seconds=5,
+        )
+        spec = MediaDownloadSpec(
+            MediaIdentity(-100, 13),
+            MediaType.DOCUMENT,
+            "opaque",
+            None,
+            None,
+            datetime.now(UTC) + timedelta(days=2),
+        )
+        owner = asyncio.create_task(downloader.execute(spec))
+        await source.started.wait()
+        waiter = asyncio.create_task(downloader.execute(spec))
+        await asyncio.sleep(0)
+        if cancel_waiter:
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        source.release.set()
+        first = await owner
+        second = await downloader.execute(spec) if cancel_waiter else await waiter
+        assert first == second
+        assert source.opens == 1
+        assert len(repository.media) == 1
+        assert (tmp_path / first.storage_path).read_bytes() == b"firstsecond"
+
+    asyncio.run(scenario())

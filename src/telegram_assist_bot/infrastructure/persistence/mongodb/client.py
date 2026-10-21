@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC
+from threading import Lock
 from typing import TYPE_CHECKING, Final
 
 from pymongo import AsyncMongoClient
 from pymongo.errors import PyMongoError
+from pymongo.monitoring import (
+    CommandFailedEvent,
+    CommandListener,
+    CommandStartedEvent,
+    CommandSucceededEvent,
+)
 from pymongo.server_api import ServerApi
 
 from telegram_assist_bot.infrastructure.persistence.mongodb.errors import (
@@ -29,6 +36,41 @@ MINIMUM_MONGODB_WIRE_VERSION: Final[int] = 21
 """MongoDB 7.0 wire version, the minimum supported deployment baseline."""
 
 
+class MongoCommandMetrics(CommandListener):
+    """Count commands without retaining documents, credentials, or query text."""
+
+    def __init__(self) -> None:
+        """Create one client-local, thread-safe aggregate counter."""
+        self._lock = Lock()
+        self._count = 0
+
+    @property
+    def command_count(self) -> int:
+        """Return attempted commands, including failures and getMore requests."""
+        with self._lock:
+            return self._count
+
+    def started(self, event: CommandStartedEvent) -> None:
+        """Count the attempt without inspecting its potentially private payload."""
+        with self._lock:
+            self._count += 1
+
+    def succeeded(self, event: CommandSucceededEvent) -> None:
+        """Retain no response payload or per-command history."""
+
+    def failed(self, event: CommandFailedEvent) -> None:
+        """Retain no error payload or per-command history."""
+
+
+def mongodb_operation_count(client: AsyncMongoClient[MongoDocument]) -> int:
+    """Read this client's payload-free command counter, excluding other clients."""
+    return sum(
+        listener.command_count
+        for listener in client.options.event_listeners
+        if isinstance(listener, MongoCommandMetrics)
+    )
+
+
 def create_mongodb_client(
     config: MongoConfig,
     secrets: ResolvedSecrets,
@@ -48,6 +90,7 @@ def create_mongodb_client(
             waitQueueTimeoutMS=timeout_ms,
             timeoutMS=timeout_ms,
             retryReads=False,
+            event_listeners=[MongoCommandMetrics()],
             retryWrites=False,
             server_api=ServerApi("1", strict=True, deprecation_errors=True),
             tz_aware=True,

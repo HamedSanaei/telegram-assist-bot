@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
 
+    from telegram_assist_bot.application.ports.telegram_source_gateway import (
+        TelegramTextMessage,
+    )
     from telegram_assist_bot.domain.categories import CategorizationResult
     from telegram_assist_bot.domain.duplicates import DuplicateCheckResult
     from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
@@ -47,6 +50,15 @@ class MediaPermanentError(MediaOperationError):
 
 class MediaTooLargeError(MediaPermanentError):
     """Report a stream exceeding its configured maximum size."""
+
+    def __init__(self, message: str, *, size_bytes: int | None = None) -> None:
+        """Retain only the observed safe byte count for durable rejection."""
+        self.size_bytes = size_bytes
+        super().__init__(message)
+
+
+TERMINAL_MEDIA_FAILURE_CATEGORIES = ("oversized", "permanent", "retry_exhausted")
+"""Media dispositions requiring an explicit, authorized retry."""
 
 
 class AlbumFinalizationStatus(StrEnum):
@@ -133,6 +145,31 @@ class MediaDownloadSpec:
     original_filename: str | None
     expires_at: datetime
     post_id: PostId | None = None
+    size_bytes: int | None = None
+    media_group_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationState:
+    """Expose the cheap durable ingestion terminal-state projection."""
+
+    ready_at: datetime | None = None
+    outbox_recorded: bool = False
+    media_rejected: bool = False
+    recovery_requested: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MediaFailure:
+    """Retain a durable classified operation failure without provider secrets."""
+
+    category: str
+    attempts: int
+    failed_at: datetime
+    retry_at: datetime | None = None
+    maximum_bytes: int | None = None
+    size_bytes: int | None = None
+    last_failure_category: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +221,70 @@ class DestinationArtifact:
 
 class ContentPreparationRepository(Protocol):
     """Persist media and preparation state with atomic conditional operations."""
+
+    async def set_history_hold(
+        self,
+        source_channel_id: int,
+        *,
+        held: bool,
+        snapshot_end: datetime | None = None,
+    ) -> None:
+        """Hold album finalization until a source traversal is fully acknowledged."""
+        ...
+
+    async def save_ingestion_message(
+        self, post_id: PostId, message: TelegramTextMessage, *, expires_at: datetime
+    ) -> None:
+        """Retain the first complete provider-neutral message for crash recovery."""
+        ...
+
+    async def list_pending_ingestion(
+        self, *, now: datetime, limit: int
+    ) -> tuple[tuple[PostId, TelegramTextMessage], ...]:
+        """Load bounded due recovery snapshots regardless of source day."""
+        ...
+
+    async def acknowledge_ingestion(self, post_id: PostId) -> None:
+        """Clear recovery demand after successful processing or terminal rejection."""
+        ...
+
+    async def get_preparation_state(self, post_id: PostId) -> PreparationState:
+        """Read readiness, outbox acknowledgement and media rejection together."""
+        ...
+
+    async def mark_outbox_recorded(self, post_id: PostId) -> None:
+        """Acknowledge a successfully ensured durable approval delivery."""
+        ...
+
+    async def claim_ingestion(
+        self, post_id: PostId, *, owner: str, now: datetime, lease_until: datetime
+    ) -> bool:
+        """Serialize incomplete runtime work with a recoverable lease."""
+        ...
+
+    async def release_ingestion(self, post_id: PostId, *, owner: str) -> None:
+        """Release only the matching runtime claim."""
+        ...
+
+    async def get_media_failure(self, identity: MediaIdentity) -> MediaFailure | None:
+        """Read a durable rejection or deferred transient operation."""
+        ...
+
+    async def record_media_failure(
+        self, spec: MediaDownloadSpec, failure: MediaFailure
+    ) -> None:
+        """Persist classified failure and original descriptor metadata."""
+        ...
+
+    async def clear_media_failure(self, identity: MediaIdentity) -> None:
+        """Clear a recovered transient operation, never a rejection."""
+        ...
+
+    async def reset_media_rejections(
+        self, post_id: PostId, *, administrator_id: int, at: datetime
+    ) -> bool:
+        """Explicitly reopen rejected operations while retaining their audit."""
+        ...
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
         """Load one canonical media record."""

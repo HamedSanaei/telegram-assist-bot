@@ -8,6 +8,8 @@ from telethon.errors import (  # type: ignore[import-untyped]
     ChannelPrivateError,
     FloodWaitError,
     MessageIdInvalidError,
+    RPCError,
+    ServerError,
 )
 
 from telegram_assist_bot.application.ports import (
@@ -63,9 +65,13 @@ class TelethonMediaSource:
             raise MediaRateLimitError(max(0, int(error.seconds))) from error
         except (ChannelPrivateError, MessageIdInvalidError) as error:
             raise MediaPermanentError("Telegram media is inaccessible.") from error
-        except Exception as error:
+        except (OSError, ServerError) as error:
             raise MediaTransientError(
                 "Telegram media could not be resolved."
+            ) from error
+        except RPCError as error:
+            raise MediaPermanentError(
+                "Telegram media resolution was rejected."
             ) from error
         raw_media = getattr(message, "media", None)
         raw_media_type = type(raw_media).__name__
@@ -86,10 +92,12 @@ class TelethonMediaSource:
             raise MediaRateLimitError(max(0, int(error.seconds))) from error
         except TypeError as error:
             raise MediaPermanentError("Telegram media is invalid.") from error
-        except Exception as error:
+        except (OSError, ServerError) as error:
             raise MediaTransientError(
                 "Telegram media stream could not start."
             ) from error
+        except RPCError as error:
+            raise MediaPermanentError("Telegram media stream was rejected.") from error
 
         async def stream() -> AsyncIterator[bytes]:
             try:
@@ -101,9 +109,17 @@ class TelethonMediaSource:
                 raise MediaRateLimitError(max(0, int(error.seconds))) from error
             except (ChannelPrivateError, MessageIdInvalidError) as error:
                 raise MediaPermanentError("Telegram media is inaccessible.") from error
-            except Exception as error:
+            except (OSError, ServerError) as error:
                 raise MediaTransientError(
                     "Telegram media stream was interrupted."
                 ) from error
+            except RPCError as error:
+                raise MediaPermanentError(
+                    "Telegram media stream was rejected."
+                ) from error
+            finally:
+                close = getattr(provider_stream, "aclose", None)
+                if close is not None:
+                    await close()
 
         return stream()

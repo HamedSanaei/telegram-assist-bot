@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import IntEnum
 from pathlib import Path
+from random import random
 from typing import TYPE_CHECKING, Protocol, Self, cast
 from uuid import uuid4
 
@@ -35,6 +37,9 @@ from telegram_assist_bot.application.ports import (
     TelegramMessageDeletionGateway,
     TelegramPublisherGateway,
     TelegramValidationGateway,
+)
+from telegram_assist_bot.application.ports.history_checkpoint import (
+    HistoryCheckpointRepository,
 )
 from telegram_assist_bot.application.prepare_post_pipeline import (
     DestinationSpec,
@@ -79,9 +84,15 @@ from telegram_assist_bot.infrastructure.persistence.mongodb import (
     initialize_operational_approval_indexes,
     initialize_publication_indexes,
 )
+from telegram_assist_bot.infrastructure.persistence.mongodb.client import (
+    mongodb_operation_count,
+)
 from telegram_assist_bot.infrastructure.persistence.mongodb.content_repository import (
     MongoContentPreparationRepository,
     initialize_content_preparation_indexes,
+)
+from telegram_assist_bot.infrastructure.persistence.mongodb.history_checkpoint import (
+    MongoHistoryCheckpointRepository,
 )
 from telegram_assist_bot.infrastructure.telegram.user import (
     TelethonSessionAdapter,
@@ -282,6 +293,10 @@ type RuntimeWorkerFactory = Callable[
     ],
     Awaitable[RuntimeWorker],
 ]
+type HistoryCheckpointFactory = Callable[
+    [LoadedConfiguration, FoundationLifecycle],
+    HistoryCheckpointRepository,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +313,9 @@ class TextIngestionDependencies:
         default=None, repr=False
     )
     runtime_worker_factory: RuntimeWorkerFactory | None = field(
+        default=None, repr=False
+    )
+    checkpoint_factory: HistoryCheckpointFactory | None = field(
         default=None, repr=False
     )
 
@@ -373,6 +391,7 @@ class TextIngestionApplication:
                     ingestion_config.reconnect_initial_delay_seconds
                 ),
                 max_delay_seconds=ingestion_config.reconnect_max_delay_seconds,
+                jitter_ratio=0.2,
             )
             gateway = self._dependencies.gateway_factory(loaded)
             self._gateway = gateway
@@ -470,6 +489,30 @@ class TextIngestionApplication:
                     )
                 )
                 ingestor = self._runtime_ingestor
+            checkpoints = (
+                self._dependencies.checkpoint_factory(
+                    loaded, self._dependencies.foundation
+                )
+                if self._dependencies.checkpoint_factory is not None
+                else None
+            )
+            if self._runtime_ingestor is not None:
+                history_boundary = self._dependencies.clock.utc_now()
+                for source in sources:
+                    await self._runtime_ingestor.set_history_hold(
+                        source.channel_id, held=True, snapshot_end=history_boundary
+                    )
+            db_operations = (
+                (
+                    lambda: mongodb_operation_count(
+                        cast(
+                            "FullFoundationLifecycle", self._dependencies.foundation
+                        ).mongodb_client
+                    )
+                )
+                if self._dependencies.checkpoint_factory is not None
+                else None
+            )
 
             def crawler() -> CrawlTodayTextPosts:
                 return CrawlTodayTextPosts(
@@ -483,9 +526,19 @@ class TextIngestionApplication:
                     jitter_source=self._dependencies.jitter_source,
                     page_size=ingestion_config.history_page_size,
                     max_pages=ingestion_config.history_max_pages,
+                    checkpoints=checkpoints,
+                    maximum_flood_wait_seconds=ingestion_config.maximum_flood_wait_seconds,
+                    database_operations=db_operations,
+                    ingestion_metrics=(
+                        self._runtime_ingestor.metrics_snapshot
+                        if self._runtime_ingestor is not None
+                        else None
+                    ),
                 )
 
-            async def crawl_source(source: ResolvedTelegramChannel) -> None:
+            async def crawl_source(
+                source: ResolvedTelegramChannel,
+            ) -> CrawlTodayResult:
                 logger.emit(
                     level=LogLevel.INFO,
                     event_name="history_crawl_started",
@@ -495,7 +548,13 @@ class TextIngestionApplication:
                     source.channel_id,
                     correlation_id=correlation_id,
                 )
-                self._crawl_results[source.channel_id] = result
+                aggregate = asdict(result)
+                previous = self._crawl_results.get(source.channel_id)
+                if previous is not None:
+                    for key in aggregate:
+                        if key != "completed":
+                            aggregate[key] += getattr(previous, key)
+                self._crawl_results[source.channel_id] = CrawlTodayResult(**aggregate)
                 if self._runtime_ingestor is not None:
                     await self._runtime_ingestor.finalize_due_groups()
                 logger.emit(
@@ -517,6 +576,7 @@ class TextIngestionApplication:
                         "already_existing": result.already_existing,
                     },
                 )
+                return result
 
             def start_listener(source: ResolvedTelegramChannel) -> None:
                 listener = LiveTextListener(
@@ -546,34 +606,47 @@ class TextIngestionApplication:
                 self._subscriptions.remove(prepared[source.channel_id])
 
             async def run_history_crawl() -> None:
-                retry_delay = min(
-                    30.0,
-                    max(
-                        0.1,
-                        float(ingestion_config.reconnect_initial_delay_seconds),
-                    ),
-                )
-                for source in sources:
-                    while True:
-                        try:
-                            await crawl_source(source)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as error:  # noqa: BLE001 - isolated retry loop.
+                pending = deque(sources)
+                while pending:
+                    source = pending.popleft()
+                    try:
+                        result = await crawl_source(source)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:  # noqa: BLE001 - isolate source failures.
+                        logger.emit(
+                            level=LogLevel.ERROR,
+                            event_name="history_crawl_failed",
+                            fields={
+                                "source_channel_id": source.channel_id,
+                                "failure_category": getattr(
+                                    error, "error_category", "permanent"
+                                ),
+                            },
+                        )
+                        continue
+                    if not result.completed:
+                        if (
+                            checkpoints is not None
+                            and result.pages_acknowledged > 0
+                            and result.failed == 0
+                        ):
+                            pending.append(source)
                             logger.emit(
-                                level=LogLevel.ERROR,
-                                event_name="history_crawl_failed",
+                                level=LogLevel.INFO,
+                                event_name="history_crawl_continuation",
+                                fields={"source_channel_id": source.channel_id},
+                            )
+                            await asyncio.sleep(0)
+                        else:
+                            logger.emit(
+                                level=LogLevel.WARNING,
+                                event_name="history_crawl_suspended",
                                 fields={
                                     "source_channel_id": source.channel_id,
-                                    "failure_category": getattr(
-                                        error, "error_category", "transient"
-                                    ),
-                                    "failure_type": type(error).__name__,
+                                    "reason": "no_durable_progress",
                                 },
                             )
-                            await self._dependencies.sleeper(retry_delay)
-                            continue
-                        break
 
             if self._dependencies.runtime_worker_factory is not None:
                 logger.emit(
@@ -632,8 +705,8 @@ class TextIngestionApplication:
                 self._track_task(cast_task(history_task), critical=False)
             else:
                 for source in sources:
-                    await crawl_source(source)
                     start_listener(source)
+                await run_history_crawl()
             if (
                 self._runtime_ingestor is not None
                 and self._dependencies.runtime_worker_factory is None
@@ -895,6 +968,7 @@ async def _create_runtime_ingestor(
         maximum_rate_limit_delay_seconds=float(
             settings.telegram.ingestion.maximum_flood_wait_seconds
         ),
+        clock=clock,
     )
     assembler = AssembleMediaGroup(
         repository,
@@ -983,11 +1057,23 @@ def create_text_ingestion_application(
         clock=clock or SystemClock(),
         post_id_factory=_new_post_id,
         sleeper=asyncio.sleep,
-        jitter_source=lambda: 0.5,
+        jitter_source=random,
         runtime_ingestor_factory=_create_runtime_ingestor,
         runtime_worker_factory=None,
+        checkpoint_factory=_create_history_checkpoints,
     )
     return TextIngestionApplication(dependencies)
+
+
+def _create_history_checkpoints(
+    loaded: LoadedConfiguration, foundation: FoundationLifecycle
+) -> HistoryCheckpointRepository:
+    database = cast("FullFoundationLifecycle", foundation).mongodb_client[
+        loaded.settings.mongodb.database_name
+    ]
+    return MongoHistoryCheckpointRepository(
+        database["history_checkpoints"], database["history_failures"]
+    )
 
 
 async def _create_publication_worker(
@@ -1645,9 +1731,10 @@ def create_operational_runtime_application(
         clock=SystemClock(),
         post_id_factory=_new_post_id,
         sleeper=asyncio.sleep,
-        jitter_source=lambda: 0.5,
+        jitter_source=random,
         runtime_ingestor_factory=_create_runtime_ingestor,
         runtime_worker_factory=_create_publication_worker,
+        checkpoint_factory=_create_history_checkpoints,
     )
     return TextIngestionApplication(dependencies)
 

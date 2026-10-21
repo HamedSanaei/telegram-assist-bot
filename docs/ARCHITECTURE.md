@@ -105,6 +105,42 @@ command قدیمی `schedule-worker` پیش از بازکردن Session به‌�
 می‌شود. رکوردهای قدیمی `scheduled_publications` با `action=scheduled` برای audit و
 سازگاری بدون migration یا execution دست‌نخورده می‌مانند.
 
+T102 makes history a streaming, revision-CAS traversal in `history_checkpoints`,
+not a whole-source retry operation. Descending Telethon IDs permit day-boundary
+and completed-high-watermark cutoffs. A page advances only after every item is
+persisted or durably rejected in `history_failures`; page limits schedule fair
+continuations from the saved cursor. Interrupted snapshots finish before bounded
+catchup. Live IDs never advance history checkpoints. Source originals remain
+immutable: conflicting redeliveries are recorded, not rewritten; no edit/delete
+subscription or destructive source reconciliation is introduced.
+
+Runtime readiness/outbox acknowledgement skips completed work before claims,
+media checks and preparation. Incomplete work uses a one-hour Post lease with a
+55-minute owned-work deadline; graceful cancellation releases the lease, while
+an abrupt process death can defer recovery until lease expiry. Media attempt
+consumption is durable before external work. Oversized, permanent and exhausted
+operations remain rejected until an authorized audited `media-retry`; even an
+authorized reset cannot shorten an outstanding FloodWait.
+Short-lived, weakly held per-item locks coalesce concurrent callers of the same
+downloader without retaining completed state or serializing unrelated media.
+MongoDB Post leases and unique media identities remain the cross-process guards.
+
+`content_preparations` also holds typed media-operation metadata, recovery flags,
+acknowledged member-completion markers and generation-fenced album holds. Full
+source DTOs live only in dedicated `ingestion-message:<post_id>` documents with
+`ingestion_snapshot_expires_at` equal to canonical Post expiry. Their additive
+TTL index never expires preparation/publication history. The existing album
+worker drains bounded recovery snapshots, including explicitly retried older-day
+messages. Historical album holds are installed before listeners and scoped to
+snapshot dates; newer live albums remain eligible. Completed non-anchor members
+do not pin expired media through an absent readiness field.
+
+One `history_crawl_summary` aggregates work/retry/page counters, runtime stage
+deltas, elapsed/process CPU, RSS/peak RSS and client-local Mongo command counts.
+Resource and database deltas include concurrent work in the same process; they
+are not per-channel exclusive measurements or container/server CPU.
+
+
 فرمان `runtime` همین ingestion، اجرای publication فوری و زمان‌بندی بومی را زیر یک
 مالک lifecycle و یک Telethon client قفل‌شده جمع می‌کند. publisher از همان client
 بازشدهٔ ingestion ساخته می‌شود و native scheduler نیز با همان client، Scheduled

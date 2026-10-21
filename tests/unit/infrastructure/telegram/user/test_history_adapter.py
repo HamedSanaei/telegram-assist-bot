@@ -4,11 +4,15 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from telethon.errors import FloodWaitError  # type: ignore[import-untyped]
 
-from telegram_assist_bot.application.ports import TelegramHistoryQuery
+from telegram_assist_bot.application.ports import (
+    TelegramHistoryQuery,
+    TelegramRateLimitError,
+)
 from telegram_assist_bot.infrastructure.telegram.user import TelethonHistoryAdapter
 
 if TYPE_CHECKING:
@@ -36,7 +40,11 @@ class Client:
     calls: list[tuple[int, int, datetime]] = field(default_factory=list)
 
     async def _iterate(self) -> AsyncIterator[object]:
-        for item in self.messages:
+        for item in sorted(
+            self.messages,
+            key=lambda value: cast("SimpleNamespace", value).id,
+            reverse=True,
+        ):
             yield item
 
     def iter_messages(
@@ -45,8 +53,10 @@ class Client:
         *,
         limit: int,
         offset_date: datetime,
+        offset_id: int = 0,
     ) -> AsyncIterator[object]:
         self.calls.append((entity, limit, offset_date))
+        del offset_id
         return self._iterate()
 
 
@@ -69,11 +79,11 @@ def test_pages_sdk_iterator_without_exposing_cursor_tokens() -> None:
 
         assert [len(page.messages) for page in pages] == [2, 2, 1]
         assert [item.source_message_id for page in pages for item in page.messages] == [
-            1,
-            2,
-            3,
-            4,
             5,
+            4,
+            3,
+            2,
+            1,
         ]
         assert client.calls == [(-1001, 6, query().end_exclusive)]
 
@@ -99,5 +109,64 @@ def test_each_sdk_next_operation_has_bounded_timeout() -> None:
         adapter = TelethonHistoryAdapter(BlockingClient([]), None, "Source", 0.001)
         with pytest.raises(TimeoutError):
             await anext(adapter.iter_history_pages(query()))
+
+    run(scenario())
+
+
+def test_streams_one_page_before_reading_later_history() -> None:
+    @dataclass
+    class CountingClient(Client):
+        consumed: int = 0
+        closed: bool = False
+
+        async def _iterate(self) -> AsyncIterator[object]:
+            try:
+                for identity in (6, 5, 4, 3, 2, 1):
+                    self.consumed += 1
+                    yield raw(identity)
+            finally:
+                self.closed = True
+
+    async def scenario() -> None:
+        client = CountingClient([])
+        pages = TelethonHistoryAdapter(client, None, "Source", 1).iter_history_pages(
+            query()
+        )
+        first = await anext(pages)
+        assert first.next_offset_message_id == 5
+        assert first.newest_first
+        assert client.consumed == 2
+        await pages.aclose()
+        assert client.closed
+
+    run(scenario())
+
+
+def test_malformed_individual_message_does_not_discard_other_page_members() -> None:
+    async def scenario() -> None:
+        malformed = SimpleNamespace(
+            id=2, date=None, message="private malformed payload"
+        )
+        adapter = TelethonHistoryAdapter(Client([malformed, raw(1)]), None, "Source", 1)
+        pages = [page async for page in adapter.iter_history_pages(query())]
+        assert len(pages) == 1
+        assert [item.source_message_id for item in pages[0].messages] == [1]
+        assert pages[0].next_offset_message_id == 1
+        assert [failure.source_message_id for failure in pages[0].failures] == [2]
+
+    run(scenario())
+
+
+def test_adapter_preserves_floodwait_without_clipping() -> None:
+    class FloodClient(Client):
+        async def _iterate(self) -> AsyncIterator[object]:
+            yield raw(3)
+            raise FloodWaitError(None, capture=7200)
+
+    async def scenario() -> None:
+        adapter = TelethonHistoryAdapter(FloodClient([]), None, "Source", 1)
+        with pytest.raises(TelegramRateLimitError) as caught:
+            await anext(adapter.iter_history_pages(query()))
+        assert caught.value.retry_after_seconds == 7200
 
     run(scenario())

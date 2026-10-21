@@ -909,3 +909,32 @@
   Docker stops stay stopped; externally delivered signals become restartable.
   Existing data/session formats and bounded restart policy need no destructive
   migration. The signal sender cannot be identified from the old log.
+
+## ADR-055 — Durable ingestion dispositions and acknowledged history cursors
+
+- **Status:** Accepted.
+- **Context:** An oversized history item propagated through ingestion into an
+  unbounded whole-source retry; completed messages still repeated media and
+  preparation work. A max-ID checkpoint alone would lose older pages and albums.
+- **Decision:** Stream exclusive descending-ID pages, acknowledge them through
+  source-revision CAS, and schedule page-limited continuations fairly. Persist
+  permanent item dispositions before advancing; retry only the failed bounded
+  operation with jitter and server-respecting FloodWait. Keep live ingestion
+  independent of the history watermark.
+- **Decision:** Reuse durable preparation readiness/outbox state for the fast
+  path. Lease incomplete work, consume media attempts before external operations,
+  and terminalize oversized/permanent/exhausted operations. Explicit local
+  `media-retry` rechecks an active configured administrator and every affected
+  destination, retains rejection audit and queues the saved original DTO.
+- **Decision:** Coalesce same-item callers with weakly held process-local locks;
+  otherwise an active durable attempt could be mistaken for FloodWait by its
+  concurrent peer. No result/completion/authorization cache is introduced.
+  MongoDB stage leases and unique indexes remain authoritative across processes.
+- **Consequences:** New checkpoint/failure collections use unique `_id` keys;
+  recovery/hold indexes and a snapshot-only TTL are additive. Full source payload
+  snapshots expire with Posts, not durable preparation/publication history.
+  Album holds are snapshot-scoped and installed before listeners. Readiness
+  remains an anchor-only concept; member completion is separately acknowledged.
+  An abrupt worker death can hold a Post lease for up to one hour. Rollback
+  readers may ignore additive state but reintroduce the original CPU defect;
+  a rollback must leave the affected runtime stopped.

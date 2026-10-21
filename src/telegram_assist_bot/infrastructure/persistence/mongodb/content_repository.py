@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from functools import wraps
 from typing import TYPE_CHECKING, Any, cast
 
 from pymongo import ASCENDING, ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import ConnectionFailure, DuplicateKeyError, ExecutionTimeout
 
 from telegram_assist_bot.application.ports import (
     AlbumFinalizationStatus,
@@ -17,18 +18,49 @@ from telegram_assist_bot.application.ports import (
     MediaGroup,
     MediaGroupMember,
 )
+from telegram_assist_bot.application.ports.media import (
+    TERMINAL_MEDIA_FAILURE_CATEGORIES,
+    MediaDownloadSpec,
+    MediaFailure,
+    MediaRateLimitError,
+    MediaTransientError,
+    PreparationState,
+)
+from telegram_assist_bot.application.ports.telegram_source_gateway import (
+    TelegramMediaReference,
+    TelegramTextMessage,
+)
 from telegram_assist_bot.domain.categories import (
     CategorizationMethod,
     CategorizationResult,
 )
 from telegram_assist_bot.domain.duplicates import DuplicateCheckResult
 from telegram_assist_bot.domain.media import MediaIdentity, MediaType, StoredMedia
-from telegram_assist_bot.domain.posts import PostId, TelegramEntity
+from telegram_assist_bot.domain.posts import PostId, TelegramEntity, TelegramUrlButton
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Coroutine
+
     from pymongo.asynchronous.collection import AsyncCollection
 
 type Document = dict[str, Any]
+
+
+def _mongo_operation[**P, T](
+    operation: Callable[P, Awaitable[T]],
+) -> Callable[P, Coroutine[Any, Any, T]]:
+    """Translate only known infrastructure outages into recoverable port errors."""
+
+    @wraps(operation)
+    async def guarded(*args: P.args, **kwargs: P.kwargs) -> T:
+        try:
+            return await operation(*args, **kwargs)
+        except (ConnectionFailure, ExecutionTimeout, TimeoutError):
+            raise MediaTransientError(
+                "Content persistence is temporarily unavailable."
+            ) from None
+
+    return guarded
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +76,7 @@ class MongoMediaReferenceCollections:
     advertisement_slots: AsyncCollection[Document] | None = None
 
 
+@_mongo_operation
 async def initialize_content_preparation_indexes(
     media: AsyncCollection[Document],
     groups: AsyncCollection[Document],
@@ -109,6 +142,26 @@ async def initialize_content_preparation_indexes(
     await preparations.create_index(
         [("ready_at", ASCENDING), ("_id", ASCENDING)],
         name="ix_content_preparation_readiness_v1",
+    )
+    await preparations.create_index(
+        [
+            ("media_operation.post_id", ASCENDING),
+            ("media_operation.category", ASCENDING),
+        ],
+        name="ix_media_operation_recovery_v1",
+    )
+    await preparations.create_index(
+        [("recovery_requested", ASCENDING), ("recovery_not_before", ASCENDING)],
+        name="ix_ingestion_recovery_v1",
+    )
+    await preparations.create_index(
+        [("history_hold", ASCENDING), ("history_source_channel_id", ASCENDING)],
+        name="ix_history_album_hold_v1",
+    )
+    await preparations.create_index(
+        [("ingestion_snapshot_expires_at", ASCENDING)],
+        expireAfterSeconds=0,
+        name="ttl_ingestion_message_snapshot_v1",
     )
 
 
@@ -355,11 +408,385 @@ class MongoContentPreparationRepository:
         self._media, self._groups, self._preparations = media, groups, preparations
         self._references = references or MongoMediaReferenceCollections()
 
+    @_mongo_operation
+    async def set_history_hold(
+        self,
+        source_channel_id: int,
+        *,
+        held: bool,
+        snapshot_end: datetime | None = None,
+    ) -> None:
+        """Fence source holds by traversal snapshot so stale crawls cannot reopen."""
+        query: Document = {"_id": f"history-ingestion:{source_channel_id}"}
+        if snapshot_end is not None:
+            if held:
+                query["$or"] = [
+                    {"history_snapshot_end": {"$exists": False}},
+                    {"history_snapshot_end": {"$lt": snapshot_end}},
+                ]
+            else:
+                query["history_snapshot_end"] = snapshot_end
+        fields: Document = {
+            "history_hold": held,
+            "history_source_channel_id": source_channel_id,
+        }
+        if snapshot_end is not None:
+            fields["history_snapshot_end"] = snapshot_end
+        with contextlib.suppress(DuplicateKeyError):
+            await self._preparations.update_one(
+                query,
+                {"$set": fields},
+                upsert=held,
+            )
+
+    @_mongo_operation
+    async def save_ingestion_message(
+        self, post_id: PostId, message: TelegramTextMessage, *, expires_at: datetime
+    ) -> None:
+        """Keep source payload only until the exact canonical Post expiry."""
+        await self._preparations.update_one(
+            {"_id": f"ingestion-message:{post_id.value}"},
+            {
+                "$setOnInsert": {
+                    "ingestion_message": asdict(message),
+                    "ingestion_snapshot_expires_at": expires_at,
+                }
+            },
+            upsert=True,
+        )
+        await self._preparations.update_one(
+            {"_id": post_id.value},
+            {"$set": {"ingestion_snapshot": True, "recovery_requested": True}},
+        )
+
+    @_mongo_operation
+    async def list_pending_ingestion(
+        self, *, now: datetime, limit: int
+    ) -> tuple[tuple[PostId, TelegramTextMessage], ...]:
+        """Load a bounded due queue, excluding terminal rejection and live leases."""
+        cursor = (
+            self._preparations.find(
+                {
+                    "recovery_requested": True,
+                    "media_rejected": {"$ne": True},
+                    "ingestion_snapshot": True,
+                    "$and": [
+                        {
+                            "$or": [
+                                {"recovery_not_before": None},
+                                {"recovery_not_before": {"$lte": now}},
+                            ]
+                        },
+                        {
+                            "$or": [
+                                {"ingestion_owner": None},
+                                {"ingestion_lease_until": {"$lte": now}},
+                            ]
+                        },
+                    ],
+                }
+            )
+            .sort("_id", ASCENDING)
+            .limit(limit)
+        )
+        messages: list[tuple[PostId, TelegramTextMessage]] = []
+        async for document in cursor:
+            snapshot = await self._preparations.find_one(
+                {
+                    "_id": f"ingestion-message:{document['_id']}",
+                    "ingestion_snapshot_expires_at": {"$gt": now},
+                }
+            )
+            if snapshot is None:
+                await self.acknowledge_ingestion(PostId(document["_id"]))
+                continue
+            payload = dict(snapshot["ingestion_message"])
+            payload["source_channel_id"] = int(payload["source_channel_id"])
+            payload["source_message_id"] = int(payload["source_message_id"])
+            for name in ("text_entities", "caption_entities"):
+                payload[name] = tuple(TelegramEntity(**item) for item in payload[name])
+            payload["media"] = tuple(
+                TelegramMediaReference(
+                    **{**item, "media_type": MediaType(item["media_type"])}
+                )
+                for item in payload["media"]
+            )
+            payload["inline_keyboard"] = tuple(
+                tuple(TelegramUrlButton(**item) for item in row)
+                for row in payload.get("inline_keyboard", [])
+            )
+            messages.append((PostId(document["_id"]), TelegramTextMessage(**payload)))
+        return tuple(messages)
+
+    @_mongo_operation
+    async def acknowledge_ingestion(self, post_id: PostId) -> None:
+        """Clear durable recovery demand after a completed runtime operation."""
+        await self._preparations.update_one(
+            {"_id": post_id.value},
+            {
+                "$set": {
+                    "recovery_requested": False,
+                    "recovery_not_before": None,
+                    "ingestion_completed": True,
+                }
+            },
+        )
+
+    @_mongo_operation
+    async def get_preparation_state(self, post_id: PostId) -> PreparationState:
+        """Read the small terminal-state projection without loading artifacts."""
+        document = await self._preparations.find_one(
+            {"_id": post_id.value},
+            projection={
+                "ready_at": 1,
+                "outbox_recorded": 1,
+                "media_rejected": 1,
+                "recovery_requested": 1,
+            },
+        )
+        if document is None:
+            return PreparationState()
+        return PreparationState(
+            document.get("ready_at"),
+            document.get("outbox_recorded", False),
+            document.get("media_rejected", False),
+            document.get("recovery_requested", False),
+        )
+
+    @_mongo_operation
+    async def mark_outbox_recorded(self, post_id: PostId) -> None:
+        """Acknowledge outbox creation only after its durable write succeeds."""
+        await self._preparations.update_one(
+            {"_id": post_id.value, "ready_at": {"$exists": True}},
+            {"$set": {"outbox_recorded": True}},
+        )
+
+    @_mongo_operation
+    async def claim_ingestion(
+        self, post_id: PostId, *, owner: str, now: datetime, lease_until: datetime
+    ) -> bool:
+        """Acquire a per-Post lease without overwriting another live worker."""
+        try:
+            document = await self._preparations.find_one_and_update(
+                {
+                    "_id": post_id.value,
+                    "$or": [
+                        {"ingestion_owner": None},
+                        {"ingestion_lease_until": {"$lte": now}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "ingestion_owner": owner,
+                        "ingestion_lease_until": lease_until,
+                    }
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError:
+            return False
+        return document is not None
+
+    @_mongo_operation
+    async def release_ingestion(self, post_id: PostId, *, owner: str) -> None:
+        """Release only this worker's lease."""
+        await self._preparations.update_one(
+            {"_id": post_id.value, "ingestion_owner": owner},
+            {"$unset": {"ingestion_owner": "", "ingestion_lease_until": ""}},
+        )
+
+    @_mongo_operation
+    async def get_media_failure(self, identity: MediaIdentity) -> MediaFailure | None:
+        """Load durable rejection independently of successful media metadata."""
+        document = await self._preparations.find_one(
+            {
+                "_id": f"media-operation:{identity.key}",
+                "media_operation.category": {"$ne": None},
+            },
+            projection={"media_operation": 1},
+        )
+        if document is None:
+            return None
+        operation = document["media_operation"]
+        return MediaFailure(
+            operation["category"],
+            operation["attempts"],
+            operation["failed_at"],
+            operation.get("retry_at"),
+            operation.get("maximum_bytes"),
+            operation.get("size_bytes"),
+            operation.get("last_failure_category"),
+        )
+
+    @_mongo_operation
+    async def record_media_failure(
+        self, spec: MediaDownloadSpec, failure: MediaFailure
+    ) -> None:
+        """Retain exact descriptors and block publication of rejected media."""
+        operation = {
+            "post_id": None if spec.post_id is None else spec.post_id.value,
+            "source_channel_id": spec.identity.source_channel_id,
+            "source_message_id": spec.identity.source_message_id,
+            "item_index": spec.identity.item_index,
+            "media_type": spec.media_type.value,
+            "opaque_reference": spec.opaque_reference,
+            "mime_type": spec.mime_type,
+            "original_filename": spec.original_filename,
+            "declared_size_bytes": spec.size_bytes,
+            "media_group_id": spec.media_group_id,
+            "category": failure.category,
+            "attempts": failure.attempts,
+            "failed_at": failure.failed_at,
+            "retry_at": failure.retry_at,
+            "maximum_bytes": failure.maximum_bytes,
+            "size_bytes": failure.size_bytes,
+            "last_failure_category": failure.last_failure_category,
+        }
+        await self._preparations.update_one(
+            {"_id": f"media-operation:{spec.identity.key}"},
+            {"$set": {"media_operation": operation}},
+            upsert=True,
+        )
+        if failure.retry_at is not None and spec.post_id is not None:
+            await self._preparations.update_one(
+                {"_id": spec.post_id.value},
+                {
+                    "$set": {
+                        "recovery_requested": True,
+                        "recovery_not_before": failure.retry_at,
+                    }
+                },
+                upsert=True,
+            )
+        if failure.category in TERMINAL_MEDIA_FAILURE_CATEGORIES:
+            if spec.post_id is not None:
+                await self._preparations.update_one(
+                    {"_id": spec.post_id.value},
+                    {"$set": {"media_rejected": True}},
+                    upsert=True,
+                )
+            if spec.media_group_id is not None:
+                await self._groups.update_one(
+                    {
+                        "_id": (
+                            f"{spec.identity.source_channel_id}:{spec.media_group_id}"
+                        ),
+                        "finalized_at": None,
+                    },
+                    {
+                        "$set": {
+                            "finalization_status": (
+                                AlbumFinalizationStatus.PERMANENT_FAILED.value
+                            ),
+                            "failure_category": "rejected_media_member",
+                            "claim_owner": None,
+                            "claim_expires_at": None,
+                        }
+                    },
+                )
+
+    @_mongo_operation
+    async def clear_media_failure(self, identity: MediaIdentity) -> None:
+        """Retain audit but clear only successfully recovered transient failures."""
+        await self._preparations.update_one(
+            {
+                "_id": f"media-operation:{identity.key}",
+                "media_operation.category": {"$nin": TERMINAL_MEDIA_FAILURE_CATEGORIES},
+            },
+            {
+                "$set": {
+                    "media_operation.category": None,
+                    "media_operation.retry_at": None,
+                }
+            },
+        )
+
+    @_mongo_operation
+    async def reset_media_rejections(
+        self, post_id: PostId, *, administrator_id: int, at: datetime
+    ) -> bool:
+        """Reopen only explicitly requested rejected operations, with an audit."""
+        query = {
+            "media_operation.post_id": post_id.value,
+            "media_operation.category": {"$in": TERMINAL_MEDIA_FAILURE_CATEGORIES},
+        }
+        operations = [document async for document in self._preparations.find(query)]
+        for document in operations:
+            operation = document["media_operation"]
+            retry_at = operation.get("retry_at")
+            if (
+                operation.get("last_failure_category") == "rate_limit"
+                and retry_at is not None
+                and retry_at > at
+            ):
+                raise MediaRateLimitError(int((retry_at - at).total_seconds()) + 1)
+        for document in operations:
+            operation = document["media_operation"]
+            await self._preparations.update_one(
+                {
+                    "_id": document["_id"],
+                    "media_operation.category": operation["category"],
+                },
+                {
+                    "$push": {
+                        "media_retry_audit": {
+                            "administrator_id": administrator_id,
+                            "at": at,
+                            "rejection": operation,
+                        }
+                    },
+                    "$set": {
+                        "media_operation.category": None,
+                        "media_operation.retry_at": None,
+                    },
+                },
+            )
+            if operation.get("media_group_id") is not None:
+                await self._groups.update_one(
+                    {
+                        "_id": (
+                            f"{operation['source_channel_id']}:"
+                            f"{operation['media_group_id']}"
+                        ),
+                        "finalized_at": None,
+                        "finalization_status": (
+                            AlbumFinalizationStatus.PERMANENT_FAILED.value
+                        ),
+                    },
+                    {
+                        "$set": {
+                            "finalization_status": (
+                                AlbumFinalizationStatus.PENDING.value
+                            ),
+                            "attempt_count": 0,
+                            "next_attempt_at": None,
+                            "failure_category": None,
+                            "claim_owner": None,
+                            "claim_expires_at": None,
+                        }
+                    },
+                )
+        result = await self._preparations.update_one(
+            {"_id": post_id.value, "media_rejected": True},
+            {
+                "$set": {
+                    "media_rejected": False,
+                    "recovery_requested": True,
+                    "ingestion_completed": False,
+                    "recovery_not_before": None,
+                }
+            },
+        )
+        return bool(operations) or result.modified_count == 1
+
+    @_mongo_operation
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
         """Load one non-cleaned media record."""
         document = await self._media.find_one({"_id": identity.key, "cleaned_at": None})
         return None if document is None else _media_from(document)
 
+    @_mongo_operation
     async def save_media_if_absent(self, media: StoredMedia) -> StoredMedia:
         """Insert one identity or return its matching canonical record."""
         try:
@@ -374,11 +801,13 @@ class MongoContentPreparationRepository:
                 raise ValueError("Media identity has conflicting content.") from None
             return canonical
 
+    @_mongo_operation
     async def list_media_for_preview(self) -> tuple[StoredMedia, ...]:
         """Load all current media records in deterministic identity order."""
         cursor = self._media.find({"cleaned_at": None}).sort("_id", ASCENDING)
         return tuple([_media_from(document) async for document in cursor])
 
+    @_mongo_operation
     async def list_cleanup_candidates(
         self, *, now: datetime, orphan_before: datetime, limit: int
     ) -> tuple[StoredMedia, ...]:
@@ -417,6 +846,7 @@ class MongoContentPreparationRepository:
         )
         return (*never_attempted, *due_retries)
 
+    @_mongo_operation
     async def _cleanup_candidate_page(
         self, query: Document, *, sort: list[tuple[str, int]], limit: int
     ) -> tuple[StoredMedia, ...]:
@@ -424,6 +854,7 @@ class MongoContentPreparationRepository:
         cursor = self._media.find(query).sort(sort).limit(limit)
         return tuple([_media_from(document) async for document in cursor])
 
+    @_mongo_operation
     async def is_storage_path_referenced(
         self, storage_path: str, *, now: datetime
     ) -> bool:
@@ -554,6 +985,7 @@ class MongoContentPreparationRepository:
                 {
                     "_id": {"$in": sorted(post_ids)},
                     "ready_at": {"$exists": False},
+                    "ingestion_completed": {"$ne": True},
                 },
                 projection={"_id": 1},
             )
@@ -636,6 +1068,7 @@ class MongoContentPreparationRepository:
                 return True
         return False
 
+    @_mongo_operation
     async def mark_media_cleaned(
         self, identity: MediaIdentity, *, cleaned_at: datetime
     ) -> bool:
@@ -646,6 +1079,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def defer_media_cleanup(
         self, identity: MediaIdentity, *, until: datetime
     ) -> bool:
@@ -656,6 +1090,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def has_media_record_for_storage_path(self, storage_path: str) -> bool:
         """Return whether any active non-cleaned media record owns the path."""
         document = await self._media.find_one(
@@ -664,6 +1099,7 @@ class MongoContentPreparationRepository:
         )
         return document is not None
 
+    @_mongo_operation
     async def add_group_member(
         self, group: MediaGroup, member: MediaGroupMember
     ) -> MediaGroup:
@@ -719,6 +1155,7 @@ class MongoContentPreparationRepository:
             raise RuntimeError("Media group write did not produce a document.")
         return loaded
 
+    @_mongo_operation
     async def observe_group_member(
         self,
         group: MediaGroup,
@@ -757,11 +1194,13 @@ class MongoContentPreparationRepository:
             raise RuntimeError("Media group observation was not persisted.")
         return loaded
 
+    @_mongo_operation
     async def get_group(self, group_key: str) -> MediaGroup | None:
         """Load and deterministically order a durable group."""
         document = await self._groups.find_one({"_id": group_key})
         return None if document is None else _group_from_document(document)
 
+    @_mongo_operation
     async def finalize_group(self, group_key: str, *, at: datetime) -> bool:
         """Conditionally finalize one due group."""
         group = await self.get_group(group_key)
@@ -778,6 +1217,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def list_due_groups(
         self, *, now: datetime, limit: int
     ) -> tuple[MediaGroup, ...]:
@@ -810,6 +1250,7 @@ class MongoContentPreparationRepository:
                 groups.append(loaded)
         return tuple(groups)
 
+    @_mongo_operation
     async def claim_due_group(
         self,
         *,
@@ -818,6 +1259,22 @@ class MongoContentPreparationRepository:
         lease_until: datetime,
     ) -> MediaGroup | None:
         """Atomically claim one due group, including legacy and expired claims."""
+        held_groups: list[Document] = []
+        async for document in self._preparations.find(
+            {"history_hold": True},
+            projection={"history_source_channel_id": 1, "history_snapshot_end": 1},
+        ):
+            held_group: Document = {
+                "source_channel_id": document["history_source_channel_id"],
+            }
+            snapshot_end = document.get("history_snapshot_end")
+            if snapshot_end is not None:
+                held_group["$or"] = [
+                    {"members.source_date": {"$lt": snapshot_end}},
+                    {"members": {"$size": 0}},
+                    {"members": {"$exists": False}},
+                ]
+            held_groups.append(held_group)
         query: Document = {
             "finalize_after": {"$lte": now},
             "$and": [
@@ -856,7 +1313,9 @@ class MongoContentPreparationRepository:
                 },
             ],
         }
-        document = await self._groups.find_one_and_update(
+        if held_groups:
+            query["$nor"] = held_groups
+        claimed_document = await self._groups.find_one_and_update(
             query,
             {
                 "$set": {
@@ -870,8 +1329,11 @@ class MongoContentPreparationRepository:
             sort=[("finalize_after", ASCENDING), ("_id", ASCENDING)],
             return_document=ReturnDocument.AFTER,
         )
-        return None if document is None else _group_from_document(document)
+        return (
+            None if claimed_document is None else _group_from_document(claimed_document)
+        )
 
+    @_mongo_operation
     async def complete_group_finalization(
         self,
         group_key: str,
@@ -901,6 +1363,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def defer_group_finalization(
         self,
         group_key: str,
@@ -924,6 +1387,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def fail_group_finalization(
         self,
         group_key: str,
@@ -950,6 +1414,7 @@ class MongoContentPreparationRepository:
         )
         return result.modified_count == 1
 
+    @_mongo_operation
     async def find_duplicate(
         self, *, content_hash: str, post_id: PostId, since: datetime
     ) -> PostId | None:
@@ -965,6 +1430,7 @@ class MongoContentPreparationRepository:
         )
         return None if document is None else PostId(document["_id"])
 
+    @_mongo_operation
     async def save_duplicate_result(
         self, post_id: PostId, result: DuplicateCheckResult
     ) -> DuplicateCheckResult:
@@ -1006,6 +1472,7 @@ class MongoContentPreparationRepository:
             current["checked_at"],
         )
 
+    @_mongo_operation
     async def get_duplicate_result(
         self, post_id: PostId
     ) -> DuplicateCheckResult | None:
@@ -1028,6 +1495,7 @@ class MongoContentPreparationRepository:
             current["checked_at"],
         )
 
+    @_mongo_operation
     async def save_category_result(
         self, post_id: PostId, result: CategorizationResult
     ) -> CategorizationResult:
@@ -1078,6 +1546,7 @@ class MongoContentPreparationRepository:
             fallback_count=current.get("fallback_count"),
         )
 
+    @_mongo_operation
     async def get_category_result(self, post_id: PostId) -> CategorizationResult | None:
         """Load a completed category result when present."""
         document = await self._preparations.find_one(
@@ -1104,6 +1573,7 @@ class MongoContentPreparationRepository:
             fallback_count=current.get("fallback_count"),
         )
 
+    @_mongo_operation
     async def save_destination_artifact(
         self, artifact: DestinationArtifact
     ) -> DestinationArtifact:
@@ -1133,6 +1603,7 @@ class MongoContentPreparationRepository:
             current["content_policy_version"],
         )
 
+    @_mongo_operation
     async def get_destination_artifact(
         self, post_id: PostId, destination_id: str
     ) -> DestinationArtifact | None:
@@ -1151,6 +1622,7 @@ class MongoContentPreparationRepository:
             current["content_policy_version"],
         )
 
+    @_mongo_operation
     async def mark_preparation_ready(
         self, post_id: PostId, *, at: datetime
     ) -> datetime | None:
@@ -1174,6 +1646,7 @@ class MongoContentPreparationRepository:
             return at
         return await self._stored_readiness(post_id)
 
+    @_mongo_operation
     async def _stored_readiness(self, post_id: PostId) -> datetime | None:
         """Load the stored readiness instant of one preparation when present."""
         document = await self._preparations.find_one(

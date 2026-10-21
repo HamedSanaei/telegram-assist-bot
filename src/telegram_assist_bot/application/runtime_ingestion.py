@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from telegram_assist_bot.application.download_post_media import (
     calculate_media_expiration,
@@ -20,6 +21,11 @@ from telegram_assist_bot.application.ports import (
     MediaDownloadSpec,
     MediaGroup,
     MediaGroupMember,
+)
+from telegram_assist_bot.application.ports.media import (
+    MediaPermanentError,
+    MediaTooLargeError,
+    MediaTransientError,
 )
 from telegram_assist_bot.application.prepare_post_pipeline import (
     DestinationSpec,
@@ -49,7 +55,7 @@ if TYPE_CHECKING:
         TelegramTextMessage,
     )
     from telegram_assist_bot.domain.categories import Category
-    from telegram_assist_bot.domain.posts import TelegramEntity
+    from telegram_assist_bot.domain.posts import PostId, TelegramEntity
     from telegram_assist_bot.shared.retry import RetryEventLogger
 
 
@@ -108,6 +114,17 @@ class RuntimeMessageIngestor:
     album_finalization_retry_delay: timedelta = timedelta(seconds=5)
     album_finalization_lease: timedelta = timedelta(minutes=5)
     media_retention: timedelta = timedelta(days=2)
+    _metrics: dict[str, int] = field(
+        default_factory=lambda: {
+            "new_messages": 0,
+            "already_processed_messages": 0,
+            "skipped_completed_messages": 0,
+            "failed_media": 0,
+            "oversized_media": 0,
+        },
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """Validate the independent bounded media-retention policy."""
@@ -116,18 +133,178 @@ class RuntimeMessageIngestor:
         ):
             raise ValueError("Media retention must be between one and 3650 days.")
 
+    async def set_history_hold(
+        self,
+        source_channel_id: int,
+        *,
+        held: bool,
+        snapshot_end: datetime | None = None,
+    ) -> None:
+        """Keep albums unpublished while history may reveal older members."""
+        await self.content_repository.set_history_hold(
+            source_channel_id, held=held, snapshot_end=snapshot_end
+        )
+
     async def execute(
         self,
         message: TelegramTextMessage,
         *,
         correlation_id: str,
     ) -> IngestionResult:
-        """Persist one delivery and resume only its incomplete durable stages."""
+        """Skip terminal work, or serialize recovery of incomplete stages."""
+        now = self.clock.utc_now()
+        existing = await self.post_repository.get_by_source_identity(
+            SourceMessageIdentity(message.source_channel_id, message.source_message_id),
+            as_of=now,
+        )
+        if existing is not None:
+            original = existing.original_content
+            if (
+                existing.source_channel_username != message.source_channel_username
+                or existing.source_channel_display_name
+                != message.source_channel_display_name
+                or existing.source_published_at != message.source_published_at
+                or original.text != message.text
+                or original.caption != message.caption
+                or original.text_entities != message.text_entities
+                or original.caption_entities != message.caption_entities
+                or original.inline_keyboard != message.inline_keyboard
+            ):
+                conflict = IngestionResult(
+                    IngestionOutcome.CONFLICT, existing.post_id, False
+                )
+                self._emit(
+                    "source_payload_conflict",
+                    message,
+                    conflict,
+                    correlation_id=correlation_id,
+                    fields={"failure_category": "concurrency_conflict"},
+                    is_failure=True,
+                )
+                return conflict
+            state = await self.content_repository.get_preparation_state(
+                existing.post_id
+            )
+            if state.ready_at is not None:
+                if not state.outbox_recorded:
+                    await self.pipeline.resume_ready_delivery(existing.post_id)
+                if state.recovery_requested:
+                    await self._acknowledge_recovered(existing.post_id)
+                self._metrics["already_processed_messages"] += 1
+                self._metrics["skipped_completed_messages"] += 1
+                return IngestionResult(
+                    IngestionOutcome.ALREADY_EXISTS, existing.post_id, False
+                )
+            if state.media_rejected:
+                self._metrics["already_processed_messages"] += 1
+                return IngestionResult(
+                    IngestionOutcome.ALREADY_EXISTS, existing.post_id, False
+                )
+            group_ids = {descriptor.media_group_id for descriptor in message.media}
+            if len(group_ids) == 1 and None not in group_ids:
+                group_id = next(iter(group_ids))
+                try:
+                    group = await self.content_repository.get_group(
+                        f"{message.source_channel_id}:{group_id}"
+                    )
+                except InvalidMediaGroupRecordError:
+                    group = None
+                if group is not None and (
+                    group.finalized_at is not None
+                    or any(
+                        member.source_message_id == message.source_message_id
+                        for member in group.members
+                    )
+                ):
+                    self._metrics["already_processed_messages"] += 1
+                    if group.finalized_at is not None:
+                        self._metrics["skipped_completed_messages"] += 1
+                    if state.recovery_requested:
+                        await self._acknowledge_recovered(existing.post_id)
+                    return IngestionResult(
+                        IngestionOutcome.ALREADY_EXISTS, existing.post_id, False
+                    )
         result = await self.post_ingestor.execute(
             message, correlation_id=correlation_id
         )
         if result.outcome is IngestionOutcome.CONFLICT:
             return result
+        self._metrics[
+            "new_messages"
+            if result.outcome is IngestionOutcome.CREATED
+            else "already_processed_messages"
+        ] += 1
+        owner = uuid4().hex
+        claimed = await self.content_repository.claim_ingestion(
+            result.post_id,
+            owner=owner,
+            now=now,
+            lease_until=now + timedelta(hours=1),
+        )
+        if not claimed:
+            raise MediaTransientError("Ingestion is owned by another worker.")
+        try:
+            state = await self.content_repository.get_preparation_state(result.post_id)
+            if state.ready_at is not None:
+                if not state.outbox_recorded:
+                    await self.pipeline.resume_ready_delivery(result.post_id)
+                await self.content_repository.acknowledge_ingestion(result.post_id)
+                return result
+            if state.media_rejected:
+                return result
+            canonical = existing or await self.post_repository.get_by_source_identity(
+                SourceMessageIdentity(
+                    message.source_channel_id, message.source_message_id
+                ),
+                as_of=now,
+            )
+            if canonical is None:
+                raise MediaTransientError(
+                    "Canonical Post is not available for recovery."
+                )
+            await self.content_repository.save_ingestion_message(
+                result.post_id, message, expires_at=canonical.expires_at
+            )
+            # The owned work deadline precedes lease expiry; an old worker must
+            # never continue downloading after another worker can acquire it.
+            async with asyncio.timeout(55 * 60):
+                resumed = await self._execute_claimed(
+                    message, result=result, correlation_id=correlation_id
+                )
+            await self.content_repository.acknowledge_ingestion(result.post_id)
+            return resumed
+        finally:
+            await self.content_repository.release_ingestion(result.post_id, owner=owner)
+
+    async def _acknowledge_recovered(self, post_id: PostId) -> None:
+        """Repair a completion crash gap without clearing a newer retry request."""
+        owner = uuid4().hex
+        now = self.clock.utc_now()
+        if not await self.content_repository.claim_ingestion(
+            post_id, owner=owner, now=now, lease_until=now + timedelta(minutes=5)
+        ):
+            return
+        try:
+            await self.content_repository.acknowledge_ingestion(post_id)
+        finally:
+            await self.content_repository.release_ingestion(post_id, owner=owner)
+
+    def metrics_snapshot(self) -> dict[str, int]:
+        """Return cumulative aggregate counters without logging each replay."""
+        return {
+            **self._metrics,
+            "media_retry_count": self.downloader.retry_count,
+            "duplicate_media_operations": self.downloader.reused_count,
+        }
+
+    async def _execute_claimed(
+        self,
+        message: TelegramTextMessage,
+        *,
+        result: IngestionResult,
+        correlation_id: str,
+    ) -> IngestionResult:
+        """Resume missing media and preparation while holding the Post lease."""
         source_policy = self.policy.source(message.source_channel_id)
         now = self.clock.utc_now()
         grouped = {
@@ -142,6 +319,22 @@ class RuntimeMessageIngestor:
                 descriptor.media_group_id != group_id for descriptor in message.media
             ):
                 raise ValueError("Telegram media-group metadata is inconsistent.")
+            try:
+                existing_group = await self.content_repository.get_group(
+                    f"{message.source_channel_id}:{group_id}"
+                )
+            except InvalidMediaGroupRecordError:
+                # Preserve the existing assembler/finalizer isolation of malformed
+                # legacy albums; this replay optimization must not bypass it.
+                existing_group = None
+            if existing_group is not None and (
+                existing_group.finalized_at is not None
+                or any(
+                    member.source_message_id == message.source_message_id
+                    for member in existing_group.members
+                )
+            ):
+                return result
             await self.assembler.observe_member(
                 source_channel_id=message.source_channel_id,
                 telegram_group_id=group_id,
@@ -164,10 +357,7 @@ class RuntimeMessageIngestor:
                     message.source_message_id,
                     descriptor.item_index,
                 )
-                existing = await self.content_repository.get_media(identity)
-                was_reusable = existing is not None and await self.storage.exists(
-                    existing.storage_path
-                )
+                reused_before = self.downloader.reused_count
                 media = await self.downloader.execute(
                     MediaDownloadSpec(
                         identity=identity,
@@ -179,12 +369,14 @@ class RuntimeMessageIngestor:
                             now, self.media_retention
                         ),
                         post_id=result.post_id,
+                        size_bytes=descriptor.size_bytes,
+                        media_group_id=descriptor.media_group_id,
                     )
                 )
                 stored.append(media)
                 self._emit(
                     "media_download_reused"
-                    if was_reusable
+                    if self.downloader.reused_count > reused_before
                     else "media_download_succeeded",
                     message,
                     result,
@@ -193,7 +385,28 @@ class RuntimeMessageIngestor:
                 )
         except asyncio.CancelledError:
             raise
+        except MediaPermanentError as error:
+            self._metrics["failed_media"] += 1
+            if isinstance(error, MediaTooLargeError):
+                self._metrics["oversized_media"] += 1
+            self._emit(
+                "media_download_failed",
+                message,
+                result,
+                correlation_id=correlation_id,
+                fields={
+                    "failure_category": (
+                        "oversized"
+                        if isinstance(error, MediaTooLargeError)
+                        else "permanent"
+                    ),
+                    "failure_type": type(error).__name__,
+                },
+                is_failure=True,
+            )
+            return result
         except Exception as error:
+            self._metrics["failed_media"] += 1
             self._emit(
                 "media_download_failed",
                 message,
@@ -253,8 +466,25 @@ class RuntimeMessageIngestor:
         )
         return result
 
+    async def recover_pending_messages(self, *, limit: int = 100) -> int:
+        """Resume due persisted snapshots, including explicit retries of older days."""
+        recovered = 0
+        pending = await self.content_repository.list_pending_ingestion(
+            now=self.clock.utc_now(), limit=limit
+        )
+        for _post_id, message in pending:
+            try:
+                await self.execute(message, correlation_id=self.correlation_id)
+            except asyncio.CancelledError:
+                raise
+            except (MediaTransientError, TimeoutError):
+                continue
+            recovered += 1
+        return recovered
+
     async def finalize_due_groups(self, *, limit: int = 100) -> int:
         """Claim and isolate each due Album while preserving loop availability."""
+        await self.recover_pending_messages(limit=limit)
         prepared = 0
         for _ in range(limit):
             now = self.clock.utc_now()

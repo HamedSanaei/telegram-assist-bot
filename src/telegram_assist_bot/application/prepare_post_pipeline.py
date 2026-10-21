@@ -96,6 +96,19 @@ class PreparePostPipeline:
         self._outbox = outbox
         self._duplicates = DetectExactDuplicate(repository)
 
+    async def resume_ready_delivery(self, post_id: PostId) -> bool:
+        """Repair readiness/outbox crash gaps without rerunning content stages."""
+        state = await self._repository.get_preparation_state(post_id)
+        if state.ready_at is None:
+            return False
+        if not state.outbox_recorded:
+            if self._outbox is not None:
+                await self._outbox.ensure_delivery(
+                    post_id.value, ready_at=state.ready_at
+                )
+            await self._repository.mark_outbox_recorded(post_id)
+        return True
+
     async def execute(self, request: PreparationInput) -> PreparationResult:
         """Prepare exact duplicate, baseline category and destination artifacts."""
         duplicate = await self._repository.get_duplicate_result(request.post_id)
@@ -147,4 +160,6 @@ class PreparePostPipeline:
         )
         if ready_at is not None and self._outbox is not None:
             await self._outbox.ensure_delivery(request.post_id.value, ready_at=ready_at)
+        if ready_at is not None:
+            await self._repository.mark_outbox_recorded(request.post_id)
         return PreparationResult(duplicate, category, tuple(artifacts))

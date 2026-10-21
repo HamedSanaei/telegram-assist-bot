@@ -302,3 +302,112 @@ reap می‌کند تا Zombie انباشته نشود. اگر Host شما Docke
 - No live instance, session or volume is modified by this patch. Deploy the
   verified image and recreate the affected services using the normal update
   workflow; do not delete volumes to apply this fix.
+
+## History CPU incident recovery (T102)
+
+### Runtime behavior and observability
+
+- `history_crawl_summary` reports created/existing/skipped-completed messages,
+  failed/oversized media, retry/page/acknowledgement counts, duration, process CPU,
+  RSS/peak RSS and Mongo command attempts. Process/DB/stage deltas can include
+  concurrent live work; they are not exclusive channel or container measurements.
+- `history_crawl_continuation` advances a page-limited source from its durable
+  cursor after giving other sources a turn. `history_crawl_failed` isolates a
+  source after bounded operation retries; `history_crawl_suspended` indicates no
+  durable progress, not an automatic whole-history replay.
+- Media dispositions are in `content_preparations` documents prefixed
+  `media-operation:`. `media_operation.category` is `oversized`, `permanent` or
+  `retry_exhausted` for terminal operations. Metadata includes identity, item,
+  filename/type/group, declared/observed size, maximum, attempts and last failure
+  category. Source text/entities are not logged.
+- A sudden process death can leave a one-hour ingestion lease. Graceful shutdown
+  releases it; do not clear another worker's live lease manually. Historical
+  albums remain held until their snapshot finishes; newer live albums are not
+  held by an older snapshot.
+
+### Explicit media retry
+
+Policy changes do not reopen rejected media. After reviewing the rejection and
+policy, a trusted local operator can queue exactly one persisted source message:
+
+```bash
+python -m telegram_assist_bot media-retry \
+  --config /app/config/configuration.json \
+  --source-channel-id -1001648659094 --source-message-id 68568 \
+  --admin-user-id AUTHORIZED_CONFIGURED_ADMIN_ID
+```
+
+This command opens MongoDB only, never Telegram or a runtime/session owner. The
+actor must be active, have `approval.toggle`, and be allowed on every enabled
+destination routed from that enabled source. The ID is a local-operator audit
+identity, not Telegram identity authentication; do not expose this CLI through an
+untrusted remote endpoint. Retry audit preserves the original rejection and
+actor/time. A future FloodWait cannot be shortened by reset. The bounded recovery
+worker consumes the saved original DTO after an authorized runtime start,
+including older-day messages, provided the original Post/snapshot has not expired.
+An expired original cannot be retried by this command.
+
+### Additive database migration
+
+No manual data rewrite, collection deletion, media deletion or volume migration.
+First authorized startup creates:
+
+- `history_checkpoints` and `history_failures`, each keyed by unique `_id`.
+- `ix_media_operation_recovery_v1`, `ix_ingestion_recovery_v1`,
+  `ix_history_album_hold_v1` on `content_preparations`.
+- `ttl_ingestion_message_snapshot_v1` on `ingestion_snapshot_expires_at`,
+  `expireAfterSeconds=0`. Only new dedicated `ingestion-message:<post_id>` source
+  snapshots carry this date, exactly equal to the canonical Post expiry.
+  Existing preparation, rejection audit and publication history never receive
+  this TTL field.
+
+Existing completed preparations get their durable outbox acknowledgement repaired
+on first encounter, then skip expensive stages. Legacy incomplete Posts without
+a saved DTO are recovered when eligible history/live redelivers them; this patch
+cannot reconstruct old missing media descriptors from text-only legacy Posts.
+
+The cleanup reader must understand `ingestion_completed` on non-anchor album
+members. Older cleanup images can retain those files indefinitely because the
+members deliberately have no `ready_at`. Plan an explicitly authorized update of
+`media-cleanup-worker` to the same patch as runtime; no approval-bot or MongoDB
+recreation is required. Do not add fake readiness markers to work around an old
+cleanup image.
+
+### Deployment and rollback — explicit approval required
+
+The incident runtime must remain stopped with restart policy `no` until the owner
+authorizes deployment **and** restart. Do not run a whole-stack installer/update,
+boot recovery, `compose up -d` without a service name, or change unrelated restart
+policies. No production command was executed during implementation.
+
+After authorization:
+
+1. Publish the verified source through CI under a new immutable image tag/digest;
+   do not overwrite deployed `1.1.4`. Record the currently deployed image digest,
+   runtime command/mounts and restart policy. Back up MongoDB and the matching
+   configuration/session/media using the existing backup procedure.
+2. In `/opt/telegram-assist-bot/instances/admin1`, prepare a reviewed Compose
+   override containing only `services.runtime.image` (the new digest),
+   `services.runtime.restart: "no"` and the same patched
+   `services.media-cleanup-worker.image`. Validate it with `docker compose
+   --env-file .env -f compose.yaml -f runtime-t102.override.yaml config --quiet`.
+3. Only after explicit deployment/restart approval for these two related workers,
+   run `docker compose --env-file .env -f compose.yaml -f runtime-t102.override.yaml
+   up -d --no-deps runtime media-cleanup-worker`. This must not recreate
+   `telegram-assist-kingofilter-mongodb-1`,
+   `telegram-assist-kingofilter-approval-bot-1`, or unrelated containers.
+4. Check the runtime's source summaries, source `-1001648659094` / message `68568`
+   rejection, other-channel progress and checkpoint completion. Observe `docker
+   stats --no-stream telegram-assist-kingofilter-runtime-1` repeatedly while idle;
+   confirm no repeated media opens or whole-source failures. Verify live
+   ingestion, album completeness, approval availability and publication claims.
+   Leave `restart: "no"` during observation; restoring the normal bounded policy
+   requires a separately reviewed operational decision.
+5. On regression, stop **only** the runtime, keep `restart: "no"`, select the
+   recorded previous image digest and recreate **stopped** with `docker compose
+   --env-file .env -f compose.yaml -f runtime-t102.override.yaml create --no-deps
+   runtime`. Do not drop additive state or restore whole volumes merely to roll
+   back code. `1.1.4` still contains the original crawl defect: do not restart it
+   against the incident source without a separately approved mitigation.
+   Keep the compatible cleanup worker patched when rolling back only runtime.
+   Rolling cleanup back too can restore indefinite album-member retention.

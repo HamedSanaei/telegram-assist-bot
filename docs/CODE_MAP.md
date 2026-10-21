@@ -749,3 +749,24 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `workers/media_cleanup.py`, `bootstrap/media_cleanup.py` | Cycle backoff, safe failure events and restartable signal exit |
 | `tests/integration/mongodb/test_orphan_approval_sync.py` | Real MongoDB history preservation, concurrency and restart regressions |
 | `tests/unit/workers/test_background.py` | Recovery budgets, critical errors, clean exits and cancellation |
+
+## T102 ingestion recovery and CPU paths
+
+| Path | Responsibility |
+|---|---|
+| `application/runtime_ingestion.py` | Completed-stage fast path, leased partial recovery, immutable conflicts, album holds and aggregate counters |
+| `application/download_post_media.py` | Preflight/stream limits, durable attempt budget, rejection and FloodWait-safe retries |
+| `application/retry_rejected_media.py`, `bootstrap/media_recovery.py` | Authorized audited reset and session-free `media-retry` command |
+| `application/prepare_post_pipeline.py` | Resume readiness/outbox handoff without recomputing content |
+| `application/crawl_today_text_posts.py`, `application/ports/history_checkpoint.py` | Streaming page acknowledgement, bounded retries, source snapshots and catchup |
+| `infrastructure/persistence/mongodb/history_checkpoint.py` | Source-revision CAS checkpoints and permanent item dispositions |
+| `infrastructure/persistence/mongodb/content_repository.py` | Durable media/recovery state, isolated snapshot TTL, stage leases and cleanup-safe member completion |
+| `infrastructure/telegram/user/history_adapter.py`, `media_adapter.py` | Exclusive descending-ID cursors, ordered cutoff and bounded provider streams |
+| `shared/runtime_metrics.py`, `infrastructure/persistence/mongodb/client.py` | Process-resource samples and payload-free client-local database command counts |
+| `scripts/benchmark_ingestion.py` | Same synthetic workload against baseline/fixed source roots and real loopback MongoDB |
+| `tests/fixtures/telegram/production_oversized_history.json` | Credential-free incident identity, Persian source text and 100 MiB boundary |
+| `tests/unit/application/test_history_recovery.py`, `test_media_incident_recovery.py`, `test_ingestion_recovery_boundaries.py`, `test_ingestion_edit_conflicts.py` | Cursor, rejection, retry-budget, crash, album, edit and authorization races |
+| `tests/unit/application/test_history_acknowledgement_edges.py`, `test_ingestion_stage_completion_races.py`, `tests/unit/infrastructure/telegram/user/test_history_error_classification.py` | Unsafe cursor rejection, completion/lease crash gaps and provider error taxonomy |
+| `tests/unit/application/test_media_cleanup_failures.py` | Preserve primary rejection/cancellation and surface secondary stream-cleanup failures |
+| `tests/unit/test_history_continuation_bootstrap.py` | Finish bounded history pages without restarting the process |
+| `tests/integration/test_history_checkpoint.py`, `test_media_incident_recovery.py`, `mongodb/test_ingestion_state_boundaries.py`, `mongodb/test_media_recovery_command.py` | Real Mongo CAS, restart, TTL, cleanup and command authorization |

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -95,7 +96,7 @@ class LocalMediaStorage:
                     size += len(chunk)
                     if size > maximum_bytes:
                         raise MediaTooLargeError(
-                            "Media exceeds the configured size limit."
+                            "Media exceeds the configured size limit.", size_bytes=size
                         )
                     digest.update(chunk)
                     await asyncio.to_thread(output.write, chunk)
@@ -119,6 +120,23 @@ class LocalMediaStorage:
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
+        finally:
+            primary_error = sys.exception()
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception as cleanup_error:
+                    if primary_error is not None:
+                        primary_error.add_note("Media stream cleanup also failed.")
+                        raise primary_error from cleanup_error
+                    if isinstance(
+                        cleanup_error, (MediaPermanentError, MediaTransientError)
+                    ):
+                        raise
+                    raise MediaPermanentError(
+                        "Media stream cleanup failed."
+                    ) from cleanup_error
 
     async def exists(self, storage_path: str) -> bool:
         """Return whether a confined regular file exists."""

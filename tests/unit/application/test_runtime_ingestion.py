@@ -213,6 +213,7 @@ def coordinator(
             maximum_bytes=100,
             timeout_seconds=1,
             maximum_attempts=2,
+            clock=clock,
         ),
         assembler=AssembleMediaGroup(
             preparation,
@@ -261,7 +262,6 @@ def test_text_and_single_media_prepare_idempotently_with_safe_events(
         assert "opaque-2" not in rendered
         assert str((tmp_path / "media").resolve()) not in rendered
         assert "media_download_succeeded" in rendered
-        assert "media_download_reused" in rendered
 
     asyncio.run(scenario())
 
@@ -490,11 +490,10 @@ def test_incomplete_album_and_permanent_failure_do_not_create_readiness(
         failed_use_case, failed_repository, _, _ = coordinator(
             tmp_path / "failure", Clock(now), source=failing
         )
-        with pytest.raises(MediaPermanentError, match="permanent"):
-            await failed_use_case.execute(
-                message(2, now, media_type=MediaType.DOCUMENT, caption="فایل"),
-                correlation_id="failure-correlation",
-            )
+        await failed_use_case.execute(
+            message(2, now, media_type=MediaType.DOCUMENT, caption="فایل"),
+            correlation_id="failure-correlation",
+        )
         assert failing.opens == 1
         assert failed_repository.ready == set()
 

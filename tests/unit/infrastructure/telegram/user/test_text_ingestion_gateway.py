@@ -74,8 +74,9 @@ class Client:
         *,
         limit: int,
         offset_date: datetime,
+        offset_id: int = 0,
     ) -> AsyncIterator[object]:
-        del entity, limit, offset_date
+        del entity, limit, offset_date, offset_id
         return self._history()
 
     def add_event_handler(self, callback: object, event: object) -> None:

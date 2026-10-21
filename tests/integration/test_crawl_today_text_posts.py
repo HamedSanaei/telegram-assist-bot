@@ -12,6 +12,7 @@ import pytest
 from telegram_assist_bot.application import CrawlTodayTextPosts, IngestPostIdempotently
 from telegram_assist_bot.application.ports import (
     TelegramHistoryPage,
+    TelegramHistoryQuery,
     TelegramTextMessage,
 )
 from telegram_assist_bot.domain.posts import (
@@ -100,10 +101,18 @@ class Gateway:
     async def iter_history_pages(
         self, query: object
     ) -> AsyncIterator[TelegramHistoryPage]:
-        del query
+        assert isinstance(query, TelegramHistoryQuery)
         self.attempts += 1
         for index, page in enumerate(self.pages):
-            yield page
+            if (
+                query.offset_message_id
+                and page.messages[0].source_message_id >= query.offset_message_id
+            ):
+                continue
+            yield TelegramHistoryPage(
+                page.messages,
+                min(message.source_message_id for message in page.messages),
+            )
             if self.fail_after_first_page_once and self.attempts == 1 and index == 0:
                 raise TransientOperationError
 
@@ -237,8 +246,8 @@ def test_failure_between_pages_retries_without_duplicates(
         async with resources(mongodb_test_settings) as owned:
             gateway = Gateway(
                 (
-                    TelegramHistoryPage((item(1, _NOW - timedelta(hours=2)),)),
                     TelegramHistoryPage((item(2, _NOW - timedelta(hours=1)),)),
+                    TelegramHistoryPage((item(1, _NOW - timedelta(hours=2)),)),
                 ),
                 fail_after_first_page_once=True,
             )

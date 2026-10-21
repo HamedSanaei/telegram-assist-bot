@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Never
 from uuid import uuid4
 
+from pymongo.errors import PyMongoError
+
+from telegram_assist_bot.application.ports.media import MediaOperationError
 from telegram_assist_bot.bootstrap.approval_bot import (
     create_approval_bot_application,
     run_approval_bot_application,
@@ -36,6 +39,7 @@ from telegram_assist_bot.bootstrap.media_cleanup import (
     run_media_cleanup,
     run_media_cleanup_worker,
 )
+from telegram_assist_bot.bootstrap.media_recovery import queue_rejected_media_retry
 from telegram_assist_bot.bootstrap.operator_config import (
     ConfigMutationConflictError,
     ConfigTransactionError,
@@ -180,6 +184,7 @@ def _parser() -> _SafeArgumentParser:
             "ingest-text",
             "media-cleanup",
             "media-cleanup-worker",
+            "media-retry",
             "schedule-worker",
             "approval-bot",
             "runtime",
@@ -235,6 +240,8 @@ def _parser() -> _SafeArgumentParser:
     parser.add_argument("--admin-user-ids")
     parser.add_argument("--source-username")
     parser.add_argument("--source-usernames")
+    parser.add_argument("--source-channel-id", type=int)
+    parser.add_argument("--source-message-id", type=int)
     parser.add_argument("--destination-name")
     parser.add_argument("--destination-id", type=int)
     parser.add_argument("--destination-username")
@@ -496,6 +503,34 @@ def main(
                 sink=sink,
             )
         )
+    elif arguments.command == "media-retry":
+        if (
+            not arguments.source_channel_id
+            or not arguments.source_message_id
+            or arguments.source_message_id <= 0
+            or not arguments.admin_user_id
+            or arguments.admin_user_id <= 0
+        ):
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        try:
+            queued = asyncio.run(
+                queue_rejected_media_retry(
+                    configuration_path,
+                    environ=environment_snapshot,
+                    sink=sink,
+                    source_channel_id=arguments.source_channel_id,
+                    source_message_id=arguments.source_message_id,
+                    administrator_id=arguments.admin_user_id,
+                )
+            )
+        except (PermissionError, ValueError):
+            sys.stderr.write("media_retry_failed=authorization_or_source\n")
+            return int(FoundationExitCode.CONFIGURATION_ERROR)
+        except (MediaOperationError, PyMongoError, FoundationStartupError):
+            sys.stderr.write("media_retry_failed=unavailable_or_active_ingestion\n")
+            return int(FoundationExitCode.INFRASTRUCTURE_ERROR)
+        sys.stdout.write(f"media_retry_queued={str(queued).lower()}\n")
+        exit_code = FoundationExitCode.SUCCESS
     elif arguments.command == "media-cleanup-worker":
         exit_code = asyncio.run(
             run_media_cleanup_worker(

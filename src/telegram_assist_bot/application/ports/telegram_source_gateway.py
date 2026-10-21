@@ -269,6 +269,7 @@ class TelegramHistoryQuery:
     end_exclusive: datetime
     page_size: int
     max_pages: int
+    offset_message_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +277,9 @@ class TelegramHistoryPage:
     """Return one SDK-token-free page of mapped source messages."""
 
     messages: tuple[TelegramTextMessage, ...]
+    next_offset_message_id: int | None = None
+    newest_first: bool = False
+    failures: tuple[TelegramMessageMappingError, ...] = ()
 
 
 @runtime_checkable

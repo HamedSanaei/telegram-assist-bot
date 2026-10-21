@@ -9,6 +9,16 @@ from telegram_assist_bot.application.ports import (
     MediaGroup,
     MediaGroupMember,
 )
+from telegram_assist_bot.application.ports.media import (
+    TERMINAL_MEDIA_FAILURE_CATEGORIES,
+    MediaDownloadSpec,
+    MediaFailure,
+    MediaRateLimitError,
+    PreparationState,
+)
+from telegram_assist_bot.application.ports.telegram_source_gateway import (
+    TelegramTextMessage,
+)
 from telegram_assist_bot.domain.categories import (
     CategorizationMethod,
     CategorizationResult,
@@ -32,6 +42,158 @@ class FakePreparationRepository:
     ready: set[str] = field(default_factory=set)
     ready_at: dict[str, datetime] = field(default_factory=dict)
     cleanup_next_check: dict[str, datetime] = field(default_factory=dict)
+    failures: dict[str, MediaFailure] = field(default_factory=dict)
+    failure_specs: dict[str, MediaDownloadSpec] = field(default_factory=dict)
+    rejected_posts: set[str] = field(default_factory=set)
+    outbox_recorded: set[str] = field(default_factory=set)
+    leases: dict[str, tuple[str, datetime]] = field(default_factory=dict)
+    retry_audit: list[tuple[str, int, datetime, MediaFailure]] = field(
+        default_factory=list
+    )
+    messages: dict[str, TelegramTextMessage] = field(default_factory=dict)
+    pending: dict[str, datetime | None] = field(default_factory=dict)
+    history_holds: dict[int, tuple[bool, datetime | None]] = field(default_factory=dict)
+
+    async def set_history_hold(
+        self,
+        source_channel_id: int,
+        *,
+        held: bool,
+        snapshot_end: datetime | None = None,
+    ) -> None:
+        existing = self.history_holds.get(source_channel_id)
+        if (
+            snapshot_end is not None
+            and existing is not None
+            and existing[1] is not None
+        ):
+            if held and existing[1] >= snapshot_end:
+                return
+            if not held and existing[1] != snapshot_end:
+                return
+        self.history_holds[source_channel_id] = (held, snapshot_end)
+
+    async def save_ingestion_message(
+        self, post_id: PostId, message: TelegramTextMessage, *, expires_at: datetime
+    ) -> None:
+        del expires_at
+        if post_id.value not in self.messages:
+            self.messages[post_id.value] = message
+            self.pending[post_id.value] = None
+
+    async def list_pending_ingestion(
+        self, *, now: datetime, limit: int
+    ) -> tuple[tuple[PostId, TelegramTextMessage], ...]:
+        return tuple(
+            (PostId(key), self.messages[key])
+            for key, due in sorted(self.pending.items())
+            if key in self.messages
+            and key not in self.rejected_posts
+            and (due is None or due <= now)
+            and (key not in self.leases or self.leases[key][1] <= now)
+        )[:limit]
+
+    async def acknowledge_ingestion(self, post_id: PostId) -> None:
+        self.pending.pop(post_id.value, None)
+
+    async def get_preparation_state(self, post_id: PostId) -> PreparationState:
+        return PreparationState(
+            self.ready_at.get(post_id.value),
+            post_id.value in self.outbox_recorded,
+            post_id.value in self.rejected_posts,
+            post_id.value in self.pending,
+        )
+
+    async def mark_outbox_recorded(self, post_id: PostId) -> None:
+        self.outbox_recorded.add(post_id.value)
+
+    async def claim_ingestion(
+        self, post_id: PostId, *, owner: str, now: datetime, lease_until: datetime
+    ) -> bool:
+        existing = self.leases.get(post_id.value)
+        if existing is not None and existing[1] > now:
+            return False
+        self.leases[post_id.value] = (owner, lease_until)
+        return True
+
+    async def release_ingestion(self, post_id: PostId, *, owner: str) -> None:
+        existing = self.leases.get(post_id.value)
+        if existing is not None and existing[0] == owner:
+            del self.leases[post_id.value]
+
+    async def get_media_failure(self, identity: MediaIdentity) -> MediaFailure | None:
+        return self.failures.get(identity.key)
+
+    async def record_media_failure(
+        self, spec: MediaDownloadSpec, failure: MediaFailure
+    ) -> None:
+        self.failures[spec.identity.key] = failure
+        self.failure_specs[spec.identity.key] = spec
+        if failure.retry_at is not None and spec.post_id is not None:
+            self.pending[spec.post_id.value] = failure.retry_at
+        if failure.category in TERMINAL_MEDIA_FAILURE_CATEGORIES:
+            if spec.post_id is not None:
+                self.rejected_posts.add(spec.post_id.value)
+            key = f"{spec.identity.source_channel_id}:{spec.media_group_id}"
+            if spec.media_group_id is not None and key in self.groups:
+                self.groups[key] = replace(
+                    self.groups[key],
+                    finalization_status=AlbumFinalizationStatus.PERMANENT_FAILED,
+                    failure_category="rejected_media_member",
+                    claim_owner=None,
+                    claim_expires_at=None,
+                )
+
+    async def clear_media_failure(self, identity: MediaIdentity) -> None:
+        failure = self.failures.get(identity.key)
+        if (
+            failure is not None
+            and failure.category not in TERMINAL_MEDIA_FAILURE_CATEGORIES
+        ):
+            del self.failures[identity.key]
+
+    async def reset_media_rejections(
+        self, post_id: PostId, *, administrator_id: int, at: datetime
+    ) -> bool:
+        for key, spec in self.failure_specs.items():
+            failure = self.failures.get(key)
+            if (
+                spec.post_id == post_id
+                and failure is not None
+                and failure.last_failure_category == "rate_limit"
+                and failure.retry_at is not None
+                and failure.retry_at > at
+            ):
+                raise MediaRateLimitError(
+                    int((failure.retry_at - at).total_seconds()) + 1
+                )
+        changed = False
+        for key, spec in self.failure_specs.items():
+            failure = self.failures.get(key)
+            if (
+                spec.post_id != post_id
+                or failure is None
+                or failure.category not in TERMINAL_MEDIA_FAILURE_CATEGORIES
+            ):
+                continue
+            self.retry_audit.append((key, administrator_id, at, failure))
+            del self.failures[key]
+            changed = True
+            group_key = f"{spec.identity.source_channel_id}:{spec.media_group_id}"
+            if spec.media_group_id is not None and group_key in self.groups:
+                self.groups[group_key] = replace(
+                    self.groups[group_key],
+                    finalization_status=AlbumFinalizationStatus.PENDING,
+                    attempt_count=0,
+                    next_attempt_at=None,
+                    failure_category=None,
+                    claim_owner=None,
+                    claim_expires_at=None,
+                )
+        self.rejected_posts.discard(post_id.value)
+        if changed:
+            self.pending[post_id.value] = None
+        return changed
 
     async def get_media(self, identity: MediaIdentity) -> StoredMedia | None:
         return self.media.get(identity.key)
@@ -169,6 +331,15 @@ class FakePreparationRepository:
     async def claim_due_group(
         self, *, now: datetime, owner: str, lease_until: datetime
     ) -> MediaGroup | None:
+        def held(group: MediaGroup) -> bool:
+            hold = self.history_holds.get(group.source_channel_id)
+            if hold is None or not hold[0]:
+                return False
+            snapshot_end = hold[1]
+            if snapshot_end is None or not group.members:
+                return True
+            return any(member.source_date < snapshot_end for member in group.members)
+
         candidates = sorted(
             (
                 group
@@ -179,6 +350,7 @@ class FakePreparationRepository:
                     AlbumFinalizationStatus.PERMANENT_FAILED,
                 }
                 and group.finalize_after <= now
+                and not held(group)
                 and (group.next_attempt_at is None or group.next_attempt_at <= now)
                 and (
                     group.claim_owner is None

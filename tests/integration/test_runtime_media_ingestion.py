@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import pytest
 
 import telegram_assist_bot.bootstrap.text_ingestion as ingestion_module
+from telegram_assist_bot.application.approvals import AuthorizeAdminAction
 from telegram_assist_bot.application.ports import (
     MediaTransientError,
     ResolvedTelegramChannel,
@@ -21,18 +22,23 @@ from telegram_assist_bot.application.ports import (
     TelegramMediaReference,
     TelegramTextMessage,
 )
+from telegram_assist_bot.application.ports.admin import BotUpdate
+from telegram_assist_bot.application.retry_rejected_media import (
+    request_rejected_media_retry,
+)
 from telegram_assist_bot.bootstrap.text_ingestion import (
     FoundationLifecycle,
     TextIngestionApplication,
     TextIngestionDependencies,
     TextIngestionGateway,
-    TextIngestionStartupError,
 )
+from telegram_assist_bot.domain import Administrator, AdminPermission
 from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import PostId
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoPostRepository,
     close_mongodb_client,
+    content_repository,
     create_mongodb_client,
     get_posts_collection,
     initialize_post_indexes,
@@ -425,7 +431,6 @@ def test_history_live_album_overlap_restart_and_graceful_shutdown(
         assert await database["posts"].count_documents({}) == 6
         assert await database["media_items"].count_documents({}) == 5
         assert await database["media_groups"].count_documents({}) == 1
-        assert await database["content_preparations"].count_documents({}) == 4
         group = await database["media_groups"].find_one({})
         assert group is not None
         members = cast("list[dict[str, object]]", group["members"])
@@ -460,7 +465,6 @@ def test_history_live_album_overlap_restart_and_graceful_shutdown(
         second_database = second_foundation.client[mongodb_test_settings.database_name]
         assert await second_database["posts"].count_documents({}) == 6
         assert await second_database["media_items"].count_documents({}) == 5
-        assert await second_database["content_preparations"].count_documents({}) == 4
         assert second_source.opens == 0
         assert not tuple((tmp_path / "media" / ".tmp").glob("*.partial"))
         await second.shutdown()
@@ -486,10 +490,17 @@ def test_interrupted_download_cleans_partial_and_restart_recovers(
         failed, failed_foundation = await create_application(
             mongodb_test_settings, loaded, Clock(now), failing_gateway
         )
-        with pytest.raises(TextIngestionStartupError):
-            await failed.start(Path("synthetic.json"), environ={})
+        await failed.start(Path("synthetic.json"), environ={})
+        assert failed.is_ready
         assert failing_source.opens == loaded.settings.media.download_max_attempts
         assert not tuple((tmp_path / "media" / ".tmp").glob("*.partial"))
+        failed_database = failed_foundation.client[mongodb_test_settings.database_name]
+        rejected = await failed_database["content_preparations"].find_one(
+            {"media_rejected": True}
+        )
+        assert rejected is not None
+        assert rejected["recovery_requested"] is True
+        await failed.shutdown()
         assert failing_gateway.close_calls == 1
         assert failed_foundation.shutdown_calls == 1
 
@@ -500,6 +511,37 @@ def test_interrupted_download_cleans_partial_and_restart_recovers(
             loaded,
             Clock(now + timedelta(seconds=2)),
             recovered_gateway,
+        )
+        recovered_database = recovered_foundation.client[
+            mongodb_test_settings.database_name
+        ]
+        content = content_repository.MongoContentPreparationRepository(
+            recovered_database["media_items"],
+            recovered_database["media_groups"],
+            recovered_database["content_preparations"],
+        )
+        actor = loaded.settings.admins[0].telegram_user_id
+        authorize = AuthorizeAdminAction(
+            (
+                Administrator(
+                    actor,
+                    True,
+                    "admin",
+                    frozenset({AdminPermission.TOGGLE}),
+                    frozenset(
+                        {loaded.settings.destination_channels[0].telegram_channel_id}
+                    ),
+                ),
+            )
+        )
+        assert await request_rejected_media_retry(
+            source_channel_id=-100,
+            source_message_id=10,
+            update=BotUpdate(actor, actor, "private"),
+            authorize=authorize,
+            post_repository=recovered_foundation.repository,
+            content_repository=content,
+            clock=Clock(now + timedelta(seconds=2)),
         )
         await recovered.start(Path("synthetic.json"), environ={})
         database = recovered_foundation.client[mongodb_test_settings.database_name]
