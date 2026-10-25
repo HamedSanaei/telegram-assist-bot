@@ -5,7 +5,7 @@ name: ${COMPOSE_PROJECT_NAME:-telegram-assist-default}
 # terminal failure is never restarted, while transient infrastructure failures
 # keep a bounded number of Docker backoff restarts before the container stops.
 x-application: &application
-  image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.5}
+  image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.6}
   user: ${TAB_RUNTIME_UID:-10001}:${TAB_RUNTIME_GID:-10001}
   restart: on-failure:20
   init: true
@@ -41,7 +41,7 @@ x-application: &application
 
 services:
   volume-permissions:
-    image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.5}
+    image: ${TAB_IMAGE:-ghcr.io/hamedsanaei/telegram-assist-bot:1.1.6}
     user: "0:0"
     restart: "no"
     entrypoint: ["/bin/sh", "-eu", "-c"]

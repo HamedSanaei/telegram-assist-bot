@@ -1,0 +1,10 @@
+# Apply LAST after the instance base and immutable release/image override.
+# Never apply this artifact to a different Compose project.
+services:
+  runtime:
+    restart: on-failure:20
+    # A fixed existing name rejects `compose up --scale runtime=2`; the shared
+    # session-volume OS lock remains the cross-process Telegram ownership fence.
+    container_name: telegram-assist-kingofilter-runtime-1
+    deploy:
+      replicas: 1

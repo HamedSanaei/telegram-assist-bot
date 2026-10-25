@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.1.6 — Native scheduling transport recovery
+
+- Native scheduling now classifies transient MongoDB and Telegram transport
+  failures at the complete scheduling-cycle boundary, including claim failures.
+  Exponential jittered delays remain capped during an extended outage; permanent
+  failures and cancellation still propagate.
+- Telegram FloodWait remains a minimum delay. Recovery reuses the existing
+  Telethon connection/session and never retries an ambiguous scheduled send.
+  Lost persistence acknowledgements retain the conservative publication fence.
+- Kingofilter has an opt-in runtime-only host recovery unit and bounded Docker
+  `on-failure:20` policy. Permanent startup failures still stop cleanly instead
+  of entering an `unless-stopped` authentication restart storm. Persistent
+  administrative stop uses `systemctl disable --now` on the dedicated unit.
+- No database schema, configuration key, Telegram session or media policy changes.
+  Only the Kingofilter runtime requires this rollout; other workers stay pinned.
+
 ## v1.1.5 — Bounded ingestion recovery and resilient background workers
 
 - History collection now streams acknowledged pages with durable checkpoints,

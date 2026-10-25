@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
+from telethon import functions  # type: ignore[import-untyped]
+from telethon.client import users  # type: ignore[import-untyped]
 from telethon.errors import (  # type: ignore[import-untyped]
     FloodWaitError,
     PasswordHashInvalidError,
     PhoneCodeInvalidError,
+    ServerError,
     SessionPasswordNeededError,
+    TimedOutError,
 )
 
 from telegram_assist_bot.application.ports import (
@@ -180,9 +186,51 @@ def test_concrete_client_factory_uses_bounded_connection_resilience(
     assert captured["timeout"] == 1.0
     assert captured["connection_retries"] == 7
     assert captured["request_retries"] == 1
+    assert captured["raise_last_call_error"] is True
     assert captured["retry_delay"] == 4
     assert captured["auto_reconnect"] is True
     assert captured["receive_updates"] is True
+
+
+@pytest.mark.parametrize("error_class", [ServerError, TimedOutError])
+def test_exhausted_sdk_calls_preserve_transient_exception_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_class: type[Exception]
+) -> None:
+    monkeypatch.setattr(users, "asyncio", SimpleNamespace(sleep=AsyncMock()))
+
+    async def scenario() -> None:
+        client = cast(
+            "Any",
+            create_telethon_client(
+                tmp_path / "rpc-identity.session", 123456, "synthetic-api-hash", 1.0
+            ),
+        )
+        request = functions.help.GetConfigRequest()
+        error = error_class(request, "temporary")
+
+        class Sender:
+            attempts = 0
+
+            def send(self, request: object, **kwargs: object) -> asyncio.Future[object]:
+                del request, kwargs
+                self.attempts += 1
+                future: asyncio.Future[object] = (
+                    asyncio.get_running_loop().create_future()
+                )
+                future.set_exception(error)
+                return future
+
+        sender = Sender()
+        try:
+            with pytest.raises(error_class) as failure:
+                await client._call(sender, request)
+            assert failure.value is error
+            assert 1 <= sender.attempts <= 2
+        finally:
+            await client.disconnect()
+            client.session.close()
+
+    run(scenario())
 
 
 def test_existing_unauthorized_session_reports_invalid_status(tmp_path: Path) -> None:

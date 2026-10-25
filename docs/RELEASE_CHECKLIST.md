@@ -1,18 +1,20 @@
-# v1.1.5 Release Checklist
+# v1.1.6 Release Checklist
 
-- [x] T100–T102 changes reviewed; T102 committed after fresh 2141-test regression.
-- [x] Version, lockfile, package, image, installers and manager all agree on 1.1.5.
-- [x] Local quality, release/distribution checks and source-text/secret checks pass.
-- [ ] GitHub Quality succeeds for the exact release source.
-- [ ] Immutable v1.1.5 tag matches pyproject.toml and release commit.
-- [ ] amd64/arm64 image, SBOM/provenance and GitHub Release assets are published.
-- [ ] Release asset SHA256SUMS and image version/revision/digest are verified.
-- [ ] kingofilter database/config/session/media backup is present and validated.
-- [ ] Scoped runtime and cleanup rollout preserves other container identities.
-- [ ] Runtime readiness, bounded source progress, cleanup and idle samples verified.
+- [x] T104 incident traced to PyMongo transport timeout escaping native claims.
+- [x] Real isolated MongoDB socket timeout reproduces and recovers on the same client.
+- [x] Native transient/permanent/cancellation/publication-certainty regressions pass.
+- [x] Isolated Docker crash recovery, terminal stop and administrative stop pass.
+- [x] Production config/session/database backup hashes and archive integrity verified.
+- [ ] Final unit/integration, coverage, lint, formatting, typing and packaging pass.
+- [ ] Source-text and secret checks pass; only intended source/docs files committed.
+- [ ] GitHub Quality succeeds for the exact release source on 3.12/3.13/3.14.
+- [ ] Immutable v1.1.6 tag, image version/revision/digest and release assets verified.
+- [ ] Only Kingofilter runtime updated; every other container identity preserved.
+- [ ] Scoped bounded crash/boot recovery installed; persistent admin stop documented.
+- [ ] Production Telegram auth, Mongo heartbeat and native scheduling verified.
+- [ ] At least ten minutes of stable running/restart/CPU/memory samples recorded.
 
-The owner authorized commit, publication and the kingofilter update on 2026-10-21.
-Only runtime and media-cleanup-worker are in scope. Keep runtime restart=no while
-observing; preserve database/session/media volumes, config and the previous image.
-Do not run whole-stack update or manual media retry. See T103 for executed
-commands, immutable references, backup record and remaining limitations.
+Owner authorized repair, release, deployment and restart. Preserve sessions,
+configuration, secrets, media/database volumes, pending jobs and ambiguous outcomes.
+No production failure injection or whole-daemon restart. See T104 and OPERATIONS.md
+for actual evidence and stopped-code rollback.

@@ -339,6 +339,28 @@ exception message یا payload را ثبت نمی‌کند.
 receipt را ابتدا ذخیره و سپس همان IDها را حذف می‌کند. reconciliation حضور کامل،
 لغو خارجی، ناپدیدشدن پس از due و Album ناقص را بدون ادعای قطعی انتشار تفکیک می‌کند.
 
+Native scheduling recovery (T104) wraps the complete execute/reconcile cycle in
+`bootstrap/native_scheduling.py`, including MongoDB claims outside the use case's
+operation handlers. Only known driver transport failures, Telegram server/timeouts,
+connection errors and owned transient categories retry. Exponential jittered
+delays saturate at the configured publication retry cap; FloodWait is a minimum.
+An extended outage keeps the same cancellable scheduler alive at capped frequency,
+not a growing exponent or a replacement task/session. Permanent failures propagate.
+Safe events include failure module/type/category, phase, attempt and elapsed time.
+The shared Telethon client retains bounded auto-reconnect and exposes its last RPC
+error instead of replacing exhausted SDK retries with an ambiguous ValueError.
+Lost request-marker or completion acknowledgements retain conservative durable
+certainty; recovery never replays an ambiguous Telegram send.
+
+Kingofilter alone opts into `deploy/kingofilter_runtime.py` and its dedicated
+systemd oneshot unit. Docker `on-failure:20` handles crashes; the enabled unit
+handles host/daemon starts without a second process-restart loop. The opt-in
+marker excludes only runtime from legacy boot recovery; other services retain
+their previous boot behavior. Persistent administrative stop disables/stops this
+unit while retaining the marker. Fixed container identity, one Compose replica,
+the shared-volume OS session lock and Mongo atomic claims prevent duplicate local
+consumers. This is not a cross-host distributed session lock.
+
 پیش‌نمایش Approval رسانه را از DTO شامل نوع واقعی، مسیر نسبی، MIME و نام اصلی
 می‌گیرد. Infrastructure مسیر را زیر root canonical و بدون symlink/traversal
 اعتبارسنجی می‌کند و Aiogram method متناظر نوع را با timeout آپلود مستقل فراخوانی

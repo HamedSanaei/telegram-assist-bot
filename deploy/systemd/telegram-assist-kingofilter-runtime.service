@@ -1,0 +1,23 @@
+[Unit]
+Description=Kingofilter runtime bounded recovery
+Documentation=https://github.com/HamedSanaei/telegram-assist-bot/blob/main/docs/OPERATIONS.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/telegram-assist-kingofilter-runtime.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/telegram-assist-kingofilter-runtime restore --instance-dir ${TAB_KINGOFILTER_INSTANCE_DIR} --release-override ${TAB_KINGOFILTER_RELEASE_OVERRIDE}
+ExecStop=/usr/bin/python3 /usr/local/libexec/telegram-assist-kingofilter-runtime stop --instance-dir ${TAB_KINGOFILTER_INSTANCE_DIR} --release-override ${TAB_KINGOFILTER_RELEASE_OVERRIDE}
+TimeoutStartSec=180
+TimeoutStopSec=180
+# Docker alone handles crashes with on-failure:20. Do not add Restart= here:
+# terminal startup failures map to exit 0 and must never be relaunched in a loop.
+# Persistent admin stop: systemctl disable --now this unit. A plain stop lasts
+# only until the next Docker start/restart or host boot.
+
+[Install]
+WantedBy=docker.service

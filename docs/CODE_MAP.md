@@ -770,3 +770,16 @@ Unit/Contract Suite هیچ سرویس خارجی لازم ندارد. اجرای
 | `tests/unit/application/test_media_cleanup_failures.py` | Preserve primary rejection/cancellation and surface secondary stream-cleanup failures |
 | `tests/unit/test_history_continuation_bootstrap.py` | Finish bounded history pages without restarting the process |
 | `tests/integration/test_history_checkpoint.py`, `test_media_incident_recovery.py`, `mongodb/test_ingestion_state_boundaries.py`, `mongodb/test_media_recovery_command.py` | Real Mongo CAS, restart, TTL, cleanup and command authorization |
+
+## T104 native scheduling and scoped production recovery
+
+| Path | Responsibility |
+|---|---|
+| `bootstrap/native_scheduling.py` | SDK-specific transport classification, cancellable capped-jitter cycle recovery and safe recovery telemetry |
+| `application/native_scheduling.py` | Durable native commands, permanent-error propagation and conservative lost-acknowledgement fencing |
+| `infrastructure/telegram/native_scheduler.py` | Shared-client native reads/sends/deletions and owned FloodWait mapping |
+| `infrastructure/telegram/user/session_adapter.py` | Existing session OS lock/reconnection plus preservation of exhausted RPC error identity |
+| `deploy/kingofilter_runtime.py`, `kingofilter-runtime.override.yaml`, `systemd/telegram-assist-kingofilter-runtime.service` | Identity-checked one-runtime crash/boot recovery and explicit administrative stop |
+| `deploy/boot_recovery.sh` | Retains dependent boot recovery while excluding the opt-in systemd-owned runtime |
+| `tests/unit/test_native_scheduling_recovery.py`, `tests/integration/mongodb/test_native_schedule_repository.py` | Transient/permanent/cancellation and real durable send-certainty regressions |
+| `tests/unit/deployment/test_kingofilter_recovery.py` | Scoped lifecycle safety, OS-lock contention, marked boot behavior and isolated Docker restart smoke |

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, timedelta
 from typing import TYPE_CHECKING
 
 from telegram_assist_bot.application.ports import NativeScheduleStatus
+from telegram_assist_bot.shared.errors import classify_error
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
         PublicationPayloadLoader,
         TelegramNativeSchedulerGateway,
     )
+    from telegram_assist_bot.shared.errors import ErrorClassification
 
 
 class RunNativeScheduling:
@@ -40,6 +43,9 @@ class RunNativeScheduling:
         | None = None,
         after_reconciled: Callable[[NativeScheduleCommand], Awaitable[None]]
         | None = None,
+        classify_failure: Callable[
+            [BaseException], ErrorClassification
+        ] = classify_error,
     ) -> None:
         """Store durable collaborators and bounded timing settings."""
         if lease_seconds <= timeout_seconds:
@@ -57,6 +63,7 @@ class RunNativeScheduling:
         self._after_scheduled = after_scheduled
         self._after_cancelled = after_cancelled
         self._after_reconciled = after_reconciled
+        self._classify_failure = classify_failure
 
     async def execute_once(self) -> bool:
         """Execute one due command without ever publishing legacy scheduled jobs."""
@@ -88,9 +95,14 @@ class RunNativeScheduling:
         try:
             if command.operation == "cancel":
                 if command.telegram_message_ids:
+                    request_started = True
                     request_started = await self._repository.mark_request_started(
                         command.command_id, owner=self._owner
                     )
+                    if not request_started:
+                        raise RuntimeError(
+                            "Native scheduling command ownership was lost."
+                        )
                     await self._gateway.cancel(
                         command.destination_id,
                         command.telegram_message_ids,
@@ -110,6 +122,9 @@ class RunNativeScheduling:
                 (item.due_at.astimezone(UTC) for item in existing), default=now
             )
             due_at = max(now, latest) + timedelta(minutes=5)
+            # A lost MongoDB write acknowledgement may already have crossed this
+            # durable boundary. Never reset that uncertainty to retryable pending.
+            request_started = True
             request_started = await self._repository.mark_request_started(
                 command.command_id, owner=self._owner, due_at=due_at
             )
@@ -133,24 +148,48 @@ class RunNativeScheduling:
             return True
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # noqa: BLE001 - persist safe transport certainty.
-            await self._repository.fail(
-                command.command_id,
-                owner=self._owner,
-                now=self._clock().astimezone(UTC),
-                next_attempt_at=(
-                    None
-                    if request_started
-                    else now + timedelta(seconds=self._retry_seconds)
-                ),
-                failure_type=type(error).__name__,
-                outcome_unknown=request_started,
+        except Exception as error:
+            retryable = self._classify_failure(error).retryable
+            delay = max(
+                self._retry_seconds, float(getattr(error, "retry_after_seconds", 0))
             )
-            return True
+            try:
+                await self._repository.fail(
+                    command.command_id,
+                    owner=self._owner,
+                    now=self._clock().astimezone(UTC),
+                    next_attempt_at=(
+                        now + timedelta(seconds=delay)
+                        if retryable and not request_started
+                        else None
+                    ),
+                    failure_type=type(error).__name__,
+                    outcome_unknown=request_started,
+                )
+            except Exception as persistence_error:
+                if (
+                    not retryable
+                    and self._classify_failure(persistence_error).retryable
+                ):
+                    raise error from persistence_error
+                raise
+            raise
         finally:
-            await self._repository.release_destination(
-                command.destination_id, owner=self._owner
-            )
+            original = sys.exception()
+            try:
+                await self._repository.release_destination(
+                    command.destination_id, owner=self._owner
+                )
+            except Exception as release_error:
+                if original is not None and (
+                    isinstance(original, asyncio.CancelledError)
+                    or (
+                        not self._classify_failure(original).retryable
+                        and self._classify_failure(release_error).retryable
+                    )
+                ):
+                    raise original from release_error
+                raise
 
     async def reconcile_once(self) -> bool:
         """Conservatively reconcile one persisted schedule with Telegram."""
@@ -162,6 +201,7 @@ class RunNativeScheduling:
         )
         if command is None:
             return False
+        completion_started = False
         try:
             scheduled = await self._gateway.list_scheduled(
                 command.destination_id, timeout_seconds=self._timeout_seconds
@@ -192,6 +232,9 @@ class RunNativeScheduling:
                 status = NativeScheduleStatus.RESOLVED
                 due_at = command.due_at
                 next_check_at = None
+            # A completion can commit before its acknowledgement is lost. Its
+            # owner is then cleared; do not issue a second owned completion.
+            completion_started = True
             reconciled = await self._repository.complete_reconciliation(
                 command.command_id,
                 owner=self._owner,
@@ -204,16 +247,20 @@ class RunNativeScheduling:
             return True
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # noqa: BLE001 - safe bounded reconciliation retry.
-            del error
+        except Exception as error:
+            if completion_started or not self._classify_failure(error).retryable:
+                raise
+            delay = max(
+                self._retry_seconds, float(getattr(error, "retry_after_seconds", 0))
+            )
             await self._repository.complete_reconciliation(
                 command.command_id,
                 owner=self._owner,
                 status=command.status,
                 due_at=command.due_at,
-                next_check_at=now + timedelta(seconds=self._retry_seconds),
+                next_check_at=now + timedelta(seconds=delay),
             )
-            return True
+            raise
 
 
 __all__ = ("RunNativeScheduling",)

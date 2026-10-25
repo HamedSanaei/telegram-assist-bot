@@ -212,6 +212,7 @@ release `v1.1.4` رفع می‌کند.
 | [T101](tasks/T101-background-recovery-and-orphan-approvals.md) | Orphan approval sync, independent background recovery and restartable media cleanup | T064، T072، T079، T099، T100 | `5.4–5.5`، `5.12–5.19`، `13`، `14`، `16` | Completed |
 | [T102](tasks/T102-ingestion-cpu-and-history-recovery.md) | Durable ingestion rejection, bounded retries, incremental history and measured CPU recovery | T009–T019، T064، T077، T101 | `5.2–5.7`، `5.9`، `13`، `14`، `16` | Completed |
 | [T103](tasks/T103-v1-1-5-release-and-kingofilter-rollout.md) | v1.1.5 release and scoped kingofilter rollout | T100–T102 | `18.7–18.8`، `19` | In progress |
+| [T104](tasks/T104-native-scheduling-recovery-and-kingofilter-restore.md) | Native scheduling transport recovery and scoped Kingofilter restoration | T067، T070، T071، T100–T103 | `5.17–5.19`، `13–16`، `18` | In progress |
 
 ## Maintenance
 

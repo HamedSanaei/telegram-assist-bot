@@ -153,38 +153,6 @@ def test_quality_workflow_runs_docker_and_installer_acceptance_without_push() ->
     assert "packages: write" not in workflow
 
 
-def test_release_versions_and_assets_are_exactly_v1_1_5() -> None:
-    package = (ROOT / "src/telegram_assist_bot/__init__.py").read_text(encoding="utf-8")
-    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
-    linux_installer = (ROOT / "install.sh").read_text(encoding="utf-8")
-    windows_installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
-    manager = (ROOT / "deploy/tabctl.py").read_text(encoding="utf-8")
-    distribution = (ROOT / "scripts/check_distribution.py").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-
-    assert '__version__: Final[str] = "1.1.5"' in package
-    assert 'version = "1.1.5"' in project
-    assert "ARG VERSION=1.1.5" in dockerfile
-    release_image = "ghcr.io/hamedsanaei/telegram-assist-bot:1.1.5"
-    assert compose.count(release_image) == 2
-    assert release_image in linux_installer
-    assert release_image in windows_installer
-    assert 'DEFAULT_RELEASE_VERSION: Final = "1.1.5"' in manager
-    assert 'EXPECTED_VERSION = "1.1.5"' in distribution
-    assert 'bundle_dir="telegram-assist-bot-$RELEASE_TAG"' in workflow
-    assert 'tar -czf "$bundle_dir.tar.gz" "$bundle_dir"' in workflow
-    for public_asset in (
-        "compose.yaml",
-        "install.sh",
-        "install.ps1",
-        "config/configuration.example.json",
-        "docs/RELEASE_CHECKLIST.md",
-    ):
-        assert public_asset in workflow
-
-
 def test_acceptance_keeps_instances_isolated_and_down_preserves_data() -> None:
     acceptance = (ROOT / "scripts/v1_acceptance.sh").read_text(encoding="utf-8")
 

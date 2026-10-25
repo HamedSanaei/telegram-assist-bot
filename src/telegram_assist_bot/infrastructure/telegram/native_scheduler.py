@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC
 from typing import TYPE_CHECKING, Protocol
 
-from telethon import functions  # type: ignore[import-untyped]
+from telethon import errors, functions  # type: ignore[import-untyped]
 
 from telegram_assist_bot.application.ports import (
     NativeScheduledMessage,
     NativeScheduleReceipt,
+)
+from telegram_assist_bot.application.ports.telegram_source_gateway import (
+    TelegramRateLimitError,
 )
 from telegram_assist_bot.infrastructure.telegram.media_serializer import (
     TelethonMediaSerializer,
@@ -26,6 +30,21 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from telegram_assist_bot.application.ports import PublicationPayload
+
+
+@asynccontextmanager
+async def _operation_timeout(timeout_seconds: float) -> AsyncIterator[None]:
+    """Preserve Telegram's minimum FloodWait without retrying a send."""
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            yield
+    except (
+        errors.FloodWaitError,
+        errors.FloodPremiumWaitError,
+        errors.SlowModeWaitError,
+        errors.FloodTestPhoneWaitError,
+    ) as error:
+        raise TelegramRateLimitError(max(0, int(error.seconds)), cause=error) from error
 
 
 class TelethonNativeSchedulerClient(Protocol):
@@ -71,7 +90,7 @@ class TelethonNativeSchedulerGateway:
     ) -> tuple[NativeScheduledMessage, ...]:
         """Read native schedules including entries created outside this app."""
         values: list[NativeScheduledMessage] = []
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout(timeout_seconds):
             async for message in self._client.iter_messages(
                 destination_id, scheduled=True
             ):
@@ -98,7 +117,7 @@ class TelethonNativeSchedulerGateway:
             has_media=bool(payload.media),
         )
         entities = [_map_entity(value) for value in content.entities]
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout(timeout_seconds):
             if not payload.media:
                 message_kwargs: dict[str, object] = {
                     "formatting_entities": entities,
@@ -139,7 +158,7 @@ class TelethonNativeSchedulerGateway:
         """Delete native schedules by persisted Telegram identities."""
         if not message_ids:
             return
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout(timeout_seconds):
             peer = await self._client.get_input_entity(destination_id)
             await self._client(
                 functions.messages.DeleteScheduledMessagesRequest(

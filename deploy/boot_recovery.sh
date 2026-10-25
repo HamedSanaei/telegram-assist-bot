@@ -51,10 +51,37 @@ fi
 for instance_dir in "${INSTANCE_ROOT}"/*; do
   [[ -d "${instance_dir}" ]] || continue
   [[ -f "${instance_dir}/compose.yaml" ]] || continue
+  # This opt-in marker transfers only Kingofilter runtime to its scoped unit.
+  # Other services retain boot recovery without reviving a disabled runtime.
+  supervision_marker="${instance_dir}/.kingofilter-runtime-systemd"
+  runtime_supervised=0
+  if [[ -f "${supervision_marker}" ]]; then
+    supervision_owner="$(<"${supervision_marker}")"
+    if [[ "${supervision_owner}" == "telegram-assist-kingofilter-runtime.service" ]]; then
+      runtime_supervised=1
+    fi
+  fi
   instance_name="$(basename "${instance_dir}")"
   echo "Boot recovery: starting instance '${instance_name}'."
   if (
     cd "${instance_dir}"
+    if ((runtime_supervised)); then
+      compose_command=("${COMPOSE_BIN}" compose)
+      if [[ -f .env ]]; then
+        compose_command+=(--env-file .env)
+      fi
+      configured_services="$("${compose_command[@]}" config --services)" || exit 1
+      boot_services=()
+      while IFS= read -r service; do
+        if [[ -n "${service}" && "${service}" != "runtime" ]]; then
+          boot_services+=("${service}")
+        fi
+      done <<< "${configured_services}"
+      if ((${#boot_services[@]})); then
+        "${compose_command[@]}" up -d --no-deps "${boot_services[@]}"
+      fi
+      exit "$?"
+    fi
     if [[ -f .env ]]; then
       "${COMPOSE_BIN}" compose --env-file .env up -d
     else

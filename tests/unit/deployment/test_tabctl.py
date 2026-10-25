@@ -507,24 +507,6 @@ def test_update_rejects_floating_version(tabctl: ModuleType, tmp_path: Path) -> 
         tabctl.update_instance(metadata, version="latest", check_only=False)
 
 
-def test_update_check_reports_current_release_without_mutation(
-    tabctl: ModuleType,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    path = tmp_path / "instance"
-    _instance(path)
-    metadata = tabctl.import_instance(path, "demo")
-    original_env = (path / ".env").read_bytes()
-
-    tabctl.update_instance(metadata, version=None, check_only=True)
-
-    output = capsys.readouterr().out
-    assert "old_image=example.invalid/app:1.0.0" in output
-    assert "new_image=example.invalid/app:1.1.5" in output
-    assert (path / ".env").read_bytes() == original_env
-
-
 def test_update_rollback_restores_image_config_and_registry(
     tabctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

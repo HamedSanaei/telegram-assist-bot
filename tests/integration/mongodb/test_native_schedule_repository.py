@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, Mock
 
+import pytest
 from pymongo import AsyncMongoClient
+from pymongo.errors import NetworkTimeout
 
+from telegram_assist_bot.application.native_scheduling import RunNativeScheduling
 from telegram_assist_bot.application.ports import (
     NativeScheduleReceipt,
     NativeScheduleStatus,
+    PublicationPayload,
+    PublicationPayloadLoader,
+    TelegramNativeSchedulerGateway,
+)
+from telegram_assist_bot.bootstrap.native_scheduling import (
+    classify_native_scheduling_failure,
+    run_native_scheduling_cycle,
 )
 from telegram_assist_bot.infrastructure.persistence.mongodb import (
     MongoNativeScheduleRepository,
     initialize_native_schedule_indexes,
 )
+from telegram_assist_bot.shared.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from tests.integration.infrastructure.persistence.conftest import MongoTestSettings
@@ -199,6 +211,89 @@ def test_cancellation_racing_with_schedule_request_is_deleted_after_receipt(
             assert claimed is not None
             assert claimed.operation == "cancel"
             assert claimed.follow_up_immediate
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure_stage", ["telegram_send", "receipt_write"])
+@pytest.mark.parametrize("failure_persistence", [False, True])
+def test_native_recovery_never_replays_ambiguous_send_even_when_database_is_down(
+    mongodb_test_settings: MongoTestSettings,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    failure_persistence: bool,
+) -> None:
+    async def scenario() -> None:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            mongodb_test_settings.uri, tz_aware=True
+        )
+        try:
+            database = client[mongodb_test_settings.database_name]
+            commands = database["native_schedule_commands"]
+            repository = MongoNativeScheduleRepository(
+                commands, database["native_schedule_destination_leases"]
+            )
+            now = datetime(2026, 10, 25, 4, 26, 42, tzinfo=UTC)
+            command = await repository.reserve(
+                post_id="ambiguous-transport",
+                destination_id=-1004,
+                selection_version=1,
+                now=now,
+            )
+            gateway = AsyncMock(spec=TelegramNativeSchedulerGateway)
+            gateway.list_scheduled.return_value = ()
+            gateway.schedule.return_value = NativeScheduleReceipt(
+                (101,), now + timedelta(minutes=5)
+            )
+            if failure_stage == "telegram_send":
+                gateway.schedule.side_effect = ConnectionError("receipt lost")
+            else:
+                monkeypatch.setattr(
+                    repository,
+                    "complete_scheduled",
+                    AsyncMock(side_effect=NetworkTimeout("receipt write ack lost")),
+                )
+            if failure_persistence:
+                monkeypatch.setattr(
+                    repository,
+                    "fail",
+                    AsyncMock(side_effect=NetworkTimeout("database unavailable")),
+                )
+            loader = AsyncMock(spec=PublicationPayloadLoader)
+            loader.load.return_value = PublicationPayload(-1004, "text", ())
+            native = RunNativeScheduling(
+                repository,
+                cast("TelegramNativeSchedulerGateway", gateway),
+                cast("PublicationPayloadLoader", loader),
+                owner="runtime",
+                clock=lambda: now,
+                timeout_seconds=30,
+                lease_seconds=60,
+                retry_seconds=1,
+                classify_failure=classify_native_scheduling_failure,
+            )
+
+            async def wait_for_recovery(_delay: float) -> None:
+                nonlocal now
+                # Cover both a persisted outcome_unknown and request_started
+                # left behind when even the failure write cannot be acknowledged.
+                now += timedelta(seconds=61)
+
+            await run_native_scheduling_cycle(
+                native,
+                policy=RetryPolicy(10, 1, 8, jitter_ratio=0.2),
+                logger=Mock(),
+                sleeper=wait_for_recovery,
+                jitter_source=lambda: 0.5,
+            )
+            assert not await native.execute_once()
+            gateway.schedule.assert_awaited_once()
+            document = await commands.find_one({"_id": command.command_id})
+            assert document is not None
+            assert document["status"] == NativeScheduleStatus.OUTCOME_UNKNOWN.value
+            assert document.get("telegram_message_ids", []) == []
         finally:
             await client.close()
 

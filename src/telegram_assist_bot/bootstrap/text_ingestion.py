@@ -60,6 +60,10 @@ from telegram_assist_bot.application.scheduling import RunDuePublication, RunDue
 from telegram_assist_bot.application.validate_telegram_session import (
     TelegramChannelValidationError,
 )
+from telegram_assist_bot.bootstrap.native_scheduling import (
+    classify_native_scheduling_failure,
+    run_native_scheduling_cycle,
+)
 from telegram_assist_bot.bootstrap.runtime import (
     FoundationExitCode,
     FoundationStartupError,
@@ -1300,11 +1304,19 @@ async def _create_publication_worker(
         after_scheduled=after_native_scheduled,
         after_cancelled=after_native_cancelled,
         after_reconciled=after_native_reconciled,
+        classify_failure=classify_native_scheduling_failure,
+    )
+    native_retry_policy = RetryPolicy(
+        max_attempts=10,
+        initial_delay_seconds=float(publishing.retry_initial_delay_seconds),
+        max_delay_seconds=float(publishing.retry_maximum_delay_seconds),
+        jitter_ratio=0.2,
     )
 
     async def run_native_once() -> None:
-        await native.execute_once()
-        await native.reconcile_once()
+        await run_native_scheduling_cycle(
+            native, policy=native_retry_policy, logger=owned_foundation.logger
+        )
 
     features = getattr(settings, "features", None)
     features_advertisement_detection_enabled = (

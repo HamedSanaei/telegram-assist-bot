@@ -1,10 +1,10 @@
 # Current project state
 
 - **Current milestone:** Milestone 15 — Production Incident Hardening.
-- **Active task:** [T103 — v1.1.5 release and scoped kingofilter rollout](tasks/T103-v1-1-5-release-and-kingofilter-rollout.md).
-- **Last completed task:** T102, committed as `6d72890`.
-- **Known blockers:** None; owner authorized this release and scoped deployment/restart.
-- **Known failing tests:** None; fresh T102 suite: 2141 passed, 90.29% branch coverage.
+- **Active task:** [T104 — Native scheduling recovery and Kingofilter restoration](tasks/T104-native-scheduling-recovery-and-kingofilter-restore.md).
+- **Last completed implementation:** T103 release 1.1.5, `c9e7a22`; its observation documentation remained stale.
+- **Known blockers:** None; owner authorized scoped repair, release and deployment.
+- **Known failing tests:** New regressions not yet executed.
 - **Branch:** `main`.
-- **Last verified commit:** `6d72890` (T102).
-- **Next recommended action:** Verify/release 1.1.5, back up kingofilter, update only runtime and compatible cleanup; keep runtime restart=no during observation.
+- **Last verified release:** `c9e7a22` (GitHub Quality and Release successful).
+- **Next recommended action:** Repair native scheduling transport recovery, verify 1.1.6 and deploy only Kingofilter runtime with safe automatic recovery.

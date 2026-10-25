@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
+from pymongo.errors import NetworkTimeout
 
 import telegram_assist_bot.bootstrap.text_ingestion as module
 from telegram_assist_bot.application.ports import (
@@ -21,7 +22,12 @@ from telegram_assist_bot.application.publication import (
     RetractionStatus,
 )
 from telegram_assist_bot.application.scheduling import RunDueStatus
+from telegram_assist_bot.bootstrap.native_scheduling import run_native_scheduling_cycle
 from telegram_assist_bot.domain import ScheduledPublication
+
+if TYPE_CHECKING:
+    from telegram_assist_bot.application.native_scheduling import RunNativeScheduling
+    from telegram_assist_bot.shared.retry import RetryEventLogger, RetryPolicy
 
 
 class Database(dict[str, object]):
@@ -92,6 +98,7 @@ class Runner:
 class NativeRunner:
     instances: ClassVar[list[NativeRunner]] = []
     blocker: ClassVar[asyncio.Event | None] = None
+    failures: ClassVar[list[Exception]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         del args
@@ -99,6 +106,8 @@ class NativeRunner:
         self.instances.append(self)
 
     async def execute_once(self) -> bool:
+        if self.failures:
+            raise self.failures.pop(0)
         if self.blocker is not None:
             await self.blocker.wait()
         await self.after(
@@ -170,6 +179,7 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         Runner.instances.clear()
         NativeRunner.instances.clear()
         NativeRunner.blocker = None
+        NativeRunner.failures.clear()
         Operational.statuses.clear()
         Operational.completed = asyncio.Event()
         Heartbeat.beats.clear()
@@ -281,6 +291,50 @@ def test_unified_worker_builds_immediate_and_scheduled_over_shared_gateway(
         isolated_task.cancel()
         await asyncio.gather(isolated_task, return_exceptions=True)
         NativeRunner.blocker = None
+
+        retry_sleeping = asyncio.Event()
+
+        async def wait_during_outage(_delay: float) -> None:
+            retry_sleeping.set()
+            await asyncio.Event().wait()
+
+        async def native_cycle_with_blocked_delay(
+            native: RunNativeScheduling,
+            *,
+            policy: RetryPolicy,
+            logger: RetryEventLogger,
+        ) -> None:
+            await run_native_scheduling_cycle(
+                native, policy=policy, logger=logger, sleeper=wait_during_outage
+            )
+
+        monkeypatch.setattr(
+            module, "run_native_scheduling_cycle", native_cycle_with_blocked_delay
+        )
+        NativeRunner.failures = [NetworkTimeout("private connection details")]
+        Operational.statuses.clear()
+        Heartbeat.beats.clear()
+        recovering = await module._create_publication_worker(
+            cast("Any", loaded),
+            cast("Any", report),
+            cast("Any", gateway),
+            cast("Any", foundation),
+        )
+        recovering_task = asyncio.create_task(recovering.run())
+        await recovering.wait_ready()
+        await asyncio.wait_for(retry_sleeping.wait(), timeout=1)
+        assert not recovering_task.done()
+        assert Operational.statuses == ["published"]
+        recovering_task.cancel()
+        await asyncio.gather(recovering_task, return_exceptions=True)
+        assert recovering_task.cancelled()
+        assert Heartbeat.beats == ["running", "stopped"]
+        assert any(
+            item["event_name"] == "native_schedule_cycle_retry" for item in emitted
+        )
+        monkeypatch.setattr(
+            module, "run_native_scheduling_cycle", run_native_scheduling_cycle
+        )
 
         Heartbeat.fail = True
         failing = await module._create_publication_worker(

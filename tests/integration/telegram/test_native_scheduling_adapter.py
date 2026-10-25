@@ -4,11 +4,27 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from telethon import types  # type: ignore[import-untyped]
+from telethon import errors, types  # type: ignore[import-untyped]
 
-from telegram_assist_bot.application.ports import PublicationMedia, PublicationPayload
+from telegram_assist_bot.application.native_scheduling import RunNativeScheduling
+from telegram_assist_bot.application.ports import (
+    NativeScheduleCommand,
+    NativeScheduleRepository,
+    NativeScheduleStatus,
+    PublicationMedia,
+    PublicationPayload,
+    PublicationPayloadLoader,
+)
+from telegram_assist_bot.application.ports.telegram_source_gateway import (
+    TelegramRateLimitError,
+)
+from telegram_assist_bot.bootstrap.native_scheduling import (
+    classify_native_scheduling_failure,
+    run_native_scheduling_cycle,
+)
 from telegram_assist_bot.domain.media import MediaType
 from telegram_assist_bot.domain.posts import TelegramUrlButton
 from telegram_assist_bot.infrastructure.telegram.media_serializer import (
@@ -17,9 +33,10 @@ from telegram_assist_bot.infrastructure.telegram.media_serializer import (
 from telegram_assist_bot.infrastructure.telegram.native_scheduler import (
     TelethonNativeSchedulerGateway,
 )
+from telegram_assist_bot.shared.retry import RetryPolicy
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
 
@@ -229,5 +246,129 @@ def test_native_adapter_rejects_invalid_receipts_and_confined_paths(
                 due_at=NOW + timedelta(minutes=5),
                 timeout_seconds=1,
             )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["list", "schedule", "cancel"])
+@pytest.mark.parametrize(
+    "flood_type",
+    [
+        errors.FloodWaitError,
+        errors.FloodPremiumWaitError,
+        errors.SlowModeWaitError,
+        errors.FloodTestPhoneWaitError,
+    ],
+)
+def test_native_adapter_preserves_floodwait_minimum_without_replaying_request(
+    tmp_path: Path, operation: str, flood_type: Callable[..., Exception]
+) -> None:
+    error = flood_type(None, capture=90)
+
+    class FloodedClient(Client):
+        async def _iterate(self) -> AsyncIterator[object]:
+            if operation == "list":
+                raise error
+            async for value in super()._iterate():
+                yield value
+
+        async def send_message(
+            self, entity: int, message: str, **kwargs: object
+        ) -> object:
+            self.calls.append(("text", message, kwargs))
+            raise error
+
+        async def __call__(self, request: object) -> object:
+            self.raw = request
+            raise error
+
+    async def scenario() -> None:
+        client = FloodedClient()
+        gateway = TelethonNativeSchedulerGateway(client, media_root=tmp_path)
+
+        async def invoke() -> None:
+            if operation == "list":
+                await gateway.list_scheduled(-1001, timeout_seconds=1)
+            elif operation == "schedule":
+                await gateway.schedule(
+                    PublicationPayload(-1001, "text", ()),
+                    due_at=NOW,
+                    timeout_seconds=1,
+                )
+            else:
+                await gateway.cancel(-1001, (81,), timeout_seconds=1)
+
+        with pytest.raises(TelegramRateLimitError) as failure:
+            await invoke()
+        assert failure.value.retry_after_seconds == 90
+        assert failure.value.__cause__ is error
+        if operation == "schedule":
+            assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_native_cycle_recovers_on_the_same_client_before_send(tmp_path: Path) -> None:
+    class ReconnectingClient(Client):
+        connected = False
+        read_attempts = 0
+
+        async def _iterate(self) -> AsyncIterator[object]:
+            self.read_attempts += 1
+            if not self.connected:
+                raise ConnectionError("Cannot send requests while disconnected")
+            async for value in super()._iterate():
+                yield value
+
+    async def scenario() -> None:
+        client = ReconnectingClient()
+        repository = AsyncMock(spec=NativeScheduleRepository)
+        command = NativeScheduleCommand(
+            "command", "post", -1001, 3, NativeScheduleStatus.CLAIMED
+        )
+        repository.claim_next.side_effect = [command, command]
+        repository.acquire_destination.return_value = True
+        repository.mark_request_started.return_value = True
+        repository.complete_scheduled.return_value = NativeScheduleCommand(
+            "command",
+            "post",
+            -1001,
+            3,
+            NativeScheduleStatus.SCHEDULED,
+            due_at=NOW + timedelta(minutes=12),
+            telegram_message_ids=(51,),
+        )
+        repository.claim_reconciliation.return_value = None
+        loader = AsyncMock(spec=PublicationPayloadLoader)
+        loader.load.return_value = PublicationPayload(-1001, "text", ())
+        native = RunNativeScheduling(
+            cast("NativeScheduleRepository", repository),
+            TelethonNativeSchedulerGateway(client, media_root=tmp_path),
+            cast("PublicationPayloadLoader", loader),
+            owner="runtime",
+            clock=lambda: NOW,
+            timeout_seconds=1,
+            lease_seconds=60,
+            retry_seconds=1,
+            classify_failure=classify_native_scheduling_failure,
+        )
+
+        async def reconnect(_delay: float) -> None:
+            # Stand in for the existing client's auto_reconnect, not a second
+            # client/session owner or an explicit reconnect around a send.
+            client.connected = True
+
+        await run_native_scheduling_cycle(
+            native,
+            policy=RetryPolicy(10, 1, 8, jitter_ratio=0.2),
+            logger=Mock(),
+            sleeper=reconnect,
+            jitter_source=lambda: 0.5,
+        )
+        assert client.read_attempts == 2
+        assert [call[0] for call in client.calls] == ["list", "list", "text"]
+        repository.mark_request_started.assert_awaited_once()
+        repository.complete_scheduled.assert_awaited_once()
+        assert not repository.fail.await_args.kwargs["outcome_unknown"]
 
     asyncio.run(scenario())

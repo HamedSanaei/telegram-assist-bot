@@ -1,6 +1,6 @@
 # Telegram Assist Bot
 
-نسخهٔ Production `1.1.5` یک دستیار Dockerized برای جمع‌آوری، تأیید،
+نسخهٔ Production `1.1.6` یک دستیار Dockerized برای جمع‌آوری، تأیید،
 زمان‌بندی و انتشار محتوای کانال‌های تلگرام با Python و معماری تمیز است.
 Scaffold معماری، سامانهٔ typed Configuration، مدل خالص چرخهٔ عمر Post و
 Repository یکتای Post با Adapter ناهمگام MongoDB آماده‌اند. Composition Root
@@ -61,7 +61,7 @@ Backup کامل migration (Config، MongoDB، Session، Media و `.env`) و Rest
 بگیرید. نام Instance، Compose project، MongoDB، Session، Media و Config هر
 نصب مستقل است و مسیر پیش‌فرض Linux برابر
 `~/.local/share/telegram-assist-bot/<instance>` است. Image پیش‌فرض نصب تازه
-`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.5` و MongoDB پیش‌فرض
+`ghcr.io/hamedsanaei/telegram-assist-bot:1.1.6` و MongoDB پیش‌فرض
 `mongo:7.0.32` است.
 
 راهنمای کامل عملیات، نقشهٔ فرمان‌های قدیمی → منو و CLI پیشرفته در
@@ -92,7 +92,7 @@ Windows و smoke دو Instance را بدون Push اجرا می‌کند. Workfl
 Tag `v*.*.*` یا dispatch دستی یک Tag موجود اجرا می‌شود:
 
 ```bash
-gh workflow run release.yml -f tag=v1.1.5
+gh workflow run release.yml -f tag=v1.1.6
 ```
 
 Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJOR.MINOR.PATCH` و تطبیق آن
@@ -103,7 +103,7 @@ Workflow پیش از هر انتشار، وجود Tag، قالب دقیق `vMAJO
 Release عمومی را با notes خودکار ایجاد می‌کند؛ اگر Release همان Tag موجود باشد
 آن را duplicate نمی‌کند و Assetها را با checksum تکمیل یا جایگزین می‌کند.
 
-برای Release پایدار `v1.1.5` Tagهای Image برابر `1.1.5`، `1.1`، `1`، Git SHA
+برای Release پایدار `v1.1.6` Tagهای Image برابر `1.1.6`، `1.1`، `1`، Git SHA
 و `latest` تولید می‌شوند. Tag باید فقط پس از موفقیت تمام Gateها به‌صورت دستی
 ساخته شود؛ Workflow Tag موجود را حذف یا جابه‌جا نمی‌کند. مراحل کنترل Artifact
 در [Release checklist](docs/RELEASE_CHECKLIST.md) آمده است.

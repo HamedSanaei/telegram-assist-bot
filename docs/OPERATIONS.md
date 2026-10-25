@@ -373,41 +373,65 @@ members deliberately have no `ready_at`. Plan an explicitly authorized update of
 recreation is required. Do not add fake readiness markers to work around an old
 cleanup image.
 
-### Deployment and rollback — explicit approval required
+### Kingofilter runtime deployment, recovery and rollback (T104)
 
-The incident runtime must remain stopped with restart policy `no` until the owner
-authorizes deployment **and** restart. Do not run a whole-stack installer/update,
-boot recovery, `compose up -d` without a service name, or change unrelated restart
-policies. No production command was executed during implementation.
+Owner authorization is required for production publication, deployment and restart.
+Use the immutable verified release digest; never overwrite a published tag or run
+a whole-stack update. Back up instance configuration, environment, session and
+MongoDB first. Preserve media/database/session volumes and uncertain jobs.
 
-After authorization:
+The scoped runtime uses three ordered Compose files: `compose.yaml`,
+`runtime-t103.override.yaml` (the existing release pin) and
+`kingofilter-runtime.override.yaml` (bounded recovery/singleton policy). Update
+only the runtime image/restart fields in the base and existing release override,
+leaving approval and cleanup pins unchanged. Validate the effective configuration
+and recreate only runtime with `up -d --no-deps --pull never runtime`. Record and
+compare all other container identities, command/mounts, config and environment
+hashes before/after. MongoDB must not be recreated.
 
-1. Publish the verified source through CI under a new immutable image tag/digest;
-   do not overwrite deployed `1.1.4`. Record the currently deployed image digest,
-   runtime command/mounts and restart policy. Back up MongoDB and the matching
-   configuration/session/media using the existing backup procedure.
-2. In `/opt/telegram-assist-bot/instances/admin1`, prepare a reviewed Compose
-   override containing only `services.runtime.image` (the new digest),
-   `services.runtime.restart: "no"` and the same patched
-   `services.media-cleanup-worker.image`. Validate it with `docker compose
-   --env-file .env -f compose.yaml -f runtime-t102.override.yaml config --quiet`.
-3. Only after explicit deployment/restart approval for these two related workers,
-   run `docker compose --env-file .env -f compose.yaml -f runtime-t102.override.yaml
-   up -d --no-deps runtime media-cleanup-worker`. This must not recreate
-   `telegram-assist-kingofilter-mongodb-1`,
-   `telegram-assist-kingofilter-approval-bot-1`, or unrelated containers.
-4. Check the runtime's source summaries, source `-1001648659094` / message `68568`
-   rejection, other-channel progress and checkpoint completion. Observe `docker
-   stats --no-stream telegram-assist-kingofilter-runtime-1` repeatedly while idle;
-   confirm no repeated media opens or whole-source failures. Verify live
-   ingestion, album completeness, approval availability and publication claims.
-   Leave `restart: "no"` during observation; restoring the normal bounded policy
-   requires a separately reviewed operational decision.
-5. On regression, stop **only** the runtime, keep `restart: "no"`, select the
-   recorded previous image digest and recreate **stopped** with `docker compose
-   --env-file .env -f compose.yaml -f runtime-t102.override.yaml create --no-deps
-   runtime`. Do not drop additive state or restore whole volumes merely to roll
-   back code. `1.1.4` still contains the original crawl defect: do not restart it
-   against the incident source without a separately approved mitigation.
-   Keep the compatible cleanup worker patched when rolling back only runtime.
-   Rolling cleanup back too can restore indefinite album-member retention.
+Install the reviewed `deploy/kingofilter_runtime.py` at
+`/usr/local/libexec/telegram-assist-kingofilter-runtime`, its systemd unit under
+`/etc/systemd/system`, and the instance coordinates from
+`deploy/kingofilter-runtime.env.example` at
+`/etc/telegram-assist-kingofilter-runtime.env`. Install the final scoped Compose
+override in the instance directory and the updated `deploy/boot_recovery.sh` at
+the existing `/usr/local/bin/telegram-assist-boot-recovery`. Create the instance
+marker `.kingofilter-runtime-systemd` containing exactly
+`telegram-assist-kingofilter-runtime.service`, then:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now telegram-assist-kingofilter-runtime.service
+```
+
+Docker uses `on-failure:20`, not `unless-stopped`: the latter would also restart
+the deliberate exit-zero permanent-authentication stop and recreate the known
+restart storm. Docker supplies bounded crash backoff. The oneshot systemd unit
+restores only the existing identity-checked runtime after host/Docker starts;
+it does not add an unbounded process restart loop. The marker makes legacy boot
+recovery start only the other services, never this runtime.
+
+Persistent intentional administrative shutdown:
+
+```sh
+systemctl disable --now telegram-assist-kingofilter-runtime.service
+```
+
+Keep the marker installed. A direct `docker stop` or plain `systemctl stop` lasts
+only until the next enabled host/daemon recovery event. Re-enable/start the unit
+to resume. A permanent startup failure remains stopped between those events.
+Session locking protects the shared local volume; never clone the session to
+another host and run a second consumer.
+
+Verify authenticated Telegram readiness, `native_schedule_worker_started`, fresh
+MongoDB heartbeat, unchanged dependent containers and publication uniqueness.
+Sample runtime running state, restart count, CPU/memory and safe failure/recovery
+events for at least ten minutes. Do not inject failures into production Telegram
+sends or restart the production Docker daemon merely to test recovery.
+
+Rollback on a failed health check: disable/stop only the dedicated runtime unit,
+restore the backed-up base/release overrides or recorded previous runtime digest,
+validate Compose and `create --no-deps runtime` **stopped**. Retain the marker and
+leave the old runtime stopped unless separately approved; preserve all volumes,
+jobs, publication receipts and uncertain outcomes. Do not restore whole database
+volumes merely to roll back code, and do not recreate approval, cleanup or MongoDB.

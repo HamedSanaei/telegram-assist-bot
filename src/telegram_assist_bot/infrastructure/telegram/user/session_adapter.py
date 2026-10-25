@@ -129,6 +129,7 @@ def create_telethon_client(
         api_hash,
         timeout=timeout_seconds,
         request_retries=1,
+        raise_last_call_error=True,
         connection_retries=connection_retries,
         retry_delay=retry_delay_seconds,
         auto_reconnect=True,

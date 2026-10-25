@@ -250,7 +250,8 @@ def test_native_worker_validates_lease_and_runs_completion_callbacks() -> None:
             lease_seconds=60,
             retry_seconds=1,
         )
-        assert await lost.execute_once()
+        with pytest.raises(RuntimeError, match="ownership was lost"):
+            await lost.execute_once()
         assert lost_repository.failed == ("RuntimeError", False)
 
     asyncio.run(scenario())
@@ -304,7 +305,8 @@ def test_native_worker_covers_idle_busy_and_request_certainty_boundaries() -> No
             lease_seconds=60,
             retry_seconds=1,
         )
-        assert await before.execute_once()
+        with pytest.raises(TimeoutError):
+            await before.execute_once()
         assert before_repository.failed == ("TimeoutError", False)
 
         after_repository = Repository(command)
@@ -320,7 +322,8 @@ def test_native_worker_covers_idle_busy_and_request_certainty_boundaries() -> No
             lease_seconds=60,
             retry_seconds=1,
         )
-        assert await after.execute_once()
+        with pytest.raises(TimeoutError):
+            await after.execute_once()
         assert after_repository.failed == ("TimeoutError", True)
 
     asyncio.run(scenario())
@@ -363,10 +366,14 @@ def test_native_reconciliation_distinguishes_presence_and_safe_absence() -> None
             retry_seconds=1,
             after_reconciled=after_reconciled,
         )
-        assert await worker.reconcile_once()
-        assert repository.reconciled is not None
-        if not list_error:
+        if list_error:
+            with pytest.raises(TimeoutError):
+                await worker.reconcile_once()
+            assert not callbacks
+        else:
+            assert await worker.reconcile_once()
             assert callbacks
+        assert repository.reconciled is not None
         return repository.reconciled
 
     async def scenario() -> None:

@@ -938,3 +938,26 @@
   An abrupt worker death can hold a Post lease for up to one hour. Rollback
   readers may ignore additive state but reintroduce the original CPU defect;
   a rollback must leave the affected runtime stopped.
+
+## ADR-056 — Native-cycle transport recovery and scoped Kingofilter supervision
+
+- **Status:** Accepted.
+- **Context:** Kingofilter native scheduling let PyMongo NetworkTimeout escape
+  from claim operations outside its transport handlers. Critical-task supervision
+  correctly stopped the process, but the previous rollout's observation-only
+  restart=no pin then prevented recovery.
+- **Decision:** Retry only classified transient transport failures around the
+  whole native scheduling cycle, with capped exponential jitter, FloodWait
+  minimums and prompt cancellation. Keep SDK knowledge in the composition root.
+  Preserve durable request uncertainty across lost acknowledgements; never replay
+  ambiguous Telegram sends or replace the shared session/client.
+- **Decision:** Do not use unless-stopped: it restarts even exit zero and defeats
+  ADR-051's permanent-authentication stop contract. Restore on-failure:20 for only
+  Kingofilter runtime and use a dedicated enabled systemd oneshot for host/Docker
+  recovery. A marker makes legacy boot recovery exclude only that runtime.
+  Persistent administrative shutdown disables/stops the dedicated unit.
+- **Consequences:** Other instances and worker restart policies remain unchanged.
+  Docker bounds crash pressure; permanent startup failures stay stopped until an
+  explicit start or the next enabled host/daemon recovery event. The session lock
+  protects one shared filesystem, not cloned sessions on another host. Explicit
+  unknown publication outcomes remain operator-review items, never auto-resends.
