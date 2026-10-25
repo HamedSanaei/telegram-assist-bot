@@ -1,7 +1,8 @@
 # T103 — v1.1.5 release and scoped kingofilter rollout
 
 ## Status
-In progress; owner authorized commit, next release, server connection and update.
+Released/deployed; historical observation is superseded by the T104 incident and
+restoration task. This is not an active implementation task.
 
 ## Goal
 Publish the verified T100–T102 fixes as 1.1.5 and update only kingofilter runtime
@@ -108,3 +109,11 @@ sessions preserved, actual results/limitations recorded and documentation commit
   no new finding fingerprints, detector changes, filters or suppressions were
   added. Updated only those line numbers and reran the exact CI gate.
 - Re-read and verified SHA256SUMS for all four server-side backup archives.
+
+- Final publication evidence recovered during T104: Quality `39661849137` and
+  Release `39662376200` succeeded for `c9e7a22`; v1.1.5 was published and deployed.
+  Production runtime used digest
+  `sha256:03653f1aab8bdb519a4c4724bfaec966b2ef3800bebce3d3548fe3922ef8558b`,
+  starting 2026-10-21 20:05:42 UTC and stopping 2026-10-25 04:26:46 UTC after a
+  native scheduling NetworkTimeout. The observation-only restart=no remained
+  pinned. T104 owns the subsequent repair/recovery policy and final observation.

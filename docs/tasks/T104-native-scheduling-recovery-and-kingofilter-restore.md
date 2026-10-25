@@ -1,8 +1,8 @@
 # T104 — Native scheduling recovery and Kingofilter restoration
 
 ## Status
-In progress. Owner authorized investigation, code changes, verification, commit,
-push, publication, scoped production deployment and runtime restart.
+Completed. Verified v1.1.6 is deployed; Kingofilter runtime is running with safe
+bounded crash/boot recovery and a completed ten-minute production observation.
 
 ## Goal
 Recover the stopped Kingofilter runtime and prevent transient transport failures
@@ -97,7 +97,8 @@ stable for ten minutes; safe rollback retained; evidence and limitations recorde
 - Confirmed SDK identity: NetworkTimeout is PyMongo, not Telethon. MongoDB logged
   client disconnect/reset at 04:26:42.065 UTC before scheduler failure at
   04:26:42.151 UTC. Retained logs do not identify the exact MongoDB command;
-  claim_next/acquire_destination/claim_reconciliation are the unguarded candidates.
+  unguarded claim/lease calls and secondary fail/release persistence are possible
+  escape boundaries; none is a Telegram NetworkTimeout.
 - Focused recovery suite: 147 passed, two Linux-only boot cases skipped locally.
 - Final full non-live suite on isolated MongoDB 7.0.32 / Python 3.13:
   2225 passed, two Linux-only skips, three opt-in Docker tests deselected;
@@ -124,4 +125,40 @@ stable for ten minutes; safe rollback retained; evidence and limitations recorde
   for this fixture correction. Python 3.14 emits a non-fatal SQLite ResourceWarning.
 - Linux boot ownership smoke verifies marked runtime exclusion with dependent
   services retained, both with and without .env; other instance boot is unchanged.
-- Publication, CI, scoped deployment and ten-minute observation remain pending.
+- Final Quality `40241667230` passes all Python 3.12/3.13/3.14 and Docker/installer
+  jobs for `d5f04487799a89b92b7d055cc382636c7c2b07b6`. Release `40241986359`
+  successfully published immutable `v1.1.6`, amd64/arm64 image and provenance.
+  All three downloaded release artifacts match SHA256SUMS.
+- Verified release image:
+  `ghcr.io/hamedsanaei/telegram-assist-bot@sha256:2ee8156ecc97649d8a806a4698f4efe69aa0ea251879ac6bc2284e235e08dbff`.
+  Production pull labels and digest match source; network-isolated published-image
+  smoke records `PUBLISHED_IMAGE_SMOKE_OK` without mounting sessions or credentials.
+- Activation's pre-start safety check detected this host Compose version inserts
+  empty resources/placement objects alongside replicas. No runtime had started;
+  normalized only those empty objects in the throwaway deployment verifier while
+  retaining exact comparison for every other runtime/service setting.
+- Scoped runtime activation completed at `2026-10-25T23:21:42.970901Z`; container
+  `16ba4fb5b760` is running the verified image with `on-failure:20`, restart count
+  zero, and enabled/active `telegram-assist-kingofilter-runtime.service`.
+- Server-side observation `metadata/t104-observation.json`: 22 resource samples,
+  including 607.22 seconds after authenticated scheduling readiness. No critical
+  shutdown, unexpected task completion or restart. During catch-up CPU sampled
+  65.77–270.89% (mean 134.81%), memory peaked at 199.3 MiB. Subsequent post-catch-up
+  sample: runtime CPU 1.67%, memory 162.6 MiB; approval 0.26%/53.7 MiB,
+  cleanup 0.28%/16.69 MiB, MongoDB 8.29%/190.1 MiB.
+- Pending native command became resolved (481 → 482); queued immediate completed
+  (914 → 915); publication records 956 → 957, duplicate publication groups zero.
+  Existing native outcome_unknown 1 and scheduled OutcomeUnknown 42 remain intact.
+- Final proof `metadata/t104-final-check.json` at `2026-10-25T23:47:00.772215Z`:
+  same runtime ID on idempotent restore; a second process cannot acquire the live
+  session OS lock; one fresh running heartbeat; no duplicate native Telegram IDs.
+  All 34 protected container identities and config/environment hashes unchanged.
+  Runtime observed zero NetworkTimeout/critical-task failures since deployment.
+  Approval/cleanup remain running; MongoDB remains healthy. No rollback needed.
+- Final application progress: 102 ingested messages, 83 successful media downloads,
+  93 prepared posts, 11 completed history traversals and five finalized albums.
+- Limitations: no destructive host/Docker restart or production fault injection.
+  Actual Docker crash/terminal/admin-stop behavior was exercised in isolation;
+  host unit syntax/configuration and production enablement/start were verified.
+  Session locking is single-filesystem, not cross-host. Historical unknown
+  publication outcomes require explicit operator review, never automated replay.
