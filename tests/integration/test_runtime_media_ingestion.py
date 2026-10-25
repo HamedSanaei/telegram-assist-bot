@@ -421,6 +421,13 @@ def test_history_live_album_overlap_restart_and_graceful_shutdown(
         await wait_for_count(
             database["media_groups"], {"members.2": {"$exists": True}}, 1
         )
+        # Member metadata can precede the final history acknowledgement. Advance
+        # the frozen clock only after that traversal releases its album hold.
+        await wait_for_count(
+            database["content_preparations"],
+            {"history_source_channel_id": -100, "history_hold": False},
+            1,
+        )
         first_clock.now += timedelta(seconds=4)
         await wait_for_count(
             database["content_preparations"],

@@ -114,4 +114,14 @@ stable for ten minutes; safe rollback retained; evidence and limitations recorde
   All four SHA256 checks and gzip integrity passed.
 - Baseline workload: native pending 1 / outcome_unknown 1; scheduled Pending 1 /
   OutcomeUnknown 42; publications 956, duplicate post/destination groups zero.
+- First CI run `40241111589`: Python 3.12/3.13 quality and Docker/installer
+  acceptance passed; Python 3.14 exposed a pre-existing album fixture race:
+  membership metadata was used to advance a frozen clock before history released
+  its hold. Necessary verification prerequisite: wait for durable hold release
+  before advancing time, retaining every publication/media/shutdown assertion.
+  Full local Python 3.14 suite then passed 2225 tests (90.34% branch coverage);
+  Python 3.13 lifecycle scenario passed both tests. No production behavior changed
+  for this fixture correction. Python 3.14 emits a non-fatal SQLite ResourceWarning.
+- Linux boot ownership smoke verifies marked runtime exclusion with dependent
+  services retained, both with and without .env; other instance boot is unchanged.
 - Publication, CI, scoped deployment and ten-minute observation remain pending.
